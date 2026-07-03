@@ -4,6 +4,7 @@ import { onFsChanged } from "../lib/events";
 import type { OpenRequest } from "../App";
 import FileTree from "./FileTree";
 import FileEditor from "./FileEditor";
+import { Folder, Refresh, LayoutRows, LayoutColumns } from "./icons";
 
 interface Props {
   openRequest: OpenRequest | null;
@@ -47,7 +48,6 @@ export default function SidePanel({ openRequest, root }: Props) {
       .catch(() => setStatuses([]));
   }, [root]);
 
-  // Refetch git status on file changes, and whenever the terminal cwd changes.
   useEffect(() => {
     refresh();
     return onFsChanged(refresh);
@@ -61,7 +61,6 @@ export default function SidePanel({ openRequest, root }: Props) {
     });
   }, []);
 
-  // Open files requested from clicked terminal paths.
   useEffect(() => {
     if (openRequest?.path) openInFocused(openRequest.path);
   }, [openRequest?.n, openInFocused]);
@@ -108,73 +107,94 @@ export default function SidePanel({ openRequest, root }: Props) {
   return (
     <div className="side-panel-inner">
       <div className="section-header" title={root ?? ""}>
-        <span className="section-title">{rootName || "Files"}</span>
-        {statuses.length > 0 && <span className="change-badge">{statuses.length}</span>}
-        <button
-          className="section-refresh"
-          title={panelLayout === "stacked" ? "Side-by-side layout" : "Stacked layout"}
-          onClick={() =>
-            setPanelLayout((l) => (l === "stacked" ? "sideBySide" : "stacked"))
-          }
-        >
-          {panelLayout === "stacked" ? "◧" : "⬓"}
-        </button>
-        <button
-          className="section-refresh"
-          title="Refresh file tree"
-          onClick={() => {
-            setTreeKey((k) => k + 1);
-            refresh();
-          }}
-        >
-          ⟳
-        </button>
+        <div className="folder-chip">
+          <span className="chip-icon">
+            <Folder size={16} />
+          </span>
+          <span className="chip-name">{rootName || "Files"}</span>
+          {statuses.length > 0 && <span className="count-pill">{statuses.length}</span>}
+        </div>
+        <div className="panel-actions">
+          <div className="seg" title="Panel layout">
+            <button
+              className={panelLayout === "stacked" ? "on" : ""}
+              title="Stacked (tree over editor)"
+              onClick={() => setPanelLayout("stacked")}
+            >
+              <LayoutRows size={15} />
+            </button>
+            <button
+              className={panelLayout === "sideBySide" ? "on" : ""}
+              title="Side by side (tree beside editor)"
+              onClick={() => setPanelLayout("sideBySide")}
+            >
+              <LayoutColumns size={15} />
+            </button>
+          </div>
+          <button
+            className="icon-btn sm"
+            title="Refresh file tree"
+            onClick={() => {
+              setTreeKey((k) => k + 1);
+              refresh();
+            }}
+          >
+            <Refresh size={15} />
+          </button>
+        </div>
       </div>
 
       <div className={`panel-body ${panelLayout}`}>
         <div className="tree-region">
-          {root ? (
-            <FileTree
-              key={treeKey}
-              rootPath={root}
-              selectedPath={panes[focused] ?? null}
-              onOpenFile={openInFocused}
-              statusByPath={statusByPath}
-              changedDirs={changedDirs}
-            />
-          ) : (
-            <div className="tree-loading">Waiting for the terminal…</div>
-          )}
+          <div className="seclabel">
+            <span>Files</span>
+          </div>
+          <div className="tree-scroll">
+            {root ? (
+              <FileTree
+                key={treeKey}
+                rootPath={root}
+                selectedPath={panes[focused] ?? null}
+                onOpenFile={openInFocused}
+                statusByPath={statusByPath}
+                changedDirs={changedDirs}
+              />
+            ) : (
+              <div className="tree-loading">Waiting for the terminal…</div>
+            )}
+          </div>
         </div>
 
         <div className="editor-section">
-          <div className="editor-area-toolbar">
-            <span className="ea-label">Editor</span>
-            {split && (
-              <div className="orient-toggle" title="Split layout">
-                <button
-                  className={orientation === "vertical" ? "active" : ""}
-                  title="Stacked (rows)"
-                  onClick={() => setOrientation("vertical")}
-                >
-                  ▤
-                </button>
-                <button
-                  className={orientation === "horizontal" ? "active" : ""}
-                  title="Side by side (columns)"
-                  onClick={() => setOrientation("horizontal")}
-                >
-                  ▥
-                </button>
-              </div>
-            )}
-            <button
-              className="ea-btn"
-              title={split ? "Unsplit" : "Split editor"}
-              onClick={toggleSplit}
-            >
-              {split ? "▣" : "⊞"}
-            </button>
+          <div className="seclabel">
+            <span>Editor</span>
+            <div className="seclabel-actions">
+              {split && (
+                <div className="seg" title="Split orientation">
+                  <button
+                    className={orientation === "vertical" ? "on" : ""}
+                    title="Stacked (rows)"
+                    onClick={() => setOrientation("vertical")}
+                  >
+                    <LayoutRows size={14} />
+                  </button>
+                  <button
+                    className={orientation === "horizontal" ? "on" : ""}
+                    title="Side by side (columns)"
+                    onClick={() => setOrientation("horizontal")}
+                  >
+                    <LayoutColumns size={14} />
+                  </button>
+                </div>
+              )}
+              <button
+                className={`icon-btn sm${split ? " on" : ""}`}
+                title={split ? "Unsplit editor" : "Split editor"}
+                onClick={toggleSplit}
+              >
+                <LayoutColumns size={15} />
+              </button>
+            </div>
           </div>
 
           <div className={`editor-area ${orientation}`}>
@@ -192,7 +212,7 @@ export default function SidePanel({ openRequest, root }: Props) {
                     line={openRequest?.path === p ? openRequest?.line : undefined}
                   />
                 ) : (
-                  <div className="editor-region editor-empty">Select a file</div>
+                  <div className="editor-region editor-empty">Select a file to view or edit</div>
                 )}
               </div>
             ))}

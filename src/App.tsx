@@ -6,6 +6,7 @@ import SidePanel from "./components/SidePanel";
 import SettingsModal from "./components/SettingsModal";
 import SessionRail from "./components/SessionRail";
 import UpdateBanner from "./components/UpdateBanner";
+import { Gear, PanelToggle, Folder } from "./components/icons";
 import { useSessions, displayName } from "./lib/sessions";
 import { getRoot, ptyCwd } from "./lib/api";
 import "./App.css";
@@ -40,6 +41,9 @@ export default function App() {
     const s = sessions.find((x) => x.id === activeId);
     return s ? displayName(s) : "Beecork Terminal";
   })();
+  const cwdName = terminalCwd
+    ? terminalCwd.split("/").filter(Boolean).pop() ?? ""
+    : "";
 
   const cwdBySession = useRef<Record<string, string>>({});
   const activeIdRef = useRef(activeId);
@@ -169,17 +173,25 @@ export default function App() {
     <div className="app-root">
       <UpdateBanner />
       <div className="topbar">
-        <span className="topbar-name">{activeName}</span>
+        <div className="crumb">
+          <span className="crumb-icon">
+            <Folder size={15} />
+          </span>
+          <span className="crumb-name">{activeName}</span>
+          {cwdName && cwdName !== activeName && (
+            <span className="crumb-path">— {cwdName}</span>
+          )}
+        </div>
         <div className="topbar-actions">
-          <button className="tool-btn" onClick={() => setSettingsOpen(true)} title="Settings">
-            ⚙
+          <button className="icon-btn" onClick={() => setSettingsOpen(true)} title="Settings">
+            <Gear />
           </button>
           <button
-            className="tool-btn"
+            className={`icon-btn${panelOpen ? " on" : ""}`}
             onClick={() => setPanelOpen((o) => !o)}
             title={panelOpen ? "Hide file panel" : "Show file panel"}
           >
-            {panelOpen ? "⇥" : "⇤"}
+            <PanelToggle />
           </button>
         </div>
       </div>

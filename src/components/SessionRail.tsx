@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { displayName, type Session } from "../lib/sessions";
+import { Pin, Plus, Close } from "./icons";
 
 interface Props {
   sessions: Session[];
@@ -49,14 +50,14 @@ export default function SessionRail({
         <div className="rail-header">
           {expanded && <span className="rail-hdr-label">Sessions</span>}
           <button
-            className={`rail-pin${pinned ? " on" : ""}`}
+            className={`icon-btn sm${pinned ? " on" : ""}`}
             onClick={onTogglePin}
             title={pinned ? "Unpin sidebar" : "Keep sidebar open"}
           >
-            📌
+            <Pin size={15} />
           </button>
-          <button className="rail-add" onClick={onCreate} title="New session (⌘T)">
-            +
+          <button className="icon-btn sm" onClick={onCreate} title="New session (⌘T)">
+            <Plus size={16} />
           </button>
         </div>
 
@@ -104,7 +105,7 @@ export default function SessionRail({
                           onClose(s.id);
                         }}
                       >
-                        ×
+                        <Close size={14} />
                       </button>
                     )}
                   </>

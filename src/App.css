@@ -72,7 +72,7 @@ body {
 }
 .topbar {
   flex: 0 0 auto;
-  height: 30px;
+  height: 36px;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -81,17 +81,152 @@ body {
   border-bottom: 1px solid var(--border);
   -webkit-user-select: none;
 }
-.topbar-name {
+.crumb {
   flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-size: 13px;
+  color: var(--fg);
+}
+.crumb .crumb-icon {
+  display: flex;
+  color: var(--muted);
+  flex: 0 0 auto;
+}
+.crumb .crumb-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 0 1 auto;
+}
+.crumb .crumb-path {
+  color: var(--faint, var(--muted));
   font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 0 1 auto;
+}
+.topbar-actions {
+  display: flex;
+  gap: 4px;
+}
+
+/* ============ ONE control system (buttons + segmented) ============ */
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+  flex: 0 0 auto;
+}
+.icon-btn:hover {
+  background: var(--hover);
+  color: var(--fg);
+}
+.icon-btn.on {
+  background: var(--selected);
+  color: var(--fg);
+}
+.icon-btn.sm {
+  width: 24px;
+  height: 24px;
+}
+.icon-btn.danger:hover {
+  background: rgba(243, 139, 168, 0.16);
+  color: #f38ba8;
+}
+
+.seg {
+  display: inline-flex;
+  background: var(--border);
+  border-radius: 8px;
+  padding: 2px;
+  gap: 2px;
+  flex: 0 0 auto;
+}
+.seg button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 22px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.seg button:hover {
+  color: var(--fg);
+}
+.seg button.on {
+  background: var(--selected);
+  color: var(--fg);
+}
+
+/* folder chip + change count pill (panel + top bar) */
+.folder-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.folder-chip .chip-icon {
+  display: flex;
+  color: #89a9e6;
+  flex: 0 0 auto;
+}
+.folder-chip .chip-name {
+  font-size: 13px;
   font-weight: 600;
   color: var(--fg);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.topbar-actions {
+.count-pill {
+  font-size: 11px;
+  color: var(--fg);
+  background: var(--border);
+  border-radius: 20px;
+  padding: 1px 8px;
+  font-variant-numeric: tabular-nums;
+  flex: 0 0 auto;
+}
+
+/* subordinate section labels (Files / Editor) */
+.seclabel {
+  height: 28px;
   display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 6px 0 12px;
+  font-size: 10.5px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--muted);
+  font-weight: 600;
+  border-bottom: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.12);
+  flex: 0 0 auto;
+}
+.seclabel .seclabel-actions {
+  display: flex;
+  align-items: center;
   gap: 4px;
 }
 
@@ -159,17 +294,6 @@ body {
   font-size: 12px;
   font-weight: 600;
 }
-.rail-pin {
-  background: transparent;
-  border: none;
-  cursor: pointer;
-  font-size: 12px;
-  filter: grayscale(1) opacity(0.5);
-  padding: 0 2px;
-}
-.rail-pin.on {
-  filter: none;
-}
 .rail-hdr-label {
   flex: 1 1 auto;
 }
@@ -205,18 +329,6 @@ body {
   color: var(--muted);
   background: var(--panel-header);
   border-bottom: 1px solid var(--border);
-}
-.rail-add {
-  background: transparent;
-  border: none;
-  color: var(--muted);
-  font-size: 18px;
-  line-height: 1;
-  cursor: pointer;
-  padding: 0 4px;
-}
-.rail-add:hover {
-  color: var(--fg);
 }
 .rail-list {
   flex: 1 1 auto;
@@ -405,6 +517,13 @@ body {
   flex: 0 0 40%;
   min-height: 0;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.tree-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
   overflow: auto;
 }
 .panel-body.stacked .tree-region {
@@ -423,44 +542,21 @@ body {
 }
 
 .section-header {
+  height: 40px;
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px 8px 6px 10px;
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--muted);
+  gap: 8px;
+  padding: 0 8px 0 12px;
   background: var(--panel-header);
   border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
 }
-.section-title {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.panel-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
 }
-.change-badge {
-  background: var(--selected);
-  color: var(--fg);
-  border-radius: 8px;
-  padding: 0 6px;
-  font-size: 10px;
-  line-height: 15px;
-}
-.section-refresh {
-  margin-left: auto;
-  background: transparent;
-  border: none;
-  color: var(--muted);
-  cursor: pointer;
-  font-size: 13px;
-  padding: 0 2px;
-}
-.section-refresh:hover {
-  color: var(--fg);
-}
-
 /* ---- file tree ---- */
 .file-tree {
   padding: 4px 0;
@@ -469,8 +565,9 @@ body {
 .tree-row {
   display: flex;
   align-items: center;
-  gap: 5px;
-  padding: 2px 8px;
+  gap: 6px;
+  height: 26px;
+  padding: 0 10px;
   font-size: 13px;
   cursor: pointer;
   white-space: nowrap;
@@ -482,19 +579,33 @@ body {
 .tree-row.selected {
   background: var(--selected);
 }
-.tree-twisty {
+.tree-chev {
   width: 12px;
   color: var(--muted);
-  font-size: 10px;
+  display: flex;
+  align-items: center;
   flex: 0 0 auto;
 }
-.tree-glyph {
+.tree-ic {
+  color: var(--muted);
+  display: flex;
+  align-items: center;
   flex: 0 0 auto;
-  font-size: 12px;
+}
+.tree-row.is-dir .tree-ic {
+  color: #89a9e6;
 }
 .tree-name {
+  flex: 1 1 auto;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.tree-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  background: var(--muted);
 }
 .tree-loading,
 .tree-error {
@@ -576,57 +687,6 @@ body {
 }
 
 /* ---- split editor area ---- */
-.editor-area-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 8px;
-  background: var(--panel-header);
-  border-bottom: 1px solid var(--border);
-  border-top: 1px solid var(--border);
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--muted);
-}
-.ea-label {
-  flex: 1 1 auto;
-  font-weight: 600;
-}
-.ea-btn {
-  background: transparent;
-  border: 1px solid var(--border);
-  color: var(--muted);
-  border-radius: 5px;
-  font-size: 12px;
-  padding: 1px 7px;
-  cursor: pointer;
-}
-.ea-btn:hover {
-  color: var(--fg);
-  border-color: var(--accent);
-}
-.orient-toggle {
-  display: flex;
-  gap: 2px;
-  background: var(--border);
-  border-radius: 5px;
-  padding: 2px;
-}
-.orient-toggle button {
-  background: transparent;
-  border: none;
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1;
-  padding: 2px 7px;
-  border-radius: 4px;
-  cursor: pointer;
-}
-.orient-toggle button.active {
-  background: var(--selected);
-  color: var(--fg);
-}
 .editor-area {
   flex: 1 1 auto;
   display: flex;
@@ -670,28 +730,21 @@ body {
 .tree-row.status-renamed .tree-name {
   color: #89b4fa;
 }
-.tree-badge {
-  margin-left: auto;
-  font-size: 10px;
-  font-weight: 700;
-  padding-right: 4px;
-  color: var(--muted);
+.tree-row.status-modified .tree-dot {
+  background: #e5c07b;
 }
-.status-modified .tree-badge {
-  color: #e5c07b;
+.tree-row.status-added .tree-dot,
+.tree-row.status-untracked .tree-dot {
+  background: #a6e3a1;
 }
-.status-added .tree-badge,
-.status-untracked .tree-badge {
-  color: #a6e3a1;
+.tree-row.status-deleted .tree-dot {
+  background: #f38ba8;
 }
-.status-deleted .tree-badge {
-  color: #f38ba8;
+.tree-row.status-renamed .tree-dot {
+  background: #89b4fa;
 }
-.tree-dot {
-  margin-left: auto;
-  font-size: 8px;
-  color: #e5c07b;
-  padding-right: 4px;
+.tree-row.dir-changed .tree-dot {
+  background: #e5c07b;
 }
 
 /* ---- editor diff/edit toggle ---- */
@@ -720,31 +773,6 @@ body {
 }
 .cm-changedLine {
   background: rgba(166, 227, 161, 0.12);
-}
-
-/* ---- toolbar (top-right) ---- */
-.toolbar {
-  position: fixed;
-  top: 6px;
-  right: 8px;
-  z-index: 50;
-  display: flex;
-  gap: 4px;
-}
-.tool-btn {
-  width: 26px;
-  height: 24px;
-  background: color-mix(in srgb, var(--panel-header) 80%, transparent);
-  color: var(--fg);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  font-size: 13px;
-  line-height: 1;
-  cursor: pointer;
-  backdrop-filter: blur(4px);
-}
-.tool-btn:hover {
-  background: var(--selected);
 }
 
 /* ---- settings modal ---- */

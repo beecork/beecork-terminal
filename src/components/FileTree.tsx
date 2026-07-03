@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { listDir, type ChangeStatus, type Entry } from "../lib/api";
 import { onFsChanged } from "../lib/events";
+import { Chevron, Folder, File } from "./icons";
 
 interface Props {
   rootPath: string;
@@ -113,7 +114,6 @@ function TreeNode({
   }
 
   const selected = selectedPath === entry.path;
-  const icon = entry.is_dir ? (open ? "▾" : "▸") : "";
   const fileStatus = entry.is_dir ? undefined : statusByPath.get(entry.path);
   const dirChanged = entry.is_dir && changedDirs.has(entry.path);
   const changed = fileStatus ? `status-${fileStatus}` : dirChanged ? "dir-changed" : "";
@@ -121,16 +121,21 @@ function TreeNode({
   return (
     <>
       <div
-        className={`tree-row ${changed}${selected ? " selected" : ""}`}
+        className={`tree-row ${changed}${entry.is_dir ? " is-dir" : ""}${
+          selected ? " selected" : ""
+        }`}
         style={{ paddingLeft: 8 + depth * 14 }}
         onClick={activate}
         title={entry.name}
       >
-        <span className="tree-twisty">{icon}</span>
-        <span className="tree-glyph">{entry.is_dir ? "📁" : "📄"}</span>
+        <span className="tree-chev">
+          {entry.is_dir ? <Chevron open={open} size={12} /> : null}
+        </span>
+        <span className="tree-ic">
+          {entry.is_dir ? <Folder size={15} /> : <File size={14} />}
+        </span>
         <span className="tree-name">{entry.name}</span>
-        {fileStatus && <span className="tree-badge">{badgeChar(fileStatus)}</span>}
-        {dirChanged && <span className="tree-dot">●</span>}
+        {(fileStatus || dirChanged) && <span className="tree-dot" />}
       </div>
       {entry.is_dir && open && (
         <>
@@ -154,18 +159,4 @@ function TreeNode({
       )}
     </>
   );
-}
-
-function badgeChar(status: ChangeStatus): string {
-  switch (status) {
-    case "untracked":
-    case "added":
-      return "A";
-    case "deleted":
-      return "D";
-    case "renamed":
-      return "R";
-    default:
-      return "M";
-  }
 }
