@@ -259,7 +259,8 @@
           var pattern = (card.dataset.pattern || '').toLowerCase();
           if (!pattern) return;
           var match = assets.find(function (a) {
-            return a.name.toLowerCase().indexOf(pattern) !== -1;
+            var name = a.name.toLowerCase();
+            return name.indexOf(pattern) !== -1 && !name.endsWith('.sig');
           });
           if (match) {
             card.href = match.browser_download_url;
