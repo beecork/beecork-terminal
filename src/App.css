@@ -35,6 +35,41 @@ body {
   display: flex;
   flex-direction: column;
 }
+.update-banner {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  background: var(--accent);
+  color: #12101a;
+  font-size: 13px;
+  font-weight: 600;
+}
+.update-banner .ub-text {
+  flex: 1 1 auto;
+}
+.update-banner .ub-install {
+  background: #12101a;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 4px 12px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.update-banner .ub-install:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.update-banner .ub-dismiss {
+  background: transparent;
+  border: none;
+  color: #12101a;
+  cursor: pointer;
+  font-size: 13px;
+}
 .topbar {
   flex: 0 0 auto;
   height: 30px;

@@ -5,6 +5,7 @@ import TerminalPane from "./components/TerminalPane";
 import SidePanel from "./components/SidePanel";
 import SettingsModal from "./components/SettingsModal";
 import SessionRail from "./components/SessionRail";
+import UpdateBanner from "./components/UpdateBanner";
 import { useSessions, displayName } from "./lib/sessions";
 import "./App.css";
 
@@ -124,6 +125,7 @@ export default function App() {
 
   return (
     <div className="app-root">
+      <UpdateBanner />
       <div className="topbar">
         <span className="topbar-name">{activeName}</span>
         <div className="topbar-actions">
