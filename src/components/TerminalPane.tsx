@@ -1,8 +1,11 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
+import { SearchAddon } from "@xterm/addon-search";
 import { invoke, Channel } from "@tauri-apps/api/core";
+import { getRoot } from "../lib/api";
+import { useSettings } from "../lib/settings";
 import "@xterm/xterm/css/xterm.css";
 
 type PtyEvent =
@@ -16,47 +19,163 @@ function decodeBase64(b64: string): Uint8Array {
   return arr;
 }
 
-export default function TerminalPane() {
+const PATH_RE = /(?:[\w.@~-]+\/)*[\w.@~-]+\.[A-Za-z]{1,10}(?::\d+(?::\d+)?)?/g;
+const CODE_EXT =
+  /\.(ts|tsx|js|jsx|mjs|cjs|json|rs|py|css|scss|less|html|md|txt|go|java|c|cc|cpp|h|hpp|toml|yml|yaml|sh|lock|rb|php|swift|kt|sql|vue|svelte)$/i;
+
+function looksLikePath(token: string): boolean {
+  const noPos = token.replace(/:\d+(?::\d+)?$/, "");
+  return token.includes("/") || CODE_EXT.test(noPos);
+}
+
+interface Props {
+  sessionId: string;
+  active: boolean;
+  onOpenPath: (path: string, line?: number) => void;
+  onActivity: (id: string) => void;
+  onSeen: (id: string) => void;
+  onTitle: (id: string, title: string) => void;
+}
+
+export default function TerminalPane({
+  sessionId,
+  active,
+  onOpenPath,
+  onActivity,
+  onSeen,
+  onTitle,
+}: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
+  const termRef = useRef<Terminal | null>(null);
+  const fitRef = useRef<FitAddon | null>(null);
+  const searchRef = useRef<SearchAddon | null>(null);
+  const rootRef = useRef<string | null>(null);
+  const activeRef = useRef(active);
+  const notifiedRef = useRef(false);
+  activeRef.current = active;
+
+  const { theme, settings } = useSettings();
+  const lookRef = useRef({ theme, settings });
+  lookRef.current = { theme, settings };
+
+  // Callbacks captured in refs so the mount effect always sees current ones.
+  const cbRef = useRef({ onOpenPath, onActivity, onSeen, onTitle });
+  cbRef.current = { onOpenPath, onActivity, onSeen, onTitle };
+
+  const [showSearch, setShowSearch] = useState(false);
+  const [searchTerm, setSearchTerm] = useState("");
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    getRoot().then((r) => (rootRef.current = r)).catch(() => {});
+  }, []);
+
+  function openToken(token: string) {
+    let file = token;
+    let line: number | undefined;
+    const pos = token.match(/:(\d+)(?::\d+)?$/);
+    if (pos && pos.index !== undefined) {
+      file = token.slice(0, pos.index);
+      line = parseInt(pos[1], 10);
+    }
+    let abs = file;
+    if (!file.startsWith("/")) {
+      const root = rootRef.current;
+      if (root) abs = root.replace(/\/$/, "") + "/" + file.replace(/^\.\//, "");
+    }
+    cbRef.current.onOpenPath(abs, line);
+  }
 
   useEffect(() => {
     if (!hostRef.current) return;
     let disposed = false;
 
+    const { theme, settings } = lookRef.current;
     const term = new Terminal({
-      fontFamily: 'Menlo, "SF Mono", Monaco, "Cascadia Code", monospace',
-      fontSize: 13,
+      fontFamily: settings.fontFamily,
+      fontSize: settings.fontSize,
       cursorBlink: true,
       allowProposedApi: true,
       theme: {
-        background: "#1e1e2e",
-        foreground: "#cdd6f4",
-        cursor: "#f5e0dc",
-        selectionBackground: "#585b70",
+        background: theme.terminal.background,
+        foreground: theme.terminal.foreground,
+        cursor: theme.terminal.cursor,
+        selectionBackground: theme.terminal.selectionBackground,
       },
     });
+    termRef.current = term;
 
     const fit = new FitAddon();
+    fitRef.current = fit;
     term.loadAddon(fit);
+    const search = new SearchAddon();
+    searchRef.current = search;
+    term.loadAddon(search);
+
     term.open(hostRef.current);
     try {
       term.loadAddon(new WebglAddon());
     } catch (e) {
       console.warn("WebGL renderer unavailable, using default", e);
     }
-    fit.fit();
+    try {
+      fit.fit();
+    } catch {
+      /* hidden on mount */
+    }
+
+    // Clickable file:line paths.
+    const linkProvider = term.registerLinkProvider({
+      provideLinks(y, callback) {
+        const bufLine = term.buffer.active.getLine(y - 1);
+        if (!bufLine) {
+          callback(undefined);
+          return;
+        }
+        const text = bufLine.translateToString(true);
+        const links = [];
+        PATH_RE.lastIndex = 0;
+        let m: RegExpExecArray | null;
+        while ((m = PATH_RE.exec(text)) !== null) {
+          const token = m[0];
+          if (!looksLikePath(token)) continue;
+          const startX = m.index + 1;
+          const endX = m.index + token.length;
+          links.push({
+            text: token,
+            range: { start: { x: startX, y }, end: { x: endX, y } },
+            activate: () => openToken(token),
+          });
+        }
+        callback(links.length ? links : undefined);
+      },
+    });
 
     const channel = new Channel<PtyEvent>();
     channel.onmessage = (msg) => {
       if (disposed) return;
       if (msg.event === "output") {
         term.write(decodeBase64(msg.data));
+        if (!activeRef.current && !notifiedRef.current) {
+          notifiedRef.current = true;
+          cbRef.current.onActivity(sessionId);
+        }
       } else if (msg.event === "exit") {
         term.write("\r\n\x1b[90m[process exited]\x1b[0m\r\n");
       }
     };
 
+    const bellSub = term.onBell(() => {
+      if (!activeRef.current) {
+        notifiedRef.current = true;
+        cbRef.current.onActivity(sessionId);
+      }
+    });
+
+    const titleSub = term.onTitleChange((t) => cbRef.current.onTitle(sessionId, t));
+
     invoke("pty_spawn", {
+      id: sessionId,
       onEvent: channel,
       cwd: null,
       shell: null,
@@ -65,32 +184,132 @@ export default function TerminalPane() {
     }).catch((e) => console.error("pty_spawn failed", e));
 
     const dataSub = term.onData((data) =>
-      invoke("pty_write", { data }).catch(() => {})
+      invoke("pty_write", { id: sessionId, data }).catch(() => {})
     );
     const resizeSub = term.onResize(({ cols, rows }) =>
-      invoke("pty_resize", { cols, rows }).catch(() => {})
+      invoke("pty_resize", { id: sessionId, cols, rows }).catch(() => {})
     );
 
     const ro = new ResizeObserver(() => {
       try {
         fit.fit();
       } catch {
-        /* container not ready */
+        /* container not ready / hidden */
       }
     });
     ro.observe(hostRef.current);
 
-    term.focus();
-
     return () => {
       disposed = true;
       ro.disconnect();
+      linkProvider.dispose();
+      bellSub.dispose();
+      titleSub.dispose();
       dataSub.dispose();
       resizeSub.dispose();
-      invoke("pty_kill").catch(() => {});
+      invoke("pty_kill", { id: sessionId }).catch(() => {});
       term.dispose();
+      termRef.current = null;
+      fitRef.current = null;
+      searchRef.current = null;
     };
-  }, []);
+  }, [sessionId]);
 
-  return <div className="terminal-host" ref={hostRef} />;
+  // Refit + focus + clear activity when this session becomes visible.
+  useEffect(() => {
+    if (!active) return;
+    notifiedRef.current = false;
+    cbRef.current.onSeen(sessionId);
+    const term = termRef.current;
+    if (!term) return;
+    const raf = requestAnimationFrame(() => {
+      try {
+        fitRef.current?.fit();
+      } catch {
+        /* ignore */
+      }
+      term.focus();
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [active, sessionId]);
+
+  // ⌘F opens search in the active terminal.
+  useEffect(() => {
+    if (!active) return;
+    function onKey(e: KeyboardEvent) {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "f") {
+        e.preventDefault();
+        setShowSearch(true);
+        requestAnimationFrame(() => searchInputRef.current?.focus());
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [active]);
+
+  // Live-apply theme / font changes.
+  useEffect(() => {
+    const term = termRef.current;
+    if (!term) return;
+    term.options.theme = {
+      background: theme.terminal.background,
+      foreground: theme.terminal.foreground,
+      cursor: theme.terminal.cursor,
+      selectionBackground: theme.terminal.selectionBackground,
+    };
+    term.options.fontSize = settings.fontSize;
+    term.options.fontFamily = settings.fontFamily;
+    try {
+      fitRef.current?.fit();
+    } catch {
+      /* ignore */
+    }
+  }, [theme, settings.fontSize, settings.fontFamily]);
+
+  function runSearch(term: string, dir: "next" | "prev") {
+    if (!term) return;
+    if (dir === "next") searchRef.current?.findNext(term);
+    else searchRef.current?.findPrevious(term);
+  }
+
+  return (
+    <div className="terminal-wrap">
+      <div className="terminal-host" ref={hostRef} />
+      {showSearch && active && (
+        <div className="term-search">
+          <input
+            ref={searchInputRef}
+            value={searchTerm}
+            placeholder="Find…"
+            onChange={(e) => {
+              setSearchTerm(e.target.value);
+              runSearch(e.target.value, "next");
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") runSearch(searchTerm, e.shiftKey ? "prev" : "next");
+              else if (e.key === "Escape") {
+                setShowSearch(false);
+                termRef.current?.focus();
+              }
+            }}
+          />
+          <button onClick={() => runSearch(searchTerm, "prev")} title="Previous">
+            ↑
+          </button>
+          <button onClick={() => runSearch(searchTerm, "next")} title="Next">
+            ↓
+          </button>
+          <button
+            onClick={() => {
+              setShowSearch(false);
+              termRef.current?.focus();
+            }}
+            title="Close"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+    </div>
+  );
 }

@@ -1,6 +1,8 @@
-// PTY bridge: spawns a real pseudo-terminal in Rust, streams its output to the
-// webview over a Tauri Channel, and accepts input / resize from the frontend.
+// PTY bridge: spawns real pseudo-terminals in Rust, one per session id, streams
+// their output to the webview over Tauri Channels, and accepts input / resize.
+// Sessions keep running in the background until explicitly killed.
 
+use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::sync::Mutex;
 use std::thread;
@@ -10,21 +12,19 @@ use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 use serde::Serialize;
 use tauri::ipc::Channel;
 
-/// Events streamed to the frontend over a Tauri Channel.
-/// Serialized as `{ "event": "output", "data": "<base64>" }` etc.
 #[derive(Clone, Serialize)]
 #[serde(tag = "event", content = "data", rename_all = "camelCase")]
 pub enum PtyEvent {
     /// base64-encoded raw bytes from the pty
     Output(String),
-    /// the child process exited (exit code, or -1 if unknown)
+    /// the child process exited
     Exit(i32),
 }
 
-/// The live pty, if one is running. Only one terminal for now (the spike).
+/// One live pty per session id. Sessions persist until killed.
 #[derive(Default)]
 pub struct PtyState {
-    inner: Mutex<Option<PtyHandle>>,
+    sessions: Mutex<HashMap<String, PtyHandle>>,
 }
 
 struct PtyHandle {
@@ -45,14 +45,15 @@ fn size(cols: u16, rows: u16) -> PtySize {
 #[tauri::command]
 pub fn pty_spawn(
     state: tauri::State<PtyState>,
+    id: String,
     on_event: Channel<PtyEvent>,
     cwd: Option<String>,
     shell: Option<String>,
     cols: u16,
     rows: u16,
 ) -> Result<(), String> {
-    // Kill any existing pty before starting a new one.
-    if let Some(mut old) = state.inner.lock().unwrap().take() {
+    // Replace any existing session with this id (e.g. a dev remount).
+    if let Some(mut old) = state.sessions.lock().unwrap().remove(&id) {
         let _ = old.child.kill();
     }
 
@@ -61,26 +62,19 @@ pub fn pty_spawn(
         .openpty(size(cols, rows))
         .map_err(|e| e.to_string())?;
 
-    // Default to the user's login shell; they can then run `claude`, etc.
     let program =
         shell.unwrap_or_else(|| std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into()));
     let mut cmd = CommandBuilder::new(program);
     cmd.env("TERM", "xterm-256color");
-    // Open the shell in the same folder the file browser is rooted at.
     let dir = cwd.unwrap_or_else(|| crate::fs::project_root().to_string_lossy().into_owned());
     cmd.cwd(dir);
 
-    let child = pair
-        .slave
-        .spawn_command(cmd)
-        .map_err(|e| e.to_string())?;
-    // Drop the slave so the child is the only holder — lets us detect EOF.
+    let child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
     drop(pair.slave);
 
     let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
     let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
 
-    // Reader thread: pump pty output → base64 → Channel until EOF.
     let ch = on_event.clone();
     thread::spawn(move || {
         let mut buf = [0u8; 8192];
@@ -88,8 +82,7 @@ pub fn pty_spawn(
             match reader.read(&mut buf) {
                 Ok(0) => break,
                 Ok(n) => {
-                    let encoded =
-                        base64::engine::general_purpose::STANDARD.encode(&buf[..n]);
+                    let encoded = base64::engine::general_purpose::STANDARD.encode(&buf[..n]);
                     if ch.send(PtyEvent::Output(encoded)).is_err() {
                         break;
                     }
@@ -100,18 +93,21 @@ pub fn pty_spawn(
         let _ = ch.send(PtyEvent::Exit(-1));
     });
 
-    *state.inner.lock().unwrap() = Some(PtyHandle {
-        master: pair.master,
-        writer,
-        child,
-    });
+    state.sessions.lock().unwrap().insert(
+        id,
+        PtyHandle {
+            master: pair.master,
+            writer,
+            child,
+        },
+    );
     Ok(())
 }
 
 #[tauri::command]
-pub fn pty_write(state: tauri::State<PtyState>, data: String) -> Result<(), String> {
-    let mut guard = state.inner.lock().unwrap();
-    if let Some(h) = guard.as_mut() {
+pub fn pty_write(state: tauri::State<PtyState>, id: String, data: String) -> Result<(), String> {
+    let mut guard = state.sessions.lock().unwrap();
+    if let Some(h) = guard.get_mut(&id) {
         h.writer
             .write_all(data.as_bytes())
             .map_err(|e| e.to_string())?;
@@ -123,11 +119,12 @@ pub fn pty_write(state: tauri::State<PtyState>, data: String) -> Result<(), Stri
 #[tauri::command]
 pub fn pty_resize(
     state: tauri::State<PtyState>,
+    id: String,
     cols: u16,
     rows: u16,
 ) -> Result<(), String> {
-    let guard = state.inner.lock().unwrap();
-    if let Some(h) = guard.as_ref() {
+    let guard = state.sessions.lock().unwrap();
+    if let Some(h) = guard.get(&id) {
         h.master
             .resize(size(cols, rows))
             .map_err(|e| e.to_string())?;
@@ -136,8 +133,8 @@ pub fn pty_resize(
 }
 
 #[tauri::command]
-pub fn pty_kill(state: tauri::State<PtyState>) -> Result<(), String> {
-    if let Some(mut h) = state.inner.lock().unwrap().take() {
+pub fn pty_kill(state: tauri::State<PtyState>, id: String) -> Result<(), String> {
+    if let Some(mut h) = state.sessions.lock().unwrap().remove(&id) {
         let _ = h.child.kill();
     }
     Ok(())

@@ -6,11 +6,13 @@ import type { Extension } from "@codemirror/state";
 import { readFile, writeFile, gitFileOriginal } from "../lib/api";
 import { languageFor } from "../lib/language";
 import { onFsChanged } from "../lib/events";
+import { useSettings } from "../lib/settings";
 
 type Status = "loading" | "ready" | "error" | "saving" | "saved";
 type Mode = "edit" | "diff";
 
 export default function FileEditor({ path }: { path: string }) {
+  const { theme } = useSettings();
   const [content, setContent] = useState("");
   const [original, setOriginal] = useState<string | null>(null);
   const [status, setStatus] = useState<Status>("loading");
@@ -116,7 +118,7 @@ export default function FileEditor({ path }: { path: string }) {
             key={showDiff ? "diff" : "edit"}
             value={content}
             height="100%"
-            theme={oneDark}
+            theme={theme.editor === "light" ? "light" : oneDark}
             extensions={extensions}
             onChange={(val) => {
               setContent(val);

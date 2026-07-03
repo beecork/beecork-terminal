@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Beecork Terminal — A cockpit for your coding agent</title>
+<meta name="description" content="Beecork Terminal is a desktop cockpit for CLI coding agents: a full terminal, a live git-aware diff view, and a file browser/editor side by side. macOS, Windows, Linux. Open source.">
+<meta name="keywords" content="terminal, coding agent, Claude Code, Tauri, diff viewer, developer tools, Beecork, desktop terminal">
+<meta name="author" content="Beecork">
+<meta name="theme-color" content="#a78bfa">
+<link rel="canonical" href="https://beecork.com/terminal/">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://beecork.com/terminal/">
+<meta property="og:title" content="Beecork Terminal — A cockpit for your coding agent">
+<meta property="og:description" content="A desktop cockpit for CLI coding agents: full terminal + live diff view + file browser/editor. macOS, Windows, Linux.">
+<meta property="og:image" content="https://beecork.com/og-image.png">
+<meta property="og:site_name" content="Beecork">
+
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Beecork Terminal — A cockpit for your coding agent">
+<meta name="twitter:description" content="Full terminal + live diff view + file browser/editor. macOS, Windows, Linux.">
+<meta name="twitter:image" content="https://beecork.com/og-image.png">
+
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "Beecork Terminal",
+  "description": "A desktop cockpit for CLI coding agents: full terminal, live git-aware diff view, and file browser/editor.",
+  "url": "https://beecork.com/terminal/",
+  "applicationCategory": "DeveloperApplication",
+  "operatingSystem": "macOS, Windows, Linux",
+  "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+  "codeRepository": "https://github.com/beecork/beecork-terminal",
+  "author": { "@type": "Organization", "name": "Beecork", "url": "https://beecork.com" }
+}
+</script>
+<style>
+  *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+  :root {
+    --bg: #0a0a0b; --surface: #111113; --surface-2: #1a1a1e; --border: #252529;
+    --text: #e8e8ed; --text-dim: #8b8b96; --accent: #a78bfa; --accent-2: #c4b5fd;
+    --accent-dim: #a78bfa22;
+    --mono: 'SF Mono','Cascadia Code','Fira Code','JetBrains Mono',Consolas,monospace;
+    --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  }
+  html { scroll-behavior: smooth; }
+  body { font-family: var(--sans); background: var(--bg); color: var(--text); line-height: 1.6; -webkit-font-smoothing: antialiased; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .container { max-width: 760px; margin: 0 auto; padding: 0 24px; }
+
+  nav { position: sticky; top: 0; z-index: 10; background: rgba(10,10,11,0.8); backdrop-filter: blur(10px); border-bottom: 1px solid var(--border); padding: 16px 0; }
+  nav .container { display: flex; align-items: center; justify-content: space-between; }
+  .logo { display: flex; align-items: center; gap: 10px; color: var(--text); font-weight: 800; font-size: 18px; letter-spacing: -0.5px; }
+  .logo:hover { text-decoration: none; }
+  .logo img { height: 26px; width: auto; }
+  .nav-links { display: flex; gap: 20px; align-items: center; }
+  .nav-links a { color: var(--text-dim); font-size: 14px; transition: color 0.15s; }
+  .nav-links a:hover { color: var(--text); text-decoration: none; }
+  .gh-btn { display: inline-flex; align-items: center; gap: 6px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; padding: 6px 12px; font-size: 13px; color: var(--text) !important; transition: border-color 0.15s; }
+  .gh-btn:hover { border-color: var(--text-dim); text-decoration: none; }
+  .gh-btn svg { width: 16px; height: 16px; fill: var(--text); }
+
+  .hero { padding: 80px 0 56px; text-align: center; }
+  .hero img.mark { height: 84px; width: auto; margin: 0 auto 24px; display: block; }
+  .hero-badge { display: inline-block; font-family: var(--mono); font-size: 12px; color: var(--accent-2); background: var(--accent-dim); border: 1px solid #a78bfa44; border-radius: 20px; padding: 4px 14px; margin-bottom: 24px; letter-spacing: 0.5px; }
+  h1 { font-size: clamp(34px, 5.5vw, 52px); font-weight: 800; line-height: 1.04; letter-spacing: -1.5px; margin-bottom: 20px; }
+  h1 .accent { color: var(--accent); }
+  .hero-sub { font-size: 19px; color: var(--text-dim); max-width: 580px; margin: 0 auto 32px; line-height: 1.5; }
+
+  .btn-primary { display: inline-flex; align-items: center; gap: 10px; background: var(--accent); color: #12101a; font-weight: 700; font-size: 15px; padding: 13px 24px; border-radius: 10px; transition: transform 0.12s, filter 0.15s; }
+  .btn-primary:hover { text-decoration: none; filter: brightness(1.08); transform: translateY(-1px); }
+  .download-version { font-family: var(--mono); font-size: 12px; color: var(--text-dim); margin-top: 14px; }
+
+  .download-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 8px; }
+  .download-card { display: flex; align-items: center; gap: 14px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; color: var(--text); transition: border-color 0.15s, transform 0.12s; text-align: left; }
+  .download-card:hover { border-color: var(--accent); text-decoration: none; transform: translateY(-1px); }
+  .download-card.highlighted { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  .download-card.disabled { opacity: 0.45; pointer-events: none; }
+  .download-icon { font-size: 26px; line-height: 1; }
+  .download-info { display: flex; flex-direction: column; }
+  .download-info strong { font-size: 15px; }
+  .download-info span { font-size: 13px; color: var(--text-dim); }
+
+  section { padding: 48px 0; border-top: 1px solid var(--border); }
+  .section-label { font-family: var(--mono); font-size: 12px; text-transform: uppercase; letter-spacing: 1.2px; color: var(--accent-2); margin-bottom: 10px; }
+  h2 { font-size: 28px; font-weight: 800; letter-spacing: -0.8px; margin-bottom: 28px; }
+
+  .features { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .feature { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 22px; transition: border-color 0.15s; }
+  .feature:hover { border-color: var(--text-dim); }
+  .feature h3 { font-size: 16px; font-weight: 700; margin-bottom: 8px; }
+  .feature p { font-size: 14px; color: var(--text-dim); line-height: 1.5; }
+
+  footer { border-top: 1px solid var(--border); padding: 40px 0; text-align: center; }
+  .footer-links { display: flex; gap: 24px; justify-content: center; margin-bottom: 12px; flex-wrap: wrap; }
+  footer a { color: var(--text-dim); font-size: 14px; }
+  footer a:hover { color: var(--text); }
+  footer p { color: var(--text-dim); font-size: 13px; }
+
+  @media (max-width: 640px) { .features, .download-grid { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="container">
+    <a href="/" class="logo">
+      <img src="/logo.svg" alt="Beecork">
+      <span>Beecork&nbsp;<span style="color:var(--text-dim);font-weight:600;">Terminal</span></span>
+    </a>
+    <div class="nav-links">
+      <a href="/">← All products</a>
+      <a href="/agent/">Agent</a>
+      <a href="/pipe/">Pipe</a>
+      <a href="https://github.com/beecork/beecork-terminal" target="_blank" rel="noopener noreferrer" class="gh-btn">
+        <svg viewBox="0 0 16 16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+        GitHub
+      </a>
+    </div>
+  </div>
+</nav>
+
+<main>
+  <div class="container">
+
+    <!-- Hero -->
+    <section class="hero" style="border-top:none;">
+      <img class="mark" src="/logo.svg" alt="Beecork Terminal">
+      <div class="hero-badge">open source · macOS · Windows · Linux</div>
+      <h1>A cockpit for your<br><span class="accent">coding agent.</span></h1>
+      <p class="hero-sub">Beecork Terminal wraps any CLI agent — Claude Code, Codex, your shell — in a full-size terminal, with a live git-aware diff view and a file browser/editor right beside it. Sessions, splits, themes, all native and fast.</p>
+      <a class="btn-primary" id="hero-download" href="#download">Download</a>
+      <p class="download-version" id="download-version"></p>
+    </section>
+
+    <!-- Download -->
+    <section id="download">
+      <div class="section-label">Download</div>
+      <h2>Pick your platform.</h2>
+      <div class="download-grid">
+        <a href="#" class="download-card" data-os="mac-arm" data-pattern="aarch64.dmg">
+          <span class="download-icon">&#63743;</span>
+          <span class="download-info"><strong>macOS — Apple Silicon</strong><span>M1/M2/M3/M4 · .dmg</span></span>
+        </a>
+        <a href="#" class="download-card" data-os="mac-intel" data-pattern="x64.dmg">
+          <span class="download-icon">&#63743;</span>
+          <span class="download-info"><strong>macOS — Intel</strong><span>Intel Macs · .dmg</span></span>
+        </a>
+        <a href="#" class="download-card" data-os="windows" data-pattern="x64-setup.exe">
+          <span class="download-icon">&#8862;</span>
+          <span class="download-info"><strong>Windows</strong><span>64-bit · .exe installer</span></span>
+        </a>
+        <a href="#" class="download-card" data-os="linux-appimage" data-pattern=".AppImage">
+          <span class="download-icon">&#128039;</span>
+          <span class="download-info"><strong>Linux</strong><span>AppImage · portable</span></span>
+        </a>
+      </div>
+      <p style="font-size:13px;color:var(--text-dim);margin-top:16px;">
+        All builds live on <a href="https://github.com/beecork/beecork-terminal/releases/latest" target="_blank" rel="noopener noreferrer">GitHub Releases</a>. Also available: <code style="font-family:var(--mono);color:var(--accent-2)">.deb</code> and <code style="font-family:var(--mono);color:var(--accent-2)">.msi</code>.
+      </p>
+    </section>
+
+    <!-- Features -->
+    <section>
+      <div class="section-label">What's inside</div>
+      <h2>Terminal first. Everything around it.</h2>
+      <div class="features">
+        <div class="feature">
+          <h3>The terminal is the star</h3>
+          <p>A real, GPU-rendered terminal running your login shell — launch <code style="font-family:var(--mono);color:var(--accent-2)">claude</code> or any CLI agent and work full-size.</p>
+        </div>
+        <div class="feature">
+          <h3>Live diff view</h3>
+          <p>As the agent edits, the file tree colors changed folders and files, and each file shows a line-level diff against git.</p>
+        </div>
+        <div class="feature">
+          <h3>File browser + editor</h3>
+          <p>An expandable side panel: browse the folder, open files, edit with syntax highlighting, split into two views.</p>
+        </div>
+        <div class="feature">
+          <h3>Sessions that stay alive</h3>
+          <p>A left rail of terminal sessions — each keeps running in the background. Rename them, pin the rail, ⌘T for a new one.</p>
+        </div>
+        <div class="feature">
+          <h3>Clickable & searchable</h3>
+          <p>Click a <code style="font-family:var(--mono);color:var(--accent-2)">file:line</code> in output to open it. ⌘F to search scrollback. Alerts when a background agent needs you.</p>
+        </div>
+        <div class="feature">
+          <h3>Lean &amp; themeable</h3>
+          <p>Built with Tauri — a small, fast native app. Multiple color themes, adjustable font, tuned for how you work.</p>
+        </div>
+      </div>
+    </section>
+
+  </div>
+</main>
+
+<footer>
+  <div class="container">
+    <div class="footer-links">
+      <a href="/">All products</a>
+      <a href="/agent/">Beecork Agent</a>
+      <a href="/pipe/">Beecork Pipe</a>
+      <a href="https://github.com/beecork/beecork-terminal" target="_blank" rel="noopener noreferrer">GitHub</a>
+    </div>
+    <p>© Beecork — open source.</p>
+  </div>
+</footer>
+
+<script>
+  // Detect OS, fetch the latest GitHub release, and wire the download buttons.
+  (function () {
+    var REPO = 'beecork/beecork-terminal';
+    var API = 'https://api.github.com/repos/' + REPO + '/releases/latest';
+    var ua = navigator.userAgent;
+    var os = 'unknown';
+
+    if (/Mac/.test(ua)) {
+      try {
+        var canvas = document.createElement('canvas');
+        var gl = canvas.getContext('webgl');
+        var ext = gl && gl.getExtension('WEBGL_debug_renderer_info');
+        var renderer = ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : '';
+        os = /Apple/.test(renderer) ? 'mac-arm' : 'mac-intel';
+      } catch (e) { os = 'mac-arm'; }
+    } else if (/Win/.test(ua)) {
+      os = 'windows';
+    } else if (/Linux/.test(ua)) {
+      os = 'linux-appimage';
+    }
+
+    var cards = document.querySelectorAll('.download-card[data-os]');
+    cards.forEach(function (card) {
+      if (card.dataset.os === os) card.classList.add('highlighted');
+    });
+
+    var heroBtn = document.getElementById('hero-download');
+    var labels = {
+      'mac-arm': 'Download for Mac (Apple Silicon)',
+      'mac-intel': 'Download for Mac (Intel)',
+      'windows': 'Download for Windows',
+      'linux-appimage': 'Download for Linux'
+    };
+    if (heroBtn && labels[os]) heroBtn.textContent = labels[os];
+
+    fetch(API)
+      .then(function (r) { return r.json(); })
+      .then(function (release) {
+        var assets = release.assets || [];
+        var version = release.tag_name || '';
+        var vEl = document.getElementById('download-version');
+        if (vEl && version) vEl.textContent = 'Latest: ' + version;
+
+        cards.forEach(function (card) {
+          var pattern = (card.dataset.pattern || '').toLowerCase();
+          if (!pattern) return;
+          var match = assets.find(function (a) {
+            return a.name.toLowerCase().indexOf(pattern) !== -1;
+          });
+          if (match) {
+            card.href = match.browser_download_url;
+            card.classList.remove('disabled');
+          } else {
+            card.classList.add('disabled');
+            card.removeAttribute('href');
+          }
+        });
+
+        if (heroBtn) {
+          var hi = document.querySelector('.download-card.highlighted');
+          if (hi && hi.href && hi.getAttribute('href') !== '#') heroBtn.href = hi.href;
+          else heroBtn.href = '#download';
+        }
+      })
+      .catch(function () {
+        cards.forEach(function (card) {
+          card.href = 'https://github.com/' + REPO + '/releases/latest';
+        });
+        if (heroBtn) heroBtn.href = 'https://github.com/' + REPO + '/releases/latest';
+      });
+  })();
+</script>
+
+</body>
+</html>
