@@ -41,28 +41,45 @@ export default function App() {
     return s ? displayName(s) : "Beecork Terminal";
   })();
 
+  const cwdBySession = useRef<Record<string, string>>({});
+  const activeIdRef = useRef(activeId);
+  activeIdRef.current = activeId;
+
+  const applyCwd = useCallback((id: string, cwd: string) => {
+    cwdBySession.current[id] = cwd;
+    if (id === activeIdRef.current) {
+      setTerminalCwd((prev) => (prev === cwd ? prev : cwd));
+    }
+  }, []);
+
+  // OSC 7 (instant, shells with integration).
+  const onCwd = useCallback((id: string, path: string) => applyCwd(id, path), [applyCwd]);
+  // Output settled — re-check cwd for shells that don't emit OSC 7 (covers plain zsh/bash).
+  const onCwdHint = useCallback(
+    (id: string) => {
+      if (id !== activeIdRef.current) return;
+      ptyCwd(id).then((cwd) => cwd && applyCwd(id, cwd)).catch(() => {});
+    },
+    [applyCwd]
+  );
+
   // Initial root = where the shell starts.
   useEffect(() => {
     getRoot().then(setTerminalCwd).catch(() => {});
   }, []);
 
-  // Follow the ACTIVE session's working directory: updates on `cd`, and switches
-  // immediately when you switch sessions.
+  // On session switch: show the last-known cwd immediately, confirm it, and keep a
+  // slow safety poll (the OSC 7 handler + output hints do the responsive work).
   useEffect(() => {
-    let cancelled = false;
-    const query = () =>
-      ptyCwd(activeId)
-        .then((cwd) => {
-          if (!cancelled && cwd) setTerminalCwd((prev) => (prev === cwd ? prev : cwd));
-        })
-        .catch(() => {});
-    query();
-    const t = setInterval(query, 1200);
-    return () => {
-      cancelled = true;
-      clearInterval(t);
-    };
-  }, [activeId]);
+    const known = cwdBySession.current[activeId];
+    if (known) setTerminalCwd(known);
+    ptyCwd(activeId).then((cwd) => cwd && applyCwd(activeId, cwd)).catch(() => {});
+    const t = setInterval(() => {
+      const id = activeIdRef.current;
+      ptyCwd(id).then((cwd) => cwd && applyCwd(id, cwd)).catch(() => {});
+    }, 2000);
+    return () => clearInterval(t);
+  }, [activeId, applyCwd]);
 
   const onOpenPath = useCallback((path: string, line?: number) => {
     setOpenRequest({ path, line, n: ++reqN.current });
@@ -194,6 +211,8 @@ export default function App() {
                 onActivity={onActivity}
                 onSeen={onSeen}
                 onTitle={setDynamic}
+                onCwd={onCwd}
+                onCwdHint={onCwdHint}
               />
             </div>
           ))}

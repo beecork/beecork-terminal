@@ -28,6 +28,17 @@ function looksLikePath(token: string): boolean {
   return token.includes("/") || CODE_EXT.test(noPos);
 }
 
+function parseOsc7(data: string): string | null {
+  // OSC 7 payload: file://<host>/<absolute-path> (percent-encoded).
+  const m = data.match(/^file:\/\/[^/]*(\/.*)$/);
+  if (!m) return null;
+  try {
+    return decodeURIComponent(m[1]);
+  } catch {
+    return m[1];
+  }
+}
+
 interface Props {
   sessionId: string;
   active: boolean;
@@ -35,6 +46,10 @@ interface Props {
   onActivity: (id: string) => void;
   onSeen: (id: string) => void;
   onTitle: (id: string, title: string) => void;
+  /** shell pushed its cwd via OSC 7 (instant) */
+  onCwd: (id: string, path: string) => void;
+  /** output settled — a good moment to re-check cwd (covers shells without OSC 7) */
+  onCwdHint: (id: string) => void;
 }
 
 export default function TerminalPane({
@@ -44,6 +59,8 @@ export default function TerminalPane({
   onActivity,
   onSeen,
   onTitle,
+  onCwd,
+  onCwdHint,
 }: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
@@ -59,8 +76,8 @@ export default function TerminalPane({
   lookRef.current = { theme, settings };
 
   // Callbacks captured in refs so the mount effect always sees current ones.
-  const cbRef = useRef({ onOpenPath, onActivity, onSeen, onTitle });
-  cbRef.current = { onOpenPath, onActivity, onSeen, onTitle };
+  const cbRef = useRef({ onOpenPath, onActivity, onSeen, onTitle, onCwd, onCwdHint });
+  cbRef.current = { onOpenPath, onActivity, onSeen, onTitle, onCwd, onCwdHint };
 
   const [showSearch, setShowSearch] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
@@ -89,6 +106,7 @@ export default function TerminalPane({
   useEffect(() => {
     if (!hostRef.current) return;
     let disposed = false;
+    let cwdHintTimer: ReturnType<typeof setTimeout> | undefined;
 
     const { theme, settings } = lookRef.current;
     const term = new Terminal({
@@ -160,6 +178,11 @@ export default function TerminalPane({
           notifiedRef.current = true;
           cbRef.current.onActivity(sessionId);
         }
+        // When output settles (a prompt likely returned), re-check the cwd.
+        if (activeRef.current) {
+          clearTimeout(cwdHintTimer);
+          cwdHintTimer = setTimeout(() => cbRef.current.onCwdHint(sessionId), 150);
+        }
       } else if (msg.event === "exit") {
         term.write("\r\n\x1b[90m[process exited]\x1b[0m\r\n");
       }
@@ -177,6 +200,13 @@ export default function TerminalPane({
       // and cap the length before it reaches the session/window title.
       const clean = t.replace(/[\u0000-\u001f\u007f]/g, "").slice(0, 120);
       cbRef.current.onTitle(sessionId, clean);
+    });
+
+    // OSC 7: shells with integration push their cwd instantly.
+    const osc7 = term.parser.registerOscHandler(7, (data) => {
+      const p = parseOsc7(data);
+      if (p) cbRef.current.onCwd(sessionId, p);
+      return true;
     });
 
     invoke("pty_spawn", {
@@ -206,10 +236,12 @@ export default function TerminalPane({
 
     return () => {
       disposed = true;
+      clearTimeout(cwdHintTimer);
       ro.disconnect();
       linkProvider.dispose();
       bellSub.dispose();
       titleSub.dispose();
+      osc7.dispose();
       dataSub.dispose();
       resizeSub.dispose();
       invoke("pty_kill", { id: sessionId }).catch(() => {});

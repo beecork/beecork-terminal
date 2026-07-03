@@ -12,6 +12,7 @@ interface Props {
 }
 
 type Orientation = "vertical" | "horizontal";
+type PanelLayout = "stacked" | "sideBySide";
 
 export default function SidePanel({ openRequest, root }: Props) {
   const [statuses, setStatuses] = useState<FileStatus[]>([]);
@@ -20,8 +21,25 @@ export default function SidePanel({ openRequest, root }: Props) {
   const [panes, setPanes] = useState<(string | null)[]>([null]);
   const [focused, setFocused] = useState(0);
   const [orientation, setOrientation] = useState<Orientation>("vertical");
+  const [panelLayout, setPanelLayout] = useState<PanelLayout>(() => {
+    try {
+      return localStorage.getItem("beecork.panelLayout") === "sideBySide"
+        ? "sideBySide"
+        : "stacked";
+    } catch {
+      return "stacked";
+    }
+  });
   const focusedRef = useRef(focused);
   focusedRef.current = focused;
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("beecork.panelLayout", panelLayout);
+    } catch {
+      /* ignore */
+    }
+  }, [panelLayout]);
 
   const refresh = useCallback(() => {
     gitStatus(root ?? undefined)
@@ -34,11 +52,6 @@ export default function SidePanel({ openRequest, root }: Props) {
     refresh();
     return onFsChanged(refresh);
   }, [refresh]);
-
-  // When the terminal changes directory, remount the tree at the new root.
-  useEffect(() => {
-    setTreeKey((k) => k + 1);
-  }, [root]);
 
   const openInFocused = useCallback((path: string) => {
     setPanes((prev) => {
@@ -99,6 +112,15 @@ export default function SidePanel({ openRequest, root }: Props) {
         {statuses.length > 0 && <span className="change-badge">{statuses.length}</span>}
         <button
           className="section-refresh"
+          title={panelLayout === "stacked" ? "Side-by-side layout" : "Stacked layout"}
+          onClick={() =>
+            setPanelLayout((l) => (l === "stacked" ? "sideBySide" : "stacked"))
+          }
+        >
+          {panelLayout === "stacked" ? "◧" : "⬓"}
+        </button>
+        <button
+          className="section-refresh"
           title="Refresh file tree"
           onClick={() => {
             setTreeKey((k) => k + 1);
@@ -109,63 +131,73 @@ export default function SidePanel({ openRequest, root }: Props) {
         </button>
       </div>
 
-      {root ? (
-        <FileTree
-          key={treeKey}
-          rootPath={root}
-          selectedPath={panes[focused] ?? null}
-          onOpenFile={openInFocused}
-          statusByPath={statusByPath}
-          changedDirs={changedDirs}
-        />
-      ) : (
-        <div className="file-tree tree-loading">Waiting for the terminal…</div>
-      )}
+      <div className={`panel-body ${panelLayout}`}>
+        <div className="tree-region">
+          {root ? (
+            <FileTree
+              key={treeKey}
+              rootPath={root}
+              selectedPath={panes[focused] ?? null}
+              onOpenFile={openInFocused}
+              statusByPath={statusByPath}
+              changedDirs={changedDirs}
+            />
+          ) : (
+            <div className="tree-loading">Waiting for the terminal…</div>
+          )}
+        </div>
 
-      <div className="editor-area-toolbar">
-        <span className="ea-label">Editor</span>
-        {split && (
-          <div className="orient-toggle" title="Split layout">
-            <button
-              className={orientation === "vertical" ? "active" : ""}
-              title="Stacked (rows)"
-              onClick={() => setOrientation("vertical")}
-            >
-              ▤
-            </button>
-            <button
-              className={orientation === "horizontal" ? "active" : ""}
-              title="Side by side (columns)"
-              onClick={() => setOrientation("horizontal")}
-            >
-              ▥
-            </button>
-          </div>
-        )}
-        <button className="ea-btn" title={split ? "Unsplit" : "Split editor"} onClick={toggleSplit}>
-          {split ? "▣" : "⊞"}
-        </button>
-      </div>
-
-      <div className={`editor-area ${orientation}`}>
-        {panes.map((p, i) => (
-          <div
-            key={i}
-            className={`editor-pane${split && i === focused ? " focused" : ""}`}
-            onMouseDown={() => setFocused(i)}
-          >
-            {p ? (
-              <FileEditor
-                key={p}
-                path={p}
-                root={root}
-                line={openRequest?.path === p ? openRequest?.line : undefined}
-              />
-            ) : (
-              <div className="editor-region editor-empty">Select a file</div>
+        <div className="editor-section">
+          <div className="editor-area-toolbar">
+            <span className="ea-label">Editor</span>
+            {split && (
+              <div className="orient-toggle" title="Split layout">
+                <button
+                  className={orientation === "vertical" ? "active" : ""}
+                  title="Stacked (rows)"
+                  onClick={() => setOrientation("vertical")}
+                >
+                  ▤
+                </button>
+                <button
+                  className={orientation === "horizontal" ? "active" : ""}
+                  title="Side by side (columns)"
+                  onClick={() => setOrientation("horizontal")}
+                >
+                  ▥
+                </button>
+              </div>
             )}
+            <button
+              className="ea-btn"
+              title={split ? "Unsplit" : "Split editor"}
+              onClick={toggleSplit}
+            >
+              {split ? "▣" : "⊞"}
+            </button>
           </div>
-        ))}
+
+          <div className={`editor-area ${orientation}`}>
+            {panes.map((p, i) => (
+              <div
+                key={i}
+                className={`editor-pane${split && i === focused ? " focused" : ""}`}
+                onMouseDown={() => setFocused(i)}
+              >
+                {p ? (
+                  <FileEditor
+                    key={p}
+                    path={p}
+                    root={root}
+                    line={openRequest?.path === p ? openRequest?.line : undefined}
+                  />
+                ) : (
+                  <div className="editor-region editor-empty">Select a file</div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
       </div>
     </div>
   );

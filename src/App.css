@@ -387,6 +387,41 @@ body {
   height: 100%;
 }
 
+/* Toggleable tree / editor arrangement inside the right panel. */
+.panel-body {
+  flex: 1 1 auto;
+  display: flex;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+.panel-body.stacked {
+  flex-direction: column;
+}
+.panel-body.sideBySide {
+  flex-direction: row;
+}
+.tree-region {
+  flex: 0 0 40%;
+  min-height: 0;
+  min-width: 0;
+  overflow: auto;
+}
+.panel-body.stacked .tree-region {
+  border-bottom: 1px solid var(--border);
+}
+.panel-body.sideBySide .tree-region {
+  border-right: 1px solid var(--border);
+}
+.editor-section {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
 .section-header {
   display: flex;
   align-items: center;
@@ -428,10 +463,7 @@ body {
 
 /* ---- file tree ---- */
 .file-tree {
-  flex: 0 0 40%;
-  overflow: auto;
   padding: 4px 0;
-  border-bottom: 1px solid var(--border);
 }
 
 .tree-row {
