@@ -3,6 +3,7 @@
 
 use std::cmp::Ordering;
 use std::path::PathBuf;
+use std::time::UNIX_EPOCH;
 
 use serde::Serialize;
 
@@ -19,6 +20,13 @@ pub struct Listing {
     entries: Vec<Entry>,
 }
 
+#[derive(Serialize)]
+pub struct FileData {
+    content: String,
+    /// last-modified time in milliseconds since the epoch (for conflict detection)
+    mtime: f64,
+}
+
 /// The folder the app is "opened in". In dev, `tauri dev` runs the binary from
 /// `src-tauri/`, so step up one level to the real project root.
 pub fn project_root() -> PathBuf {
@@ -28,6 +36,14 @@ pub fn project_root() -> PathBuf {
     } else {
         cwd
     }
+}
+
+fn mtime_ms(meta: &std::fs::Metadata) -> f64 {
+    meta.modified()
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_secs_f64() * 1000.0)
+        .unwrap_or(0.0)
 }
 
 #[tauri::command]
@@ -64,8 +80,13 @@ pub fn list_dir(path: Option<String>) -> Result<Listing, String> {
 }
 
 #[tauri::command]
-pub fn read_file(path: String) -> Result<String, String> {
+pub fn read_file(path: String) -> Result<FileData, String> {
+    // `metadata` follows symlinks; reject anything that isn't a regular file
+    // (a FIFO/device in an opened repo would otherwise block the read forever).
     let meta = std::fs::metadata(&path).map_err(|e| e.to_string())?;
+    if !meta.file_type().is_file() {
+        return Err("Not a regular file.".into());
+    }
     if meta.len() > 2_000_000 {
         return Err("File too large to open (over 2 MB).".into());
     }
@@ -74,10 +95,32 @@ pub fn read_file(path: String) -> Result<String, String> {
     if bytes.iter().take(8000).any(|&b| b == 0) {
         return Err("Binary file — not shown.".into());
     }
-    Ok(String::from_utf8_lossy(&bytes).into_owned())
+    // Reject non-UTF-8 rather than lossily decoding — a lossy round-trip on
+    // save would permanently corrupt the file.
+    let content =
+        String::from_utf8(bytes).map_err(|_| "File is not valid UTF-8 text.".to_string())?;
+    Ok(FileData {
+        content,
+        mtime: mtime_ms(&meta),
+    })
 }
 
 #[tauri::command]
-pub fn write_file(path: String, content: String) -> Result<(), String> {
-    std::fs::write(&path, content).map_err(|e| e.to_string())
+pub fn write_file(
+    path: String,
+    content: String,
+    expected_mtime: Option<f64>,
+) -> Result<f64, String> {
+    // Conflict detection: if the file changed on disk since it was loaded
+    // (e.g. the agent edited it), refuse to clobber it.
+    if let Some(expected) = expected_mtime {
+        if let Ok(meta) = std::fs::metadata(&path) {
+            if mtime_ms(&meta) > expected + 1.0 {
+                return Err("The file changed on disk since you opened it.".into());
+            }
+        }
+    }
+    std::fs::write(&path, &content).map_err(|e| e.to_string())?;
+    let meta = std::fs::metadata(&path).map_err(|e| e.to_string())?;
+    Ok(mtime_ms(&meta))
 }

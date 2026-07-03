@@ -3,9 +3,9 @@ name: Release
 # Cut a release by pushing a version tag, e.g.:
 #   npm version patch   (or minor/major)  -> creates the git tag
 #   git push --follow-tags
-# The tag (vX.Y.Z) triggers a matrix build on mac/win/linux and publishes a
-# GitHub Release with the installers (+ signed updater manifest once the
-# updater plugin + signing key are wired — see RELEASING.md).
+# The tag (vX.Y.Z) triggers tests + dependency audits, then a matrix build on
+# mac/win/linux that publishes a GitHub Release with the installers and the
+# signed updater manifest (latest.json). See RELEASING.md.
 
 on:
   push:
@@ -14,7 +14,32 @@ on:
   workflow_dispatch:
 
 jobs:
+  # Gate: run tests + dependency audits before anything is built and published.
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 20
+          cache: npm
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+      - name: Install frontend dependencies
+        run: npm ci
+      - name: Frontend tests
+        run: npm test
+      - name: Rust tests
+        run: cd src-tauri && cargo test
+      - name: Audit npm dependencies
+        run: npm audit --audit-level=high
+      - name: Audit Rust dependencies
+        run: |
+          cargo install cargo-audit --locked
+          cd src-tauri && cargo audit
+        continue-on-error: true
+
   release:
+    needs: checks
     permissions:
       contents: write
     strategy:
@@ -37,21 +62,21 @@ jobs:
     runs-on: ${{ matrix.platform }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 20
           cache: npm
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
         with:
           targets: ${{ matrix.target }}
 
       - name: Rust cache
-        uses: swatinem/rust-cache@v2
+        uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           workspaces: "./src-tauri -> target"
 
@@ -71,7 +96,7 @@ jobs:
         run: npm ci
 
       - name: Build and publish
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # ---- macOS code signing + notarization (see RELEASING.md) ----

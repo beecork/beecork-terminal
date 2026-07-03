@@ -69,28 +69,20 @@ gh secret set APPLE_CERTIFICATE_PASSWORD --repo beecork/beecork-terminal
 > to bypass Gatekeeper once. Add the secrets whenever you're ready for a clean
 > install experience — no code change needed.
 
-### 3. Auto-update signing key — *optional follow-up*
+### 3. Auto-update signing key — **already wired** ⚠️
 
-Auto-update (the app updating itself from GitHub Releases) is not wired yet;
-it's a small follow-up. When you want it:
+Auto-update **is fully wired** — `tauri-plugin-updater` is registered in
+`src-tauri/src/lib.rs`, `tauri.conf.json` has `plugins.updater` (endpoint +
+public key) and `bundle.createUpdaterArtifacts: true`, and the app shows an
+"Install & Restart" banner (`UpdateBanner.tsx`). The build signs the update
+manifest with the **existing** signing key.
 
-```bash
-npm run tauri signer generate -- -w ~/.beecork/beecork-terminal-updater.key
-```
-Then:
-- `gh secret set TAURI_SIGNING_PRIVATE_KEY --repo beecork/beecork-terminal < ~/.beecork/beecork-terminal-updater.key`
-- `gh secret set TAURI_SIGNING_PRIVATE_KEY_PASSWORD --repo beecork/beecork-terminal` (the password you chose)
-- Install the plugin: `npm i @tauri-apps/plugin-updater` + `cargo add tauri-plugin-updater` (in `src-tauri`), register it in `src-tauri/src/lib.rs`, and add to `tauri.conf.json`:
-  ```json
-  "bundle": { "createUpdaterArtifacts": true },
-  "plugins": {
-    "updater": {
-      "endpoints": ["https://github.com/beecork/beecork-terminal/releases/latest/download/latest.json"],
-      "pubkey": "<the public key printed by signer generate>"
-    }
-  }
-  ```
-  (Ping me and I'll do this code part.)
+> **DO NOT regenerate the updater key.** The public key baked into
+> `tauri.conf.json` must match the private key already in the repo secrets and
+> in every installed copy. Generating a new key would make all existing
+> installs reject future updates (signature mismatch). The current private key
+> + password live in **CozyKey** as `TAURI_SIGNING_PRIVATE_KEY` /
+> `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` and are already set as repo secrets.
 
 ---
 
@@ -179,7 +171,7 @@ The site's own workflow deploys to Cloudflare Pages automatically.
 | Mac artifacts | `.zip` | `.dmg` (+ `.app.tar.gz` for updater) |
 | Win artifacts | `.exe` (NSIS) | `.exe` (NSIS) + `.msi` |
 | Linux artifacts | AppImage/deb/rpm | AppImage/deb |
-| Auto-update | electron-updater (`latest*.yml`) | Tauri updater (`latest.json`) — *follow-up* |
+| Auto-update | electron-updater (`latest*.yml`) | Tauri updater (`latest.json`) — wired |
 | Release trigger | `v*` tag | `v*` tag (same) |
 | Download site | static + GitHub API | static + GitHub API (same technique) |
 | Site deploy | Cloudflare Pages | Cloudflare Pages (same) |
@@ -189,7 +181,5 @@ The site's own workflow deploys to Cloudflare Pages automatically.
 - **Windows code signing** isn't set up → Windows SmartScreen shows an
   "unknown publisher" warning until an EV/OV cert is added. (CozyPane has the
   same gap.)
-- **Auto-update** is scaffolded in the workflow (env vars present) but the app
-  plugin isn't wired yet — see step 3 above.
 - **Linux** builds on `ubuntu-22.04` (WebKitGTK 4.1). This is the platform to
   smoke-test first, per the original stack decision.

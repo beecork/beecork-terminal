@@ -39,8 +39,8 @@ export default function App() {
     return s ? displayName(s) : "Beecork Terminal";
   })();
 
-  const onOpenPath = useCallback((path: string) => {
-    setOpenRequest({ path, n: ++reqN.current });
+  const onOpenPath = useCallback((path: string, line?: number) => {
+    setOpenRequest({ path, line, n: ++reqN.current });
     setPanelOpen(true);
   }, []);
 

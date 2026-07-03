@@ -172,7 +172,12 @@ export default function TerminalPane({
       }
     });
 
-    const titleSub = term.onTitleChange((t) => cbRef.current.onTitle(sessionId, t));
+    const titleSub = term.onTitleChange((t) => {
+      // Terminal output controls this via OSC escapes — strip control chars
+      // and cap the length before it reaches the session/window title.
+      const clean = t.replace(/[\u0000-\u001f\u007f]/g, "").slice(0, 120);
+      cbRef.current.onTitle(sessionId, clean);
+    });
 
     invoke("pty_spawn", {
       id: sessionId,

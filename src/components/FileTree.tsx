@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { listDir, type ChangeStatus, type Entry } from "../lib/api";
+import { onFsChanged } from "../lib/events";
 
 interface Props {
   rootPath: string;
@@ -27,6 +28,16 @@ export default function FileTree({
     return () => {
       cancel = true;
     };
+  }, [rootPath]);
+
+  // Re-list the root when files change (agent creates/deletes files). React
+  // reconciles by path key, so expanded subfolders keep their state.
+  useEffect(() => {
+    return onFsChanged(() => {
+      listDir(rootPath)
+        .then((l) => setEntries(l.entries))
+        .catch(() => {});
+    });
   }, [rootPath]);
 
   if (error) return <div className="tree-error">{error}</div>;
@@ -69,6 +80,17 @@ function TreeNode({
   const [open, setOpen] = useState(false);
   const [children, setChildren] = useState<Entry[] | null>(null);
   const [loading, setLoading] = useState(false);
+
+  // While expanded, re-list this directory on fs changes so agent-created /
+  // deleted files appear live (expansion of surviving children is preserved).
+  useEffect(() => {
+    if (!open) return;
+    return onFsChanged(() => {
+      listDir(entry.path)
+        .then((l) => setChildren(l.entries))
+        .catch(() => {});
+    });
+  }, [open, entry.path]);
 
   async function activate() {
     if (!entry.is_dir) {

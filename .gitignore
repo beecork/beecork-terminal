@@ -25,3 +25,6 @@ dist-ssr
 
 # beecork agent session data
 .beecork/
+
+# local audit reports
+audits/

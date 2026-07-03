@@ -82,7 +82,7 @@ Tauri uses each OS's *own* webview (WebKit on Mac, Chromium-based WebView2 on Wi
 - **Frontend:** React + TypeScript + Vite.
 - **Terminal:** xterm.js + `@xterm/addon-webgl` (GPU) + `@xterm/addon-fit`.
 - **PTY:** Rust `portable-pty` (from wezterm), streamed to the webview via a Tauri v2 `Channel`.
-- **Editor + diff:** Monaco (turnkey diff view). *(Sub-decision to revisit: CodeMirror 6 is lighter and would amplify leanness, but Monaco's diff is more turnkey — pick during planning.)*
+- **Editor + diff:** **CodeMirror 6** (`@uiw/react-codemirror` + `@codemirror/merge` for the line diff). *Decision made: chose CodeMirror over Monaco for leanness — it uses no web workers, keeping the Tauri bundle small, which serves the "lean & fast" value.*
 - **File watching:** Rust `notify`. **Git/diff:** `git2` or `git` CLI. **Filesystem:** Rust std + Tauri fs.
 - **Packaging/cert:** Tauri bundler → macOS (dmg, arm64+x64) sign+notarize first; Windows (nsis/msi) + Linux (AppImage/deb) later.
 - **Auto-update:** Tauri updater plugin (signed).
@@ -102,7 +102,7 @@ During this exercise we found an existing certified app, **CozyPane** (`/Users/a
 
 ## Open sub-decisions for the planning stage
 
-- **Editor:** Monaco (turnkey diff, heavier) vs CodeMirror 6 (lighter, amplifies leanness). Lean toward CodeMirror if RAM is sacred; Monaco if diff-out-of-the-box wins.
+- **Editor:** ~~Monaco vs CodeMirror~~ — **RESOLVED: CodeMirror 6** (lighter, no web workers). Shipped.
 - **Diff baseline for non-git folders:** git HEAD vs a snapshot taken when the session starts.
 - **How much of Claude Code's UX to wrap** vs. just hosting the raw terminal (v1: just host it).
 

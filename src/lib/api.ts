@@ -16,11 +16,18 @@ export const getRoot = () => invoke<string>("get_root");
 export const listDir = (path?: string) =>
   invoke<Listing>("list_dir", { path: path ?? null });
 
-export const readFile = (path: string) =>
-  invoke<string>("read_file", { path });
+export interface FileData {
+  content: string;
+  /** last-modified time (ms since epoch) for conflict detection */
+  mtime: number;
+}
 
-export const writeFile = (path: string, content: string) =>
-  invoke<void>("write_file", { path, content });
+export const readFile = (path: string) =>
+  invoke<FileData>("read_file", { path });
+
+/** Writes the file; rejects if it changed on disk since `expectedMtime`. Returns the new mtime. */
+export const writeFile = (path: string, content: string, expectedMtime?: number) =>
+  invoke<number>("write_file", { path, content, expectedMtime: expectedMtime ?? null });
 
 export type ChangeStatus =
   | "untracked"

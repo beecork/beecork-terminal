@@ -4,6 +4,7 @@ mod pty;
 mod watcher;
 
 use pty::PtyState;
+use tauri::{Manager, WindowEvent};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -11,6 +12,12 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_process::init())
         .manage(PtyState::default())
+        .on_window_event(|window, event| {
+            // Closing a window kills the PTY sessions it owns (no orphans).
+            if let WindowEvent::Destroyed = event {
+                pty::kill_by_owner(window.state::<PtyState>().inner(), window.label());
+            }
+        })
         .setup(|app| {
             #[cfg(desktop)]
             app.handle()

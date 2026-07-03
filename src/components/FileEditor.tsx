@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState, type KeyboardEvent } from "react";
-import CodeMirror from "@uiw/react-codemirror";
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
+import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror";
+import { EditorView } from "@codemirror/view";
 import { oneDark } from "@codemirror/theme-one-dark";
 import { unifiedMergeView } from "@codemirror/merge";
 import type { Extension } from "@codemirror/state";
@@ -8,55 +9,88 @@ import { languageFor } from "../lib/language";
 import { onFsChanged } from "../lib/events";
 import { useSettings } from "../lib/settings";
 
-type Status = "loading" | "ready" | "error" | "saving" | "saved";
+type Status = "loading" | "ready" | "error";
 type Mode = "edit" | "diff";
 
-export default function FileEditor({ path }: { path: string }) {
+export default function FileEditor({ path, line }: { path: string; line?: number }) {
   const { theme } = useSettings();
   const [content, setContent] = useState("");
   const [original, setOriginal] = useState<string | null>(null);
   const [status, setStatus] = useState<Status>("loading");
   const [error, setError] = useState("");
+  const [saveMsg, setSaveMsg] = useState("");
   const [dirty, setDirty] = useState(false);
   const [mode, setMode] = useState<Mode>("edit");
 
-  const load = useCallback(() => {
-    setStatus("loading");
-    setError("");
-    Promise.all([readFile(path), gitFileOriginal(path).catch(() => "")])
-      .then(([c, orig]) => {
-        setContent(c);
-        setOriginal(orig);
-        setDirty(false);
-        setStatus("ready");
-        setMode(orig && orig !== c ? "diff" : "edit");
-      })
-      .catch((e) => {
-        setError(String(e));
-        setStatus("error");
-      });
-  }, [path]);
+  const mtimeRef = useRef(0);
+  const dirtyRef = useRef(false);
+  dirtyRef.current = dirty;
+  const cmRef = useRef<ReactCodeMirrorRef>(null);
+
+  const load = useCallback(
+    (initial: boolean) => {
+      if (initial) setStatus("loading");
+      setError("");
+      Promise.all([readFile(path), gitFileOriginal(path).catch(() => "")])
+        .then(([data, orig]) => {
+          // Don't clobber unsaved edits made during an in-flight reload.
+          if (!initial && dirtyRef.current) return;
+          mtimeRef.current = data.mtime;
+          setContent(data.content);
+          setOriginal(orig);
+          setDirty(false);
+          setSaveMsg("");
+          setStatus("ready");
+          setMode(orig && orig !== data.content ? "diff" : "edit");
+        })
+        .catch((e) => {
+          if (initial) {
+            setError(String(e));
+            setStatus("error");
+          }
+        });
+    },
+    [path]
+  );
 
   useEffect(() => {
-    load();
+    load(true);
   }, [load]);
 
   // Live-refresh when the agent edits this file — unless the user has unsaved edits.
   useEffect(() => {
     return onFsChanged(() => {
-      if (!dirty) load();
+      if (!dirtyRef.current) load(false);
     });
-  }, [load, dirty]);
+  }, [load]);
+
+  // Jump to a requested line (from a clicked terminal path).
+  useEffect(() => {
+    if (!line || status !== "ready") return;
+    const view = cmRef.current?.view;
+    if (!view) return;
+    try {
+      const target = view.state.doc.line(Math.min(line, view.state.doc.lines));
+      view.dispatch({
+        selection: { anchor: target.from },
+        effects: EditorView.scrollIntoView(target.from, { y: "center" }),
+      });
+      view.focus();
+    } catch {
+      /* out of range */
+    }
+  }, [line, status, path]);
 
   const save = useCallback(async () => {
-    setStatus("saving");
+    setSaveMsg("Saving…");
     try {
-      await writeFile(path, content);
+      const newMtime = await writeFile(path, content, mtimeRef.current);
+      mtimeRef.current = newMtime;
       setDirty(false);
-      setStatus("saved");
+      setSaveMsg("Saved");
     } catch (e) {
-      setError(String(e));
-      setStatus("error");
+      // Conflict (or write error) — keep the editor and the user's edits visible.
+      setSaveMsg(String(e).replace(/^Error:\s*/, ""));
     }
   }, [path, content]);
 
@@ -86,24 +120,15 @@ export default function FileEditor({ path }: { path: string }) {
         </span>
         {hasDiff && (
           <div className="mode-toggle">
-            <button
-              className={mode === "diff" ? "active" : ""}
-              onClick={() => setMode("diff")}
-            >
+            <button className={mode === "diff" ? "active" : ""} onClick={() => setMode("diff")}>
               Diff
             </button>
-            <button
-              className={mode === "edit" ? "active" : ""}
-              onClick={() => setMode("edit")}
-            >
+            <button className={mode === "edit" ? "active" : ""} onClick={() => setMode("edit")}>
               Edit
             </button>
           </div>
         )}
-        <span className="editor-status">
-          {status === "saving" && "Saving…"}
-          {status === "saved" && !dirty && "Saved"}
-        </span>
+        <span className="editor-status">{saveMsg}</span>
         <button className="editor-save" disabled={!dirty} onClick={() => void save()}>
           Save
         </button>
@@ -115,6 +140,7 @@ export default function FileEditor({ path }: { path: string }) {
           <div className="editor-loading">Loading…</div>
         ) : (
           <CodeMirror
+            ref={cmRef}
             key={showDiff ? "diff" : "edit"}
             value={content}
             height="100%"

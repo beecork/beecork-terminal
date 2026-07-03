@@ -220,13 +220,9 @@
     var os = 'unknown';
 
     if (/Mac/.test(ua)) {
-      try {
-        var canvas = document.createElement('canvas');
-        var gl = canvas.getContext('webgl');
-        var ext = gl && gl.getExtension('WEBGL_debug_renderer_info');
-        var renderer = ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : '';
-        os = /Apple/.test(renderer) ? 'mac-arm' : 'mac-intel';
-      } catch (e) { os = 'mac-arm'; }
+      // Default to Apple Silicon (both Mac cards stay visible below). We avoid
+      // probing the GPU renderer to detect the arch — that's fingerprinting.
+      os = 'mac-arm';
     } else if (/Win/.test(ua)) {
       os = 'windows';
     } else if (/Linux/.test(ua)) {

@@ -23,7 +23,10 @@ export default function SidePanel({ openRequest }: Props) {
   focusedRef.current = focused;
 
   useEffect(() => {
-    getRoot().then(setRoot).catch(() => setRoot("/"));
+    // Don't fall back to "/" on failure — that would list the whole filesystem.
+    getRoot()
+      .then(setRoot)
+      .catch(() => setRoot(null));
   }, []);
 
   const refresh = useCallback(() => {
@@ -141,7 +144,11 @@ export default function SidePanel({ openRequest }: Props) {
             onMouseDown={() => setFocused(i)}
           >
             {p ? (
-              <FileEditor key={p} path={p} />
+              <FileEditor
+                key={p}
+                path={p}
+                line={openRequest?.path === p ? openRequest?.line : undefined}
+              />
             ) : (
               <div className="editor-region editor-empty">Select a file</div>
             )}
