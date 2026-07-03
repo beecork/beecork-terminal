@@ -227,7 +227,57 @@ body {
 .seclabel .seclabel-actions {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
+}
+
+/* zoom control (terminal float + editor bar) */
+.zoom-ctl {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  background: var(--border);
+  border-radius: 7px;
+  padding: 2px;
+  flex: 0 0 auto;
+}
+.zoom-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+}
+.zoom-btn:hover {
+  color: var(--fg);
+  background: var(--hover);
+}
+.zoom-size {
+  min-width: 20px;
+  text-align: center;
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.term-zoom {
+  position: absolute;
+  bottom: 10px;
+  right: 12px;
+  z-index: 15;
+  background: color-mix(in srgb, var(--panel-header) 82%, transparent);
+  border: 1px solid var(--border);
+  backdrop-filter: blur(4px);
+  opacity: 0.3;
+  transition: opacity 0.15s;
+}
+.terminal-wrap:hover .term-zoom {
+  opacity: 1;
 }
 
 /* ---- workspace layout ---- */
@@ -387,20 +437,28 @@ body {
   text-overflow: ellipsis;
 }
 .rail-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   background: transparent;
   border: none;
   color: var(--muted);
   cursor: pointer;
-  font-size: 14px;
   line-height: 1;
   opacity: 0;
-  padding: 0 2px;
+  padding: 2px;
+  border-radius: 4px;
+  flex: 0 0 auto;
 }
 .rail-item:hover .rail-close {
+  opacity: 0.75;
+}
+.rail-item:hover .rail-close:hover {
   opacity: 1;
+  background: var(--hover);
 }
 .rail-close:hover {
-  color: #f38ba8;
+  color: var(--fg);
 }
 
 /* ---- terminals stack ---- */
@@ -526,11 +584,22 @@ body {
   min-height: 0;
   overflow: auto;
 }
-.panel-body.stacked .tree-region {
-  border-bottom: 1px solid var(--border);
+/* draggable Files/Editor divider */
+.tree-divider {
+  flex: 0 0 auto;
+  background: var(--border);
 }
-.panel-body.sideBySide .tree-region {
-  border-right: 1px solid var(--border);
+.tree-divider:hover {
+  background: var(--accent);
+}
+.panel-body.stacked .tree-divider {
+  height: 5px;
+  width: 100%;
+  cursor: row-resize;
+}
+.panel-body.sideBySide .tree-divider {
+  width: 5px;
+  cursor: col-resize;
 }
 .editor-section {
   flex: 1 1 auto;
@@ -820,6 +889,54 @@ body {
   display: flex;
   flex-direction: column;
   gap: 18px;
+}
+
+/* confirm dialog */
+.modal.confirm {
+  width: 380px;
+}
+.modal.confirm .modal-body {
+  gap: 0;
+}
+.confirm-msg {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.55;
+}
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 4px 14px 14px;
+}
+.btn {
+  border: none;
+  border-radius: 7px;
+  padding: 7px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.btn.ghost {
+  background: transparent;
+  color: var(--muted);
+}
+.btn.ghost:hover {
+  background: var(--hover);
+  color: var(--fg);
+}
+.btn.primary {
+  background: var(--accent);
+  color: #12101a;
+}
+.btn.danger {
+  background: #f38ba8;
+  color: #1a1015;
+}
+.btn.primary:hover,
+.btn.danger:hover {
+  filter: brightness(1.08);
 }
 .setting-row {
   display: flex;

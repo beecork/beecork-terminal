@@ -1,4 +1,4 @@
-import { useSettings } from "../lib/settings";
+import { useSettings, MIN_FONT, MAX_FONT } from "../lib/settings";
 
 export default function SettingsModal({ onClose }: { onClose: () => void }) {
   const { settings, themes, update } = useSettings();
@@ -41,13 +41,28 @@ export default function SettingsModal({ onClose }: { onClose: () => void }) {
           </label>
 
           <label className="setting-row">
-            <span className="setting-label">Font size — {settings.fontSize}px</span>
+            <span className="setting-label">
+              Terminal font size — {settings.terminalFontSize}px
+            </span>
             <input
               type="range"
-              min={10}
-              max={20}
-              value={settings.fontSize}
-              onChange={(e) => update({ fontSize: Number(e.target.value) })}
+              min={MIN_FONT}
+              max={MAX_FONT}
+              value={settings.terminalFontSize}
+              onChange={(e) => update({ terminalFontSize: Number(e.target.value) })}
+            />
+          </label>
+
+          <label className="setting-row">
+            <span className="setting-label">
+              Editor font size — {settings.editorFontSize}px
+            </span>
+            <input
+              type="range"
+              min={MIN_FONT}
+              max={MAX_FONT}
+              value={settings.editorFontSize}
+              onChange={(e) => update({ editorFontSize: Number(e.target.value) })}
             />
           </label>
 

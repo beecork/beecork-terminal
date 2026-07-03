@@ -6,10 +6,14 @@ import SidePanel from "./components/SidePanel";
 import SettingsModal from "./components/SettingsModal";
 import SessionRail from "./components/SessionRail";
 import UpdateBanner from "./components/UpdateBanner";
+import ConfirmModal from "./components/ConfirmModal";
 import { Gear, PanelToggle, Folder } from "./components/icons";
-import { useSessions, displayName } from "./lib/sessions";
+import { useSessions, displayName, type Session } from "./lib/sessions";
 import { getRoot, ptyCwd } from "./lib/api";
+import { useSettings, clampFont } from "./lib/settings";
 import "./App.css";
+
+type Surface = "terminal" | "editor";
 
 export interface OpenRequest {
   path: string;
@@ -31,11 +35,18 @@ export default function App() {
       return false;
     }
   });
+  const [confirmClose, setConfirmClose] = useState<Session | null>(null);
   const dragging = useRef(false);
   const reqN = useRef(0);
+  const zoomTargetRef = useRef<Surface>("terminal");
 
-  const { sessions, activeId, setActiveId, create, close, rename, setDynamic } =
+  const { update } = useSettings();
+  const { sessions, activeId, setActiveId, create, close, rename, setDynamic, setCwd } =
     useSessions();
+
+  const onFocusSurface = useCallback((s: Surface) => {
+    zoomTargetRef.current = s;
+  }, []);
 
   const activeName = (() => {
     const s = sessions.find((x) => x.id === activeId);
@@ -49,12 +60,16 @@ export default function App() {
   const activeIdRef = useRef(activeId);
   activeIdRef.current = activeId;
 
-  const applyCwd = useCallback((id: string, cwd: string) => {
-    cwdBySession.current[id] = cwd;
-    if (id === activeIdRef.current) {
-      setTerminalCwd((prev) => (prev === cwd ? prev : cwd));
-    }
-  }, []);
+  const applyCwd = useCallback(
+    (id: string, cwd: string) => {
+      cwdBySession.current[id] = cwd;
+      setCwd(id, cwd); // names the session after its folder
+      if (id === activeIdRef.current) {
+        setTerminalCwd((prev) => (prev === cwd ? prev : cwd));
+      }
+    },
+    [setCwd]
+  );
 
   // OSC 7 (instant, shells with integration).
   const onCwd = useCallback((id: string, path: string) => applyCwd(id, path), [applyCwd]);
@@ -135,6 +150,27 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [create]);
 
+  // Zoom the focused surface (terminal or editor) with ⌘+ / ⌘- / ⌘0.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (!(e.metaKey || e.ctrlKey)) return;
+      const isPlus = e.key === "+" || e.key === "=";
+      const isMinus = e.key === "-" || e.key === "_";
+      const isZero = e.key === "0";
+      if (!isPlus && !isMinus && !isZero) return;
+      e.preventDefault();
+      const editor = zoomTargetRef.current === "editor";
+      update((s) => {
+        const cur = editor ? s.editorFontSize : s.terminalFontSize;
+        const next = isZero ? 13 : clampFont(cur + (isPlus ? 1 : -1));
+        return editor ? { editorFontSize: next } : { terminalFontSize: next };
+      });
+    }
+    // capture phase so we beat the webview's own page-zoom and xterm's key handling
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [update]);
+
   // Persist pinned state.
   useEffect(() => {
     try {
@@ -204,7 +240,10 @@ export default function App() {
           pinned={railPinned}
           onSelect={setActiveId}
           onCreate={create}
-          onClose={close}
+          onClose={(id) => {
+            const s = sessions.find((x) => x.id === id);
+            if (s) setConfirmClose(s);
+          }}
           onTogglePin={() => setRailPinned((p) => !p)}
           onRename={rename}
         />
@@ -225,6 +264,7 @@ export default function App() {
                 onTitle={setDynamic}
                 onCwd={onCwd}
                 onCwdHint={onCwdHint}
+                onFocusSurface={onFocusSurface}
               />
             </div>
           ))}
@@ -245,12 +285,29 @@ export default function App() {
 
         {panelOpen && (
           <div className="side-panel" style={{ width: panelWidth }}>
-            <SidePanel openRequest={openRequest} root={terminalCwd} />
+            <SidePanel
+              openRequest={openRequest}
+              root={terminalCwd}
+              onFocusSurface={onFocusSurface}
+            />
           </div>
         )}
       </div>
 
       {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
+      {confirmClose && (
+        <ConfirmModal
+          title="Close session?"
+          message={`“${displayName(confirmClose)}” and its running process will be terminated.`}
+          confirmLabel="Close session"
+          danger
+          onCancel={() => setConfirmClose(null)}
+          onConfirm={() => {
+            close(confirmClose.id);
+            setConfirmClose(null);
+          }}
+        />
+      )}
     </div>
   );
 }

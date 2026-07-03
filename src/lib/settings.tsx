@@ -138,13 +138,20 @@ export const THEMES: Theme[] = [
 
 export interface Settings {
   themeId: string;
-  fontSize: number;
+  /** terminal (xterm) font size — zoomable independently */
+  terminalFontSize: number;
+  /** editor (CodeMirror) font size — zoomable independently */
+  editorFontSize: number;
   fontFamily: string;
 }
 
+export const MIN_FONT = 9;
+export const MAX_FONT = 28;
+
 const DEFAULTS: Settings = {
   themeId: "mocha",
-  fontSize: 13,
+  terminalFontSize: 13,
+  editorFontSize: 13,
   fontFamily: 'Menlo, "SF Mono", Monaco, "Cascadia Code", monospace',
 };
 
@@ -153,18 +160,31 @@ const STORAGE_KEY = "beecork.settings";
 function load(): Settings {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) return { ...DEFAULTS, ...JSON.parse(raw) };
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      // Migrate the old single `fontSize` into both surfaces.
+      if (typeof parsed.fontSize === "number") {
+        if (parsed.terminalFontSize == null) parsed.terminalFontSize = parsed.fontSize;
+        if (parsed.editorFontSize == null) parsed.editorFontSize = parsed.fontSize;
+        delete parsed.fontSize;
+      }
+      return { ...DEFAULTS, ...parsed };
+    }
   } catch {
     /* ignore */
   }
   return DEFAULTS;
 }
 
+export const clampFont = (n: number) => Math.min(MAX_FONT, Math.max(MIN_FONT, n));
+
+type Patch = Partial<Settings> | ((s: Settings) => Partial<Settings>);
+
 interface Ctx {
   settings: Settings;
   theme: Theme;
   themes: Theme[];
-  update: (patch: Partial<Settings>) => void;
+  update: (patch: Patch) => void;
 }
 
 const SettingsContext = createContext<Ctx | null>(null);
@@ -184,7 +204,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
       root.style.setProperty(`--${k}`, v);
     }
     root.style.setProperty("--font-mono", settings.fontFamily);
-    root.style.setProperty("--editor-font-size", `${settings.fontSize}px`);
+    root.style.setProperty("--editor-font-size", `${settings.editorFontSize}px`);
     root.setAttribute("data-theme", theme.editor);
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
@@ -198,7 +218,8 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
       settings,
       theme,
       themes: THEMES,
-      update: (patch) => setSettings((s) => ({ ...s, ...patch })),
+      update: (patch) =>
+        setSettings((s) => ({ ...s, ...(typeof patch === "function" ? patch(s) : patch) })),
     }),
     [settings, theme]
   );

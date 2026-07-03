@@ -16,10 +16,12 @@ export default function FileEditor({
   path,
   line,
   root,
+  onFocusSurface,
 }: {
   path: string;
   line?: number;
   root?: string | null;
+  onFocusSurface: (s: "terminal" | "editor") => void;
 }) {
   const { theme } = useSettings();
   const [content, setContent] = useState("");
@@ -120,7 +122,11 @@ export default function FileEditor({
   const name = path.split("/").pop() ?? path;
 
   return (
-    <div className="editor-region" onKeyDown={onKeyDown}>
+    <div
+      className="editor-region"
+      onKeyDown={onKeyDown}
+      onFocusCapture={() => onFocusSurface("editor")}
+    >
       <div className="editor-header">
         <span className="editor-name">
           {name}

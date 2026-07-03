@@ -8,10 +8,18 @@ export interface Session {
   dynamic?: string;
   /** user-chosen name, overrides everything */
   custom?: string;
+  /** the session's current working directory (follows `cd`) */
+  cwd?: string;
 }
 
+function basename(p: string): string {
+  const parts = p.split("/").filter(Boolean);
+  return parts[parts.length - 1] ?? p;
+}
+
+/** A custom name wins; otherwise the session is named after its folder. */
 export function displayName(s: Session): string {
-  return s.custom || s.dynamic || s.name;
+  return s.custom || (s.cwd ? basename(s.cwd) : "") || s.dynamic || s.name;
 }
 
 function uid(): string {
@@ -65,5 +73,11 @@ export function useSessions() {
     );
   }, []);
 
-  return { sessions, activeId, setActiveId, create, close, rename, setDynamic };
+  const setCwd = useCallback((id: string, cwd: string) => {
+    setSessions((prev) =>
+      prev.map((s) => (s.id === id && s.cwd !== cwd ? { ...s, cwd } : s))
+    );
+  }, []);
+
+  return { sessions, activeId, setActiveId, create, close, rename, setDynamic, setCwd };
 }

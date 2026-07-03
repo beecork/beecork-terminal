@@ -5,7 +5,7 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import { SearchAddon } from "@xterm/addon-search";
 import { invoke, Channel } from "@tauri-apps/api/core";
 import { getRoot } from "../lib/api";
-import { useSettings } from "../lib/settings";
+import { useSettings, clampFont } from "../lib/settings";
 import "@xterm/xterm/css/xterm.css";
 
 type PtyEvent =
@@ -50,6 +50,7 @@ interface Props {
   onCwd: (id: string, path: string) => void;
   /** output settled — a good moment to re-check cwd (covers shells without OSC 7) */
   onCwdHint: (id: string) => void;
+  onFocusSurface: (s: "terminal" | "editor") => void;
 }
 
 export default function TerminalPane({
@@ -61,6 +62,7 @@ export default function TerminalPane({
   onTitle,
   onCwd,
   onCwdHint,
+  onFocusSurface,
 }: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
@@ -71,7 +73,7 @@ export default function TerminalPane({
   const notifiedRef = useRef(false);
   activeRef.current = active;
 
-  const { theme, settings } = useSettings();
+  const { theme, settings, update } = useSettings();
   const lookRef = useRef({ theme, settings });
   lookRef.current = { theme, settings };
 
@@ -111,7 +113,7 @@ export default function TerminalPane({
     const { theme, settings } = lookRef.current;
     const term = new Terminal({
       fontFamily: settings.fontFamily,
-      fontSize: settings.fontSize,
+      fontSize: settings.terminalFontSize,
       cursorBlink: true,
       allowProposedApi: true,
       theme: {
@@ -122,6 +124,14 @@ export default function TerminalPane({
       },
     });
     termRef.current = term;
+
+    // Let the app own ⌘+/⌘-/⌘0 (zoom) — don't forward them to the shell.
+    term.attachCustomKeyEventHandler((e) => {
+      if ((e.metaKey || e.ctrlKey) && ["+", "=", "-", "_", "0"].includes(e.key)) {
+        return false;
+      }
+      return true;
+    });
 
     const fit = new FitAddon();
     fitRef.current = fit;
@@ -294,14 +304,14 @@ export default function TerminalPane({
       cursor: theme.terminal.cursor,
       selectionBackground: theme.terminal.selectionBackground,
     };
-    term.options.fontSize = settings.fontSize;
+    term.options.fontSize = settings.terminalFontSize;
     term.options.fontFamily = settings.fontFamily;
     try {
       fitRef.current?.fit();
     } catch {
       /* ignore */
     }
-  }, [theme, settings.fontSize, settings.fontFamily]);
+  }, [theme, settings.terminalFontSize, settings.fontFamily]);
 
   function runSearch(term: string, dir: "next" | "prev") {
     if (!term) return;
@@ -310,8 +320,31 @@ export default function TerminalPane({
   }
 
   return (
-    <div className="terminal-wrap">
+    <div className="terminal-wrap" onFocusCapture={() => onFocusSurface("terminal")}>
       <div className="terminal-host" ref={hostRef} />
+      {active && (
+        <div className="zoom-ctl term-zoom">
+          <button
+            className="zoom-btn"
+            title="Zoom out (⌘−)"
+            onClick={() =>
+              update((s) => ({ terminalFontSize: clampFont(s.terminalFontSize - 1) }))
+            }
+          >
+            −
+          </button>
+          <span className="zoom-size">{settings.terminalFontSize}</span>
+          <button
+            className="zoom-btn"
+            title="Zoom in (⌘+)"
+            onClick={() =>
+              update((s) => ({ terminalFontSize: clampFont(s.terminalFontSize + 1) }))
+            }
+          >
+            +
+          </button>
+        </div>
+      )}
       {showSearch && active && (
         <div className="term-search">
           <input

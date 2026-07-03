@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { gitStatus, type ChangeStatus, type FileStatus } from "../lib/api";
 import { onFsChanged } from "../lib/events";
+import { useSettings, clampFont } from "../lib/settings";
 import type { OpenRequest } from "../App";
 import FileTree from "./FileTree";
 import FileEditor from "./FileEditor";
@@ -10,12 +11,14 @@ interface Props {
   openRequest: OpenRequest | null;
   /** The active terminal's working directory — the browser follows it. */
   root: string | null;
+  onFocusSurface: (s: "terminal" | "editor") => void;
 }
 
 type Orientation = "vertical" | "horizontal";
 type PanelLayout = "stacked" | "sideBySide";
 
-export default function SidePanel({ openRequest, root }: Props) {
+export default function SidePanel({ openRequest, root, onFocusSurface }: Props) {
+  const { settings, update } = useSettings();
   const [statuses, setStatuses] = useState<FileStatus[]>([]);
   const [treeKey, setTreeKey] = useState(0);
 
@@ -31,8 +34,15 @@ export default function SidePanel({ openRequest, root }: Props) {
       return "stacked";
     }
   });
+  // Draggable size of the Files region (percent of the panel body).
+  const [treeSize, setTreeSize] = useState<number>(() => {
+    const v = Number(localStorage.getItem("beecork.treeSize"));
+    return v >= 12 && v <= 80 ? v : 40;
+  });
   const focusedRef = useRef(focused);
   focusedRef.current = focused;
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const draggingTree = useRef(false);
 
   useEffect(() => {
     try {
@@ -40,6 +50,37 @@ export default function SidePanel({ openRequest, root }: Props) {
     } catch {
       /* ignore */
     }
+  }, [panelLayout]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("beecork.treeSize", String(Math.round(treeSize)));
+    } catch {
+      /* ignore */
+    }
+  }, [treeSize]);
+
+  // Drag the Files/Editor divider (vertical in stacked, horizontal in side-by-side).
+  useEffect(() => {
+    function move(e: MouseEvent) {
+      if (!draggingTree.current || !bodyRef.current) return;
+      const r = bodyRef.current.getBoundingClientRect();
+      const pct =
+        panelLayout === "stacked"
+          ? ((e.clientY - r.top) / r.height) * 100
+          : ((e.clientX - r.left) / r.width) * 100;
+      setTreeSize(Math.min(80, Math.max(12, pct)));
+    }
+    function up() {
+      draggingTree.current = false;
+      document.body.style.cursor = "";
+    }
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+    return () => {
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", up);
+    };
   }, [panelLayout]);
 
   const refresh = useCallback(() => {
@@ -144,8 +185,8 @@ export default function SidePanel({ openRequest, root }: Props) {
         </div>
       </div>
 
-      <div className={`panel-body ${panelLayout}`}>
-        <div className="tree-region">
+      <div className={`panel-body ${panelLayout}`} ref={bodyRef}>
+        <div className="tree-region" style={{ flexBasis: `${treeSize}%` }}>
           <div className="seclabel">
             <span>Files</span>
           </div>
@@ -165,10 +206,41 @@ export default function SidePanel({ openRequest, root }: Props) {
           </div>
         </div>
 
+        <div
+          className="tree-divider"
+          onMouseDown={(e) => {
+            draggingTree.current = true;
+            document.body.style.cursor =
+              panelLayout === "stacked" ? "row-resize" : "col-resize";
+            e.preventDefault();
+          }}
+        />
+
         <div className="editor-section">
           <div className="seclabel">
             <span>Editor</span>
             <div className="seclabel-actions">
+              <div className="zoom-ctl">
+                <button
+                  className="zoom-btn"
+                  title="Editor zoom out (⌘−)"
+                  onClick={() =>
+                    update((s) => ({ editorFontSize: clampFont(s.editorFontSize - 1) }))
+                  }
+                >
+                  −
+                </button>
+                <span className="zoom-size">{settings.editorFontSize}</span>
+                <button
+                  className="zoom-btn"
+                  title="Editor zoom in (⌘+)"
+                  onClick={() =>
+                    update((s) => ({ editorFontSize: clampFont(s.editorFontSize + 1) }))
+                  }
+                >
+                  +
+                </button>
+              </div>
               {split && (
                 <div className="seg" title="Split orientation">
                   <button
@@ -210,6 +282,7 @@ export default function SidePanel({ openRequest, root }: Props) {
                     path={p}
                     root={root}
                     line={openRequest?.path === p ? openRequest?.line : undefined}
+                    onFocusSurface={onFocusSurface}
                   />
                 ) : (
                   <div className="editor-region editor-empty">Select a file to view or edit</div>

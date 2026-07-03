@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { displayName, type Session } from "../lib/sessions";
-import { Pin, Plus, Close } from "./icons";
+import { Pin, Plus, Close, Pencil } from "./icons";
 
 interface Props {
   sessions: Session[];
@@ -97,16 +97,28 @@ export default function SessionRail({
                       <span className="rail-name">{name}</span>
                     )}
                     {!editing && (
-                      <button
-                        className="rail-close"
-                        title="Close session"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onClose(s.id);
-                        }}
-                      >
-                        <Close size={14} />
-                      </button>
+                      <>
+                        <button
+                          className="rail-close"
+                          title="Rename (or double-click)"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            startRename(s);
+                          }}
+                        >
+                          <Pencil size={13} />
+                        </button>
+                        <button
+                          className="rail-close"
+                          title="Close session"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onClose(s.id);
+                          }}
+                        >
+                          <Close size={14} />
+                        </button>
+                      </>
                     )}
                   </>
                 ) : (
