@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { getRoot, gitStatus, type ChangeStatus, type FileStatus } from "../lib/api";
+import { gitStatus, type ChangeStatus, type FileStatus } from "../lib/api";
 import { onFsChanged } from "../lib/events";
 import type { OpenRequest } from "../App";
 import FileTree from "./FileTree";
@@ -7,12 +7,13 @@ import FileEditor from "./FileEditor";
 
 interface Props {
   openRequest: OpenRequest | null;
+  /** The active terminal's working directory — the browser follows it. */
+  root: string | null;
 }
 
 type Orientation = "vertical" | "horizontal";
 
-export default function SidePanel({ openRequest }: Props) {
-  const [root, setRoot] = useState<string | null>(null);
+export default function SidePanel({ openRequest, root }: Props) {
   const [statuses, setStatuses] = useState<FileStatus[]>([]);
   const [treeKey, setTreeKey] = useState(0);
 
@@ -22,21 +23,22 @@ export default function SidePanel({ openRequest }: Props) {
   const focusedRef = useRef(focused);
   focusedRef.current = focused;
 
-  useEffect(() => {
-    // Don't fall back to "/" on failure — that would list the whole filesystem.
-    getRoot()
-      .then(setRoot)
-      .catch(() => setRoot(null));
-  }, []);
-
   const refresh = useCallback(() => {
-    gitStatus().then(setStatuses).catch(() => setStatuses([]));
-  }, []);
+    gitStatus(root ?? undefined)
+      .then(setStatuses)
+      .catch(() => setStatuses([]));
+  }, [root]);
 
+  // Refetch git status on file changes, and whenever the terminal cwd changes.
   useEffect(() => {
     refresh();
     return onFsChanged(refresh);
   }, [refresh]);
+
+  // When the terminal changes directory, remount the tree at the new root.
+  useEffect(() => {
+    setTreeKey((k) => k + 1);
+  }, [root]);
 
   const openInFocused = useCallback((path: string) => {
     setPanes((prev) => {
@@ -107,7 +109,7 @@ export default function SidePanel({ openRequest }: Props) {
         </button>
       </div>
 
-      {root && (
+      {root ? (
         <FileTree
           key={treeKey}
           rootPath={root}
@@ -116,20 +118,29 @@ export default function SidePanel({ openRequest }: Props) {
           statusByPath={statusByPath}
           changedDirs={changedDirs}
         />
+      ) : (
+        <div className="file-tree tree-loading">Waiting for the terminal…</div>
       )}
 
       <div className="editor-area-toolbar">
         <span className="ea-label">Editor</span>
         {split && (
-          <button
-            className="ea-btn"
-            title="Split orientation"
-            onClick={() =>
-              setOrientation((o) => (o === "vertical" ? "horizontal" : "vertical"))
-            }
-          >
-            {orientation === "vertical" ? "⬍" : "⬌"}
-          </button>
+          <div className="orient-toggle" title="Split layout">
+            <button
+              className={orientation === "vertical" ? "active" : ""}
+              title="Stacked (rows)"
+              onClick={() => setOrientation("vertical")}
+            >
+              ▤
+            </button>
+            <button
+              className={orientation === "horizontal" ? "active" : ""}
+              title="Side by side (columns)"
+              onClick={() => setOrientation("horizontal")}
+            >
+              ▥
+            </button>
+          </div>
         )}
         <button className="ea-btn" title={split ? "Unsplit" : "Split editor"} onClick={toggleSplit}>
           {split ? "▣" : "⊞"}
@@ -147,6 +158,7 @@ export default function SidePanel({ openRequest }: Props) {
               <FileEditor
                 key={p}
                 path={p}
+                root={root}
                 line={openRequest?.path === p ? openRequest?.line : undefined}
               />
             ) : (

@@ -12,7 +12,15 @@ import { useSettings } from "../lib/settings";
 type Status = "loading" | "ready" | "error";
 type Mode = "edit" | "diff";
 
-export default function FileEditor({ path, line }: { path: string; line?: number }) {
+export default function FileEditor({
+  path,
+  line,
+  root,
+}: {
+  path: string;
+  line?: number;
+  root?: string | null;
+}) {
   const { theme } = useSettings();
   const [content, setContent] = useState("");
   const [original, setOriginal] = useState<string | null>(null);
@@ -31,7 +39,7 @@ export default function FileEditor({ path, line }: { path: string; line?: number
     (initial: boolean) => {
       if (initial) setStatus("loading");
       setError("");
-      Promise.all([readFile(path), gitFileOriginal(path).catch(() => "")])
+      Promise.all([readFile(path), gitFileOriginal(path, root ?? undefined).catch(() => "")])
         .then(([data, orig]) => {
           // Don't clobber unsaved edits made during an in-flight reload.
           if (!initial && dirtyRef.current) return;
@@ -50,7 +58,7 @@ export default function FileEditor({ path, line }: { path: string; line?: number
           }
         });
     },
-    [path]
+    [path, root]
   );
 
   useEffect(() => {

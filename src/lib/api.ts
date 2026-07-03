@@ -13,6 +13,9 @@ export interface Listing {
 
 export const getRoot = () => invoke<string>("get_root");
 
+/** The current working directory of a session's shell (follows `cd`). */
+export const ptyCwd = (id: string) => invoke<string | null>("pty_cwd", { id });
+
 export const listDir = (path?: string) =>
   invoke<Listing>("list_dir", { path: path ?? null });
 

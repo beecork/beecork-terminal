@@ -574,6 +574,27 @@ body {
   color: var(--fg);
   border-color: var(--accent);
 }
+.orient-toggle {
+  display: flex;
+  gap: 2px;
+  background: var(--border);
+  border-radius: 5px;
+  padding: 2px;
+}
+.orient-toggle button {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1;
+  padding: 2px 7px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.orient-toggle button.active {
+  background: var(--selected);
+  color: var(--fg);
+}
 .editor-area {
   flex: 1 1 auto;
   display: flex;

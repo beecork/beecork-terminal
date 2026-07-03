@@ -208,3 +208,38 @@ pub fn pty_kill(state: tauri::State<PtyState>, id: String) -> Result<(), String>
     take_and_reap(&state, &id);
     Ok(())
 }
+
+/// The current working directory of a session's shell — so the file browser can
+/// follow the terminal as the user `cd`s around.
+#[tauri::command]
+pub fn pty_cwd(state: tauri::State<PtyState>, id: String) -> Option<String> {
+    let pid = {
+        let g = state.sessions.lock().unwrap();
+        g.get(&id).and_then(|h| h.child.process_id())?
+    };
+    process_cwd(pid)
+}
+
+fn process_cwd(pid: u32) -> Option<String> {
+    use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
+    let mut sys = System::new();
+    let p = Pid::from_u32(pid);
+    sys.refresh_processes_specifics(
+        ProcessesToUpdate::Some(&[p]),
+        false,
+        ProcessRefreshKind::nothing().with_cwd(UpdateKind::Always),
+    );
+    sys.process(p)
+        .and_then(|proc| proc.cwd())
+        .map(|c| c.to_string_lossy().into_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn resolves_own_cwd() {
+        // Verifies the platform cwd lookup works at all.
+        let cwd = super::process_cwd(std::process::id());
+        assert!(cwd.is_some_and(|c| !c.is_empty()));
+    }
+}

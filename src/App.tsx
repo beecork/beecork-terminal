@@ -7,6 +7,7 @@ import SettingsModal from "./components/SettingsModal";
 import SessionRail from "./components/SessionRail";
 import UpdateBanner from "./components/UpdateBanner";
 import { useSessions, displayName } from "./lib/sessions";
+import { getRoot, ptyCwd } from "./lib/api";
 import "./App.css";
 
 export interface OpenRequest {
@@ -21,6 +22,7 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [openRequest, setOpenRequest] = useState<OpenRequest | null>(null);
   const [activity, setActivity] = useState<Set<string>>(() => new Set());
+  const [terminalCwd, setTerminalCwd] = useState<string | null>(null);
   const [railPinned, setRailPinned] = useState<boolean>(() => {
     try {
       return localStorage.getItem("beecork.railPinned") === "1";
@@ -38,6 +40,29 @@ export default function App() {
     const s = sessions.find((x) => x.id === activeId);
     return s ? displayName(s) : "Beecork Terminal";
   })();
+
+  // Initial root = where the shell starts.
+  useEffect(() => {
+    getRoot().then(setTerminalCwd).catch(() => {});
+  }, []);
+
+  // Follow the ACTIVE session's working directory: updates on `cd`, and switches
+  // immediately when you switch sessions.
+  useEffect(() => {
+    let cancelled = false;
+    const query = () =>
+      ptyCwd(activeId)
+        .then((cwd) => {
+          if (!cancelled && cwd) setTerminalCwd((prev) => (prev === cwd ? prev : cwd));
+        })
+        .catch(() => {});
+    query();
+    const t = setInterval(query, 1200);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
+  }, [activeId]);
 
   const onOpenPath = useCallback((path: string, line?: number) => {
     setOpenRequest({ path, line, n: ++reqN.current });
@@ -189,7 +214,7 @@ export default function App() {
 
         {panelOpen && (
           <div className="side-panel" style={{ width: panelWidth }}>
-            <SidePanel openRequest={openRequest} />
+            <SidePanel openRequest={openRequest} root={terminalCwd} />
           </div>
         )}
       </div>
