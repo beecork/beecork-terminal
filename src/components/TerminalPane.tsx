@@ -45,8 +45,6 @@ interface Props {
   /** directory the shell should start in (new sessions inherit the active cwd) */
   startCwd?: string;
   onOpenPath: (path: string, line?: number) => void;
-  /** the session produced output (drives the working/idle dot) */
-  onOutput: (id: string) => void;
   /** terminal bell rang */
   onBell: (id: string) => void;
   onSeen: (id: string) => void;
@@ -63,7 +61,6 @@ export default function TerminalPane({
   active,
   startCwd,
   onOpenPath,
-  onOutput,
   onBell,
   onSeen,
   onTitle,
@@ -78,14 +75,20 @@ export default function TerminalPane({
   const rootRef = useRef<string | null>(null);
   const activeRef = useRef(active);
   activeRef.current = active;
+  // Revive a pane whose shell exited: restartRef re-spawns, exitedRef gates input.
+  const restartRef = useRef<(() => void) | null>(null);
+  const exitedRef = useRef(false);
+  // Last cwd this shell reported (via OSC 7) — so a revived shell restarts where
+  // the session actually is, not back in its mount-time startCwd.
+  const lastCwdRef = useRef<string | null>(null);
 
   const { theme, settings, update } = useSettings();
   const lookRef = useRef({ theme, settings });
   lookRef.current = { theme, settings };
 
   // Callbacks captured in refs so the mount effect always sees current ones.
-  const cbRef = useRef({ onOpenPath, onOutput, onBell, onSeen, onTitle, onCwd, onStatusHint });
-  cbRef.current = { onOpenPath, onOutput, onBell, onSeen, onTitle, onCwd, onStatusHint };
+  const cbRef = useRef({ onOpenPath, onBell, onSeen, onTitle, onCwd, onStatusHint });
+  cbRef.current = { onOpenPath, onBell, onSeen, onTitle, onCwd, onStatusHint };
 
   const [showSearch, setShowSearch] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
@@ -185,21 +188,45 @@ export default function TerminalPane({
       },
     });
 
-    const channel = new Channel<PtyEvent>();
-    channel.onmessage = (msg) => {
-      if (disposed) return;
-      if (msg.event === "output") {
-        term.write(decodeBase64(msg.data));
-        cbRef.current.onOutput(sessionId);
-        // When output settles (a prompt likely returned), re-check status.
-        if (activeRef.current) {
-          clearTimeout(cwdHintTimer);
-          cwdHintTimer = setTimeout(() => cbRef.current.onStatusHint(sessionId), 150);
+    // (Re)launch the shell for this pane. A fresh Channel each time, because the
+    // previous reader thread ends when its child exits. onData/onResize below are
+    // keyed by sessionId, so they keep working across a restart with no re-wiring.
+    const spawn = () => {
+      exitedRef.current = false;
+      const channel = new Channel<PtyEvent>();
+      channel.onmessage = (msg) => {
+        if (disposed) return;
+        if (msg.event === "output") {
+          term.write(decodeBase64(msg.data));
+          // When output settles (a prompt likely returned), re-check status.
+          if (activeRef.current) {
+            clearTimeout(cwdHintTimer);
+            cwdHintTimer = setTimeout(() => cbRef.current.onStatusHint(sessionId), 150);
+          }
+        } else if (msg.event === "exit") {
+          exitedRef.current = true;
+          term.write(
+            "\r\n\x1b[90m[process exited — press any key to start a new shell]\x1b[0m\r\n"
+          );
         }
-      } else if (msg.event === "exit") {
-        term.write("\r\n\x1b[90m[process exited]\x1b[0m\r\n");
-      }
+      };
+      invoke("pty_spawn", {
+        id: sessionId,
+        // Restart where the session actually is; fall back to the mount cwd, then root.
+        cwd: lastCwdRef.current ?? startCwd ?? null,
+        onEvent: channel,
+        shell: null,
+        cols: term.cols,
+        rows: term.rows,
+      }).catch((e) => {
+        // A failed spawn (bad cwd, fd exhaustion, …) must not leave a silent dead
+        // pane: mark it exited so a keypress retries, and say what happened.
+        console.error("pty_spawn failed", e);
+        exitedRef.current = true;
+        term.write(`\r\n\x1b[31m[failed to start shell: ${e} — press any key to retry]\x1b[0m\r\n`);
+      });
     };
+    restartRef.current = spawn;
 
     const bellSub = term.onBell(() => cbRef.current.onBell(sessionId));
 
@@ -213,22 +240,23 @@ export default function TerminalPane({
     // OSC 7: shells with integration push their cwd instantly.
     const osc7 = term.parser.registerOscHandler(7, (data) => {
       const p = parseOsc7(data);
-      if (p) cbRef.current.onCwd(sessionId, p);
+      if (p) {
+        lastCwdRef.current = p;
+        cbRef.current.onCwd(sessionId, p);
+      }
       return true;
     });
 
-    invoke("pty_spawn", {
-      id: sessionId,
-      onEvent: channel,
-      cwd: startCwd ?? null,
-      shell: null,
-      cols: term.cols,
-      rows: term.rows,
-    }).catch((e) => console.error("pty_spawn failed", e));
+    spawn();
 
-    const dataSub = term.onData((data) =>
-      invoke("pty_write", { id: sessionId, data }).catch(() => {})
-    );
+    const dataSub = term.onData((data) => {
+      // A dead pane is not a dead end — any key relaunches its shell.
+      if (exitedRef.current) {
+        restartRef.current?.();
+        return;
+      }
+      invoke("pty_write", { id: sessionId, data }).catch(() => {});
+    });
     const resizeSub = term.onResize(({ cols, rows }) =>
       invoke("pty_resize", { id: sessionId, cols, rows }).catch(() => {})
     );

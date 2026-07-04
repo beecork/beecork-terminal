@@ -105,6 +105,7 @@ During this exercise we found an existing certified app, **CozyPane** (`/Users/a
 - **Editor:** ~~Monaco vs CodeMirror~~ — **RESOLVED: CodeMirror 6** (lighter, no web workers). Shipped.
 - **Diff baseline for non-git folders:** git HEAD vs a snapshot taken when the session starts.
 - **How much of Claude Code's UX to wrap** vs. just hosting the raw terminal (v1: just host it).
+- **Session busy/idle dot & agent-name label** — **RESOLVED and agent-agnostic:** the busy dot is driven purely by the tty's foreground process group (any running command counts), so it stays agent-agnostic by construction. A small `KNOWN_TOOLS` list (`claude`, `codex`, `aider`, …) exists in `pty.rs` for *prettier labels only*; unknown tools fall back to their own command name, so nothing depends on it. It's a labeling heuristic, not a coupling — a future candidate for a user settings file rather than a Rust constant.
 
 ## Decision & next step
 

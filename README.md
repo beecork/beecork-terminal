@@ -17,7 +17,7 @@ small, fast, native app for macOS, Windows, and Linux.
 - **File browser + editor** — expandable side panel; open, edit (CodeMirror),
   and split into two views.
 - **Sessions** — a left rail of terminal sessions that keep running in the
-  background; rename, pin, `⌘T` for a new one.
+  background, with live status dots; rename, expand/collapse, `⌘T` for a new one.
 - **Clickable & searchable** — click a `file:line` in output to open it; `⌘F`
   to search scrollback.
 - **Themeable** — multiple color themes, adjustable font. Self-updates from

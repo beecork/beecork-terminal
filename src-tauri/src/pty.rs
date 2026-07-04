@@ -5,7 +5,8 @@
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::mpsc::{self, Sender};
+use std::sync::Mutex;
 use std::thread;
 
 use base64::Engine;
@@ -35,9 +36,11 @@ pub struct PtyState {
 
 struct PtyHandle {
     master: Box<dyn MasterPty + Send>,
-    /// Wrapped so `pty_write` can clone it out of the map and write WITHOUT
-    /// holding the global sessions lock across a blocking write.
-    writer: Arc<Mutex<Box<dyn Write + Send>>>,
+    /// Input is enqueued here and drained by a dedicated per-session writer
+    /// thread. `pty_write` only sends (never blocks), so a child that isn't
+    /// reading stdin can't stall the IPC/main thread, and FIFO channel order
+    /// preserves keystroke order.
+    input: Sender<Vec<u8>>,
     child: Box<dyn portable_pty::Child + Send + Sync>,
     /// The window label that owns this session, for window-close teardown.
     owner: String,
@@ -112,6 +115,41 @@ pub fn pty_spawn(
     let program = shell.unwrap_or_else(default_shell);
     let mut cmd = CommandBuilder::new(program);
     cmd.env("TERM", "xterm-256color");
+    // Present as ourselves, not whatever terminal launched the app. The child
+    // inherits our full environment (portable-pty copies std::env::vars_os),
+    // so an inherited TERM_PROGRAM=Apple_Terminal makes /etc/zshrc source
+    // Apple's shell-session integration *inside our pty* — the "Restored
+    // session:" banner and per-tab history files fought over with the real
+    // Terminal. Give the child a clean, honest identity instead.
+    cmd.env("TERM_PROGRAM", "Beecork");
+    cmd.env("TERM_PROGRAM_VERSION", env!("CARGO_PKG_VERSION"));
+    cmd.env("COLORTERM", "truecolor");
+    // Scrub the identity markers of whatever host terminal launched us, so tools
+    // that feature-detect a terminal (iTerm2 integration, Windows Terminal, VS
+    // Code) don't mistake our pty for that host and emit foreign escapes.
+    for k in [
+        "TERM_SESSION_ID",
+        "LC_TERMINAL",
+        "LC_TERMINAL_VERSION",
+        "ITERM_SESSION_ID",
+        "ITERM_PROFILE",
+        "WT_SESSION",
+        "WT_PROFILE_ID",
+        "VSCODE_GIT_IPC_HANDLE",
+        "VSCODE_GIT_ASKPASS_NODE",
+    ] {
+        cmd.env_remove(k);
+    }
+    // Only drop GIT_ASKPASS when it routes into VS Code — leave a deliberate one.
+    if std::env::var("GIT_ASKPASS")
+        .map(|v| {
+            let v = v.to_lowercase();
+            v.contains("vscode") || v.contains("code")
+        })
+        .unwrap_or(false)
+    {
+        cmd.env_remove("GIT_ASKPASS");
+    }
     let dir = cwd.unwrap_or_else(|| crate::fs::project_root().to_string_lossy().into_owned());
     cmd.cwd(dir);
 
@@ -119,13 +157,40 @@ pub fn pty_spawn(
     drop(pair.slave);
 
     let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
-    let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
+    let mut writer = pair.master.take_writer().map_err(|e| e.to_string())?;
     let token = SEQ.fetch_add(1, Ordering::Relaxed);
+
+    // Writer thread: the only place that blocks on pty input. `pty_write` merely
+    // enqueues, so a child that isn't draining stdin can never stall the caller.
+    // Ends when the sender is dropped (session teardown).
+    let (input, rx) = mpsc::channel::<Vec<u8>>();
+    thread::spawn(move || {
+        while let Ok(bytes) = rx.recv() {
+            if writer.write_all(&bytes).is_err() {
+                break;
+            }
+            let _ = writer.flush();
+        }
+    });
+
+    // Insert the live handle BEFORE starting the reader thread, so that if the
+    // child exits instantly the reader's token-guarded reap finds this entry
+    // (otherwise it would miss and leave a zombie + stale map entry).
+    state.sessions.lock().unwrap().insert(
+        id.clone(),
+        PtyHandle {
+            master: pair.master,
+            input,
+            child,
+            owner,
+            token,
+        },
+    );
 
     // Reader thread: pump output, then on EOF reap the child + drop the session.
     let ch = on_event.clone();
     let app = app.clone();
-    let thread_id = id.clone();
+    let thread_id = id;
     thread::spawn(move || {
         let mut buf = [0u8; 8192];
         loop {
@@ -156,34 +221,22 @@ pub fn pty_spawn(
             }
         }
     });
-
-    state.sessions.lock().unwrap().insert(
-        id,
-        PtyHandle {
-            master: pair.master,
-            writer: Arc::new(Mutex::new(writer)),
-            child,
-            owner,
-            token,
-        },
-    );
     Ok(())
 }
 
 #[tauri::command]
 pub fn pty_write(state: tauri::State<PtyState>, id: String, data: String) -> Result<(), String> {
-    // Clone the writer handle out from under the map lock, then write without
-    // holding it — so one blocked session can't freeze the others.
-    let writer = {
+    // Enqueue to the session's writer thread and return immediately — never block
+    // the IPC/main thread on a pty whose child isn't draining stdin. The channel
+    // is unbounded, so the send can't block; FIFO order preserves keystrokes.
+    let tx = {
         let guard = state.sessions.lock().unwrap();
         match guard.get(&id) {
-            Some(h) => h.writer.clone(),
+            Some(h) => h.input.clone(),
             None => return Ok(()),
         }
     };
-    let mut w = writer.lock().unwrap();
-    w.write_all(data.as_bytes()).map_err(|e| e.to_string())?;
-    w.flush().map_err(|e| e.to_string())?;
+    let _ = tx.send(data.into_bytes());
     Ok(())
 }
 
@@ -217,15 +270,18 @@ pub struct PtyStatus {
     running: Option<String>,
 }
 
-/// A session's live status: where its shell is, and what (if anything) it's running.
+/// A single session's live status (where its shell is + what it's running).
 #[tauri::command]
 pub fn pty_status(state: tauri::State<PtyState>, id: String) -> PtyStatus {
-    let pid = {
+    let target = {
         let g = state.sessions.lock().unwrap();
-        g.get(&id).and_then(|h| h.child.process_id())
+        g.get(&id).and_then(session_pids).map(|(s, f)| (id.clone(), s, f))
     };
-    match pid {
-        Some(pid) => shell_status(pid),
+    match target {
+        Some(t) => statuses_for(vec![t]).remove(&id).unwrap_or(PtyStatus {
+            cwd: None,
+            running: None,
+        }),
         None => PtyStatus {
             cwd: None,
             running: None,
@@ -233,75 +289,179 @@ pub fn pty_status(state: tauri::State<PtyState>, id: String) -> PtyStatus {
     }
 }
 
+/// Live status for many sessions at once. ONE narrow process refresh serves the
+/// whole batch, so the 2s poll costs a single cheap syscall burst rather than a
+/// full process-table scan per session.
+#[tauri::command]
+pub fn pty_status_all(
+    state: tauri::State<PtyState>,
+    ids: Vec<String>,
+) -> HashMap<String, PtyStatus> {
+    let targets: Vec<(String, u32, Option<u32>)> = {
+        let g = state.sessions.lock().unwrap();
+        ids.into_iter()
+            .filter_map(|id| session_pids(g.get(&id)?).map(|(s, f)| (id, s, f)))
+            .collect()
+    };
+    statuses_for(targets)
+}
+
 const RUNTIMES: &[&str] = &[
     "node", "deno", "bun", "python", "python3", "ruby", "perl", "sh", "bash", "zsh", "fish", "env",
 ];
+/// Agent names we label prettily when detected. This is *cosmetic labeling only*
+/// — the busy/idle dot is process-based and fully agent-agnostic; unknown tools
+/// fall back to their own command name. See the decision brief.
 const KNOWN_TOOLS: &[&str] = &["claude", "codex", "aider", "gemini", "ollama", "cursor"];
 
-fn shell_status(shell_pid: u32) -> PtyStatus {
+/// The shell pid and the tty's current foreground pid for a session. The
+/// foreground pid comes straight from the terminal (`tcgetpgrp`): it equals the
+/// shell when the shell owns the terminal (idle prompt), otherwise it's the
+/// running command's process-group leader — no child-guessing.
+fn session_pids(h: &PtyHandle) -> Option<(u32, Option<u32>)> {
+    let shell = h.child.process_id()?;
+    let fg = h.master.process_group_leader().map(|p| p as u32);
+    Some((shell, fg))
+}
+
+/// Resolve cwd + running-command for a batch of (id, shell_pid, fg_pid) targets
+/// with a SINGLE narrow sysinfo refresh (only the pids we care about).
+fn statuses_for(targets: Vec<(String, u32, Option<u32>)>) -> HashMap<String, PtyStatus> {
     use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
+    let mut pids: Vec<Pid> = Vec::with_capacity(targets.len() * 2);
+    for (_, shell, fg) in &targets {
+        pids.push(Pid::from_u32(*shell));
+        if let Some(f) = fg {
+            pids.push(Pid::from_u32(*f));
+        }
+    }
     let mut sys = System::new();
     sys.refresh_processes_specifics(
-        ProcessesToUpdate::All,
+        ProcessesToUpdate::Some(&pids),
         false,
         ProcessRefreshKind::nothing()
             .with_cwd(UpdateKind::Always)
             .with_cmd(UpdateKind::Always),
     );
-    let shell = Pid::from_u32(shell_pid);
-    let cwd = sys
-        .process(shell)
-        .and_then(|p| p.cwd())
-        .map(|c| c.to_string_lossy().into_owned());
-    PtyStatus {
-        cwd,
-        running: foreground_command(&sys, shell),
-    }
+    targets
+        .into_iter()
+        .map(|(id, shell, fg)| {
+            let cwd = sys
+                .process(Pid::from_u32(shell))
+                .and_then(|p| p.cwd())
+                .map(|c| c.to_string_lossy().into_owned());
+            // fg == shell → shell owns the terminal → idle prompt.
+            let running = match fg {
+                Some(f) if f != shell => sys.process(Pid::from_u32(f)).and_then(command_label),
+                _ => None,
+            };
+            (id, PtyStatus { cwd, running })
+        })
+        .collect()
 }
 
-/// Best-effort label for the command running in the shell (None if at the prompt).
-fn foreground_command(sys: &sysinfo::System, shell: sysinfo::Pid) -> Option<String> {
-    let child = sys.processes().values().find(|p| p.parent() == Some(shell))?;
-    let argv: Vec<String> = child
-        .cmd()
-        .iter()
-        .map(|c| c.to_string_lossy().into_owned())
-        .collect();
-    let joined = argv.join(" ");
-    // Recognize common coding agents however they're launched (often via node).
-    for t in KNOWN_TOOLS {
-        if joined.contains(t) {
-            return Some((*t).to_string());
+/// Pretty label for a foreground process (reads its argv/name, then classifies).
+fn command_label(p: &sysinfo::Process) -> Option<String> {
+    let argv: Vec<String> = p.cmd().iter().map(|c| c.to_string_lossy().into_owned()).collect();
+    let name = p.name().to_string_lossy().into_owned();
+    classify_command(&name, &argv)
+}
+
+fn basename(p: &str) -> &str {
+    p.rsplit(['/', '\\']).next().unwrap_or(p)
+}
+
+fn script_stem(s: &str) -> &str {
+    s.trim_end_matches(".js")
+        .trim_end_matches(".mjs")
+        .trim_end_matches(".cjs")
+        .trim_end_matches(".ts")
+        .trim_end_matches(".py")
+        .trim_end_matches(".rb")
+}
+
+/// Label a foreground command from its process name + argv. Pure, so it's unit-
+/// tested. Recognizes a known tool by the *basename of argv[0]* (exact, never a
+/// substring over the whole line), and a runtime-wrapped tool (`node …/claude`)
+/// by the stem of the first non-flag argument; falls back to the command's own
+/// basename. `None` only when there's nothing to name.
+fn classify_command(name: &str, argv: &[String]) -> Option<String> {
+    let arg0_base = argv.first().map(|a| basename(a));
+    // Direct invocation: `claude`, `codex`, …
+    if let Some(b) = arg0_base {
+        if KNOWN_TOOLS.contains(&b) {
+            return Some(b.to_string());
         }
     }
-    let name = child.name().to_string_lossy().into_owned();
-    if RUNTIMES.contains(&name.as_str()) {
-        for arg in argv.iter().skip(1) {
-            if arg.starts_with('-') {
-                continue;
-            }
-            let base = arg.rsplit('/').next().unwrap_or(arg);
-            let stem = base
-                .trim_end_matches(".js")
-                .trim_end_matches(".mjs")
-                .trim_end_matches(".cjs")
-                .trim_end_matches(".ts")
-                .trim_end_matches(".py")
-                .trim_end_matches(".rb");
+    let cmd_name = arg0_base.unwrap_or(name);
+    // Runtime wrapper (`node script.js`, `python manage.py`): name it by the
+    // script it runs, not the runtime.
+    if RUNTIMES.contains(&cmd_name) {
+        if let Some(arg) = argv.iter().skip(1).find(|a| !a.starts_with('-')) {
+            let stem = script_stem(basename(arg));
             if !stem.is_empty() {
                 return Some(stem.to_string());
             }
         }
     }
-    Some(name)
+    // Fallback: the command's own basename.
+    if cmd_name.is_empty() {
+        None
+    } else {
+        Some(cmd_name.to_string())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     #[test]
     fn resolves_own_status() {
-        // Verifies the platform process query works (cwd of our own process).
-        let s = super::shell_status(std::process::id());
-        assert!(s.cwd.is_some_and(|c| !c.is_empty()));
+        // Verifies the narrow process query works (cwd of our own process).
+        let id = "self".to_string();
+        let map = super::statuses_for(vec![(id.clone(), std::process::id(), None)]);
+        assert!(map.get(&id).unwrap().cwd.as_deref().is_some_and(|c| !c.is_empty()));
+    }
+
+    fn argv(parts: &[&str]) -> Vec<String> {
+        parts.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn classify_direct_tool() {
+        assert_eq!(super::classify_command("claude", &argv(&["claude"])), Some("claude".into()));
+        assert_eq!(
+            super::classify_command("claude", &argv(&["/opt/homebrew/bin/claude"])),
+            Some("claude".into())
+        );
+    }
+
+    #[test]
+    fn classify_runtime_wrapped_tool() {
+        assert_eq!(
+            super::classify_command("node", &argv(&["node", "/opt/bin/claude"])),
+            Some("claude".into())
+        );
+    }
+
+    #[test]
+    fn classify_plain_runtime_script() {
+        assert_eq!(
+            super::classify_command("python3", &argv(&["python3", "manage.py", "runserver"])),
+            Some("manage".into())
+        );
+    }
+
+    #[test]
+    fn classify_path_containing_tool_name_is_not_a_false_match() {
+        // A file argument merely *containing* a tool name must not label the session.
+        assert_eq!(
+            super::classify_command("vim", &argv(&["vim", "/Users/me/notes/claude-tips.md"])),
+            Some("vim".into())
+        );
+    }
+
+    #[test]
+    fn classify_unknown_command() {
+        assert_eq!(super::classify_command("htop", &argv(&["htop"])), Some("htop".into()));
     }
 }

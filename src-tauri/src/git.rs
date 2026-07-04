@@ -23,6 +23,11 @@ pub struct FileStatus {
 /// `core.pager` RCE vectors that a malicious `.git/config` could otherwise use.
 fn git() -> Command {
     let mut c = Command::new("git");
+    // `--no-optional-locks`: we run `git status` in the background on every fs
+    // change, so never take `.git/index.lock` — that would race the agent's own
+    // git commands running in the terminal. `-c` overrides neutralize the
+    // `core.fsmonitor` hook and `core.pager` RCE vectors a hostile repo could use.
+    c.arg("--no-optional-locks");
     c.args(["-c", "core.fsmonitor=false", "-c", "core.pager=cat"]);
     c
 }
@@ -70,10 +75,16 @@ pub fn parse_status(text: &str, base: &Path) -> Vec<FileStatus> {
         if entry.len() <= 3 {
             continue;
         }
-        let xy = &entry[0..2];
-        let rel = &entry[3..];
-        // Rename/copy entries carry the original path as an extra token.
-        if xy.starts_with('R') || xy.starts_with('C') {
+        // Panic-proof: an entry always begins with a 2-char ASCII status code, a
+        // space, then the path — but guard the slices so a misaligned token (e.g.
+        // an orphaned multibyte original path) can never panic on a char boundary.
+        let (Some(xy), Some(rel)) = (entry.get(0..2), entry.get(3..)) else {
+            continue;
+        };
+        // Rename/copy entries carry the original path as an extra token. The R/C
+        // code can appear in EITHER the index (X) or worktree (Y) column — e.g.
+        // `git add -N` then rename yields " R" — so check both, not just the X.
+        if xy.contains('R') || xy.contains('C') {
             let _ = parts.next();
         }
         result.push(FileStatus {
@@ -160,6 +171,21 @@ mod tests {
         assert_eq!(out[0].path, "/repo/a/new.rs");
         assert_eq!(out[0].status, "renamed");
         assert_eq!(out[1].path, "/repo/b/other.rs");
+        assert_eq!(out[1].status, "modified");
+    }
+
+    #[test]
+    fn parse_z_output_with_worktree_rename_multibyte() {
+        // A worktree-column rename (" R") carrying a multibyte original path — the
+        // exact shape (`git add -N` after a rename of a non-ASCII file) that used
+        // to panic on `&entry[0..2]`. Must parse, consuming the orig-path token.
+        let base = Path::new("/repo");
+        let text = " R renamed-target.txt\0中文原名.txt\0 M other.rs\0";
+        let out = parse_status(text, base);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].path, "/repo/renamed-target.txt");
+        assert_eq!(out[0].status, "renamed");
+        assert_eq!(out[1].path, "/repo/other.rs");
         assert_eq!(out[1].status, "modified");
     }
 

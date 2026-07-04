@@ -26,6 +26,20 @@ export function displayName(s: Session): string {
   return s.custom || s.dynamic || s.running || (s.cwd ? basename(s.cwd) : "") || s.name;
 }
 
+/**
+ * Should a background session light its attention dot? True only when a command
+ * that WAS running has now finished (running → idle) in a session you're not
+ * looking at — "come look, it's done". The first observation (was === undefined)
+ * and a command merely starting (idle → running) never trigger it.
+ */
+export function wantsAttention(
+  was: string | undefined,
+  now: string | undefined,
+  isActive: boolean
+): boolean {
+  return !isActive && !!was && !now;
+}
+
 function uid(): string {
   try {
     return crypto.randomUUID();

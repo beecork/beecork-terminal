@@ -147,11 +147,13 @@ export interface Settings {
 
 export const MIN_FONT = 9;
 export const MAX_FONT = 28;
+/** Default font size for both surfaces (⌘0 reset uses this — single source of truth). */
+export const DEFAULT_FONT_SIZE = 13;
 
 const DEFAULTS: Settings = {
   themeId: "mocha",
-  terminalFontSize: 13,
-  editorFontSize: 13,
+  terminalFontSize: DEFAULT_FONT_SIZE,
+  editorFontSize: DEFAULT_FONT_SIZE,
   fontFamily: 'Menlo, "SF Mono", Monaco, "Cascadia Code", monospace',
 };
 

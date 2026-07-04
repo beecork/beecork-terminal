@@ -9,7 +9,6 @@ use tauri::{Manager, WindowEvent};
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_process::init())
         .manage(PtyState::default())
         .on_window_event(|window, event| {
@@ -33,6 +32,7 @@ pub fn run() {
             pty::pty_resize,
             pty::pty_kill,
             pty::pty_status,
+            pty::pty_status_all,
             fs::get_root,
             fs::list_dir,
             fs::read_file,

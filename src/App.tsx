@@ -8,9 +8,9 @@ import SessionRail from "./components/SessionRail";
 import UpdateBanner from "./components/UpdateBanner";
 import ConfirmModal from "./components/ConfirmModal";
 import { Gear, PanelToggle, Folder } from "./components/icons";
-import { useSessions, displayName, type Session } from "./lib/sessions";
-import { getRoot, ptyStatus, type PtyStatus } from "./lib/api";
-import { useSettings, clampFont } from "./lib/settings";
+import { useSessions, displayName, wantsAttention, type Session } from "./lib/sessions";
+import { getRoot, ptyStatus, ptyStatusAll, type PtyStatus } from "./lib/api";
+import { useSettings, clampFont, DEFAULT_FONT_SIZE } from "./lib/settings";
 import "./App.css";
 
 export interface OpenRequest {
@@ -40,7 +40,6 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [openRequest, setOpenRequest] = useState<OpenRequest | null>(null);
   const [terminalCwd, setTerminalCwd] = useState<string | null>(null);
-  const [working, setWorking] = useState<Set<string>>(() => new Set());
   const [wantsYou, setWantsYou] = useState<Set<string>>(() => new Set());
   const [confirmClose, setConfirmClose] = useState<Session | null>(null);
   const [railExpanded, setRailExpanded] = useState<boolean>(() => {
@@ -56,7 +55,7 @@ export default function App() {
   const dragging = useRef(false);
   const reqN = useRef(0);
   const zoomTargetRef = useRef<Surface>("terminal");
-  const workTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  const prevRunning = useRef<Record<string, string | undefined>>({});
 
   const { update } = useSettings();
   const {
@@ -106,8 +105,18 @@ export default function App() {
 
   const applyStatus = useCallback(
     (id: string, st: PtyStatus) => {
+      // Drop late responses for a session that's already closed (else a stale
+      // {running:null} could re-flag a gone session as "wants you").
+      if (!sessionIdsRef.current.includes(id)) return;
       if (st.cwd) applyCwd(id, st.cwd);
-      setRunning(id, st.running ?? undefined);
+      const nowRunning = st.running ?? undefined;
+      const was = prevRunning.current[id];
+      // A background command that just finished → "wants you" (come look).
+      if (wantsAttention(was, nowRunning, id === activeIdRef.current)) {
+        setWantsYou((prev) => addId(prev, id));
+      }
+      prevRunning.current[id] = nowRunning;
+      setRunning(id, nowRunning);
     },
     [applyCwd, setRunning]
   );
@@ -132,27 +141,22 @@ export default function App() {
     ptyStatus(activeId).then((st) => applyStatus(activeId, st)).catch(() => {});
   }, [activeId, applyStatus]);
 
-  // Poll every session for cwd + running command (names the rail).
+  // Poll every session for cwd + running command (names the rail). One batched
+  // call → one process refresh serves all sessions (not N full-table scans).
   useEffect(() => {
     const t = setInterval(() => {
-      for (const id of sessionIdsRef.current) {
-        ptyStatus(id).then((st) => applyStatus(id, st)).catch(() => {});
-      }
+      const ids = sessionIdsRef.current;
+      if (!ids.length) return;
+      ptyStatusAll(ids)
+        .then((map) => {
+          for (const [id, st] of Object.entries(map)) applyStatus(id, st);
+        })
+        .catch(() => {});
     }, 2000);
     return () => clearInterval(t);
   }, [applyStatus]);
 
-  // ---- working / wants-you (dot state), driven by output flow ----
-  const onOutput = useCallback((id: string) => {
-    setWorking((prev) => addId(prev, id));
-    setWantsYou((prev) => delId(prev, id));
-    clearTimeout(workTimers.current[id]);
-    workTimers.current[id] = setTimeout(() => {
-      setWorking((prev) => delId(prev, id));
-      if (id !== activeIdRef.current) setWantsYou((prev) => addId(prev, id));
-    }, 800);
-  }, []);
-
+  // ---- wants-you (attention dot): bell, or a background command finishing ----
   const onBell = useCallback((id: string) => {
     if (id !== activeIdRef.current) setWantsYou((prev) => addId(prev, id));
   }, []);
@@ -205,13 +209,22 @@ export default function App() {
       const editor = zoomTargetRef.current === "editor";
       update((s) => {
         const cur = editor ? s.editorFontSize : s.terminalFontSize;
-        const next = isZero ? 13 : clampFont(cur + (isPlus ? 1 : -1));
+        const next = isZero ? DEFAULT_FONT_SIZE : clampFont(cur + (isPlus ? 1 : -1));
         return editor ? { editorFontSize: next } : { terminalFontSize: next };
       });
     }
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
   }, [update]);
+
+  // Drop the stale key from the removed rail-pin feature (one-time cleanup).
+  useEffect(() => {
+    try {
+      localStorage.removeItem("beecork.railPinned");
+    } catch {
+      /* ignore */
+    }
+  }, []);
 
   useEffect(() => {
     try {
@@ -302,7 +315,6 @@ export default function App() {
         <SessionRail
           sessions={sessions}
           activeId={activeId}
-          working={working}
           wantsYou={wantsYou}
           expanded={railExpanded}
           onSelect={setActiveId}
@@ -327,7 +339,6 @@ export default function App() {
                 active={s.id === activeId}
                 startCwd={s.startCwd}
                 onOpenPath={onOpenPath}
-                onOutput={onOutput}
                 onBell={onBell}
                 onSeen={onSeen}
                 onTitle={setDynamic}
@@ -372,7 +383,12 @@ export default function App() {
           danger
           onCancel={() => setConfirmClose(null)}
           onConfirm={() => {
-            close(confirmClose.id);
+            const id = confirmClose.id;
+            close(id);
+            // Prune per-session bookkeeping so it doesn't leak or resurrect the id.
+            delete prevRunning.current[id];
+            delete cwdBySession.current[id];
+            setWantsYou((prev) => delId(prev, id));
             setConfirmClose(null);
           }}
         />

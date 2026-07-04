@@ -5,8 +5,6 @@ import { Plus, Close, Pencil, Chevron } from "./icons";
 interface Props {
   sessions: Session[];
   activeId: string;
-  /** sessions actively producing output */
-  working: Set<string>;
   /** background sessions that finished / rang the bell and haven't been seen */
   wantsYou: Set<string>;
   expanded: boolean;
@@ -17,17 +15,16 @@ interface Props {
   onRename: (id: string, name: string) => void;
 }
 
-function dotClass(isActive: boolean, isWorking: boolean, wants: boolean): string {
-  if (isActive) return `rail-dot dot-active${isWorking ? " working" : ""}`;
-  if (isWorking) return "rail-dot dot-working working";
-  if (wants) return "rail-dot dot-attention";
+function dotClass(isActive: boolean, isBusy: boolean, wants: boolean): string {
+  if (isActive) return "rail-dot dot-active";
+  if (wants) return "rail-dot dot-attention"; // the only state that blinks
+  if (isBusy) return "rail-dot dot-busy"; // a program is running — steady
   return "rail-dot dot-idle";
 }
 
 export default function SessionRail({
   sessions,
   activeId,
-  working,
   wantsYou,
   expanded,
   onSelect,
@@ -67,7 +64,7 @@ export default function SessionRail({
         {sessions.map((s, i) => {
           const name = displayName(s);
           const isActive = s.id === activeId;
-          const isWorking = working.has(s.id);
+          const isBusy = !!s.running;
           const wants = wantsYou.has(s.id);
           const editing = editingId === s.id;
           return (
@@ -78,7 +75,7 @@ export default function SessionRail({
               onDoubleClick={() => expanded && startRename(s)}
               title={expanded ? name : `${i + 1}. ${name}`}
             >
-              <span className={dotClass(isActive, isWorking, wants)} />
+              <span className={dotClass(isActive, isBusy, wants)} />
               {expanded ? (
                 editing ? (
                   <input
@@ -136,13 +133,17 @@ export default function SessionRail({
             </div>
           );
         })}
-      </div>
 
-      <div className="rail-bottom">
-        <button className="rail-new" onClick={onCreate} title="New session (⌘T)">
-          <Plus size={16} />
-          {expanded && <span>New session</span>}
-        </button>
+        <div
+          className="rail-item rail-add-item"
+          onClick={onCreate}
+          title="New session (⌘T)"
+        >
+          <span className="rail-add-plus">
+            <Plus size={16} />
+          </span>
+          {expanded && <span className="rail-name">New session</span>}
+        </div>
       </div>
     </div>
   );

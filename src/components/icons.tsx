@@ -45,16 +45,6 @@ export function Refresh({ size, ...p }: P) {
   );
 }
 
-export function Pin({ size, ...p }: P) {
-  return (
-    <svg {...svg(size, p)}>
-      <path d="M9 4v6l-2 3v2h10v-2l-2-3V4" />
-      <path d="M12 17v4" />
-      <path d="M8 4h8" />
-    </svg>
-  );
-}
-
 export function Plus({ size, ...p }: P) {
   return (
     <svg {...svg(size, { ...p, strokeWidth: 1.8 })}>
