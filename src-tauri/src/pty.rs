@@ -320,7 +320,14 @@ const KNOWN_TOOLS: &[&str] = &["claude", "codex", "aider", "gemini", "ollama", "
 /// running command's process-group leader — no child-guessing.
 fn session_pids(h: &PtyHandle) -> Option<(u32, Option<u32>)> {
     let shell = h.child.process_id()?;
+    // The tty's foreground process group is a unix concept (`tcgetpgrp`);
+    // portable-pty only exposes `process_group_leader` on unix. On Windows we
+    // don't detect the foreground command yet — the busy dot just stays idle
+    // there (cwd tracking still works).
+    #[cfg(unix)]
     let fg = h.master.process_group_leader().map(|p| p as u32);
+    #[cfg(not(unix))]
+    let fg = None;
     Some((shell, fg))
 }
 
