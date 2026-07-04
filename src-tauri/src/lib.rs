@@ -32,7 +32,7 @@ pub fn run() {
             pty::pty_write,
             pty::pty_resize,
             pty::pty_kill,
-            pty::pty_cwd,
+            pty::pty_status,
             fs::get_root,
             fs::list_dir,
             fs::read_file,

@@ -9,11 +9,9 @@ import UpdateBanner from "./components/UpdateBanner";
 import ConfirmModal from "./components/ConfirmModal";
 import { Gear, PanelToggle, Folder } from "./components/icons";
 import { useSessions, displayName, type Session } from "./lib/sessions";
-import { getRoot, ptyCwd } from "./lib/api";
+import { getRoot, ptyStatus, type PtyStatus } from "./lib/api";
 import { useSettings, clampFont } from "./lib/settings";
 import "./App.css";
-
-type Surface = "terminal" | "editor";
 
 export interface OpenRequest {
   path: string;
@@ -21,28 +19,63 @@ export interface OpenRequest {
   n: number;
 }
 
+type Surface = "terminal" | "editor";
+
+function addId(set: Set<string>, id: string) {
+  if (set.has(id)) return set;
+  const n = new Set(set);
+  n.add(id);
+  return n;
+}
+function delId(set: Set<string>, id: string) {
+  if (!set.has(id)) return set;
+  const n = new Set(set);
+  n.delete(id);
+  return n;
+}
+
 export default function App() {
   const [panelOpen, setPanelOpen] = useState(true);
   const [panelWidth, setPanelWidth] = useState(380);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [openRequest, setOpenRequest] = useState<OpenRequest | null>(null);
-  const [activity, setActivity] = useState<Set<string>>(() => new Set());
   const [terminalCwd, setTerminalCwd] = useState<string | null>(null);
-  const [railPinned, setRailPinned] = useState<boolean>(() => {
+  const [working, setWorking] = useState<Set<string>>(() => new Set());
+  const [wantsYou, setWantsYou] = useState<Set<string>>(() => new Set());
+  const [confirmClose, setConfirmClose] = useState<Session | null>(null);
+  const [railExpanded, setRailExpanded] = useState<boolean>(() => {
     try {
-      return localStorage.getItem("beecork.railPinned") === "1";
+      return localStorage.getItem("beecork.railExpanded") === "1";
     } catch {
       return false;
     }
   });
-  const [confirmClose, setConfirmClose] = useState<Session | null>(null);
+  const [editingTop, setEditingTop] = useState(false);
+  const [topEditValue, setTopEditValue] = useState("");
+
   const dragging = useRef(false);
   const reqN = useRef(0);
   const zoomTargetRef = useRef<Surface>("terminal");
+  const workTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
   const { update } = useSettings();
-  const { sessions, activeId, setActiveId, create, close, rename, setDynamic, setCwd } =
-    useSessions();
+  const {
+    sessions,
+    activeId,
+    setActiveId,
+    create,
+    close,
+    rename,
+    setDynamic,
+    setCwd,
+    setRunning,
+  } = useSessions();
+
+  const activeIdRef = useRef(activeId);
+  activeIdRef.current = activeId;
+  const cwdBySession = useRef<Record<string, string>>({});
+  const sessionIdsRef = useRef<string[]>([]);
+  sessionIdsRef.current = sessions.map((s) => s.id);
 
   const onFocusSurface = useCallback((s: Surface) => {
     zoomTargetRef.current = s;
@@ -52,18 +85,18 @@ export default function App() {
     const s = sessions.find((x) => x.id === activeId);
     return s ? displayName(s) : "Beecork Terminal";
   })();
-  const cwdName = terminalCwd
-    ? terminalCwd.split("/").filter(Boolean).pop() ?? ""
-    : "";
+  const cwdName = terminalCwd ? terminalCwd.split("/").filter(Boolean).pop() ?? "" : "";
 
-  const cwdBySession = useRef<Record<string, string>>({});
-  const activeIdRef = useRef(activeId);
-  activeIdRef.current = activeId;
+  const newSession = useCallback(
+    () => create(cwdBySession.current[activeIdRef.current]),
+    [create]
+  );
 
+  // ---- cwd + running-command tracking ----
   const applyCwd = useCallback(
     (id: string, cwd: string) => {
       cwdBySession.current[id] = cwd;
-      setCwd(id, cwd); // names the session after its folder
+      setCwd(id, cwd);
       if (id === activeIdRef.current) {
         setTerminalCwd((prev) => (prev === cwd ? prev : cwd));
       }
@@ -71,56 +104,66 @@ export default function App() {
     [setCwd]
   );
 
-  // OSC 7 (instant, shells with integration).
-  const onCwd = useCallback((id: string, path: string) => applyCwd(id, path), [applyCwd]);
-  // Output settled — re-check cwd for shells that don't emit OSC 7 (covers plain zsh/bash).
-  const onCwdHint = useCallback(
-    (id: string) => {
-      if (id !== activeIdRef.current) return;
-      ptyCwd(id).then((cwd) => cwd && applyCwd(id, cwd)).catch(() => {});
+  const applyStatus = useCallback(
+    (id: string, st: PtyStatus) => {
+      if (st.cwd) applyCwd(id, st.cwd);
+      setRunning(id, st.running ?? undefined);
     },
-    [applyCwd]
+    [applyCwd, setRunning]
   );
 
-  // Initial root = where the shell starts.
+  const onCwd = useCallback((id: string, path: string) => applyCwd(id, path), [applyCwd]);
+  const onStatusHint = useCallback(
+    (id: string) => {
+      if (id !== activeIdRef.current) return;
+      ptyStatus(id).then((st) => applyStatus(id, st)).catch(() => {});
+    },
+    [applyStatus]
+  );
+
   useEffect(() => {
     getRoot().then(setTerminalCwd).catch(() => {});
   }, []);
 
-  // On session switch: show the last-known cwd immediately, confirm it, and keep a
-  // slow safety poll (the OSC 7 handler + output hints do the responsive work).
+  // Immediate status on session switch.
   useEffect(() => {
     const known = cwdBySession.current[activeId];
     if (known) setTerminalCwd(known);
-    ptyCwd(activeId).then((cwd) => cwd && applyCwd(activeId, cwd)).catch(() => {});
+    ptyStatus(activeId).then((st) => applyStatus(activeId, st)).catch(() => {});
+  }, [activeId, applyStatus]);
+
+  // Poll every session for cwd + running command (names the rail).
+  useEffect(() => {
     const t = setInterval(() => {
-      const id = activeIdRef.current;
-      ptyCwd(id).then((cwd) => cwd && applyCwd(id, cwd)).catch(() => {});
+      for (const id of sessionIdsRef.current) {
+        ptyStatus(id).then((st) => applyStatus(id, st)).catch(() => {});
+      }
     }, 2000);
     return () => clearInterval(t);
-  }, [activeId, applyCwd]);
+  }, [applyStatus]);
+
+  // ---- working / wants-you (dot state), driven by output flow ----
+  const onOutput = useCallback((id: string) => {
+    setWorking((prev) => addId(prev, id));
+    setWantsYou((prev) => delId(prev, id));
+    clearTimeout(workTimers.current[id]);
+    workTimers.current[id] = setTimeout(() => {
+      setWorking((prev) => delId(prev, id));
+      if (id !== activeIdRef.current) setWantsYou((prev) => addId(prev, id));
+    }, 800);
+  }, []);
+
+  const onBell = useCallback((id: string) => {
+    if (id !== activeIdRef.current) setWantsYou((prev) => addId(prev, id));
+  }, []);
+
+  const onSeen = useCallback((id: string) => {
+    setWantsYou((prev) => delId(prev, id));
+  }, []);
 
   const onOpenPath = useCallback((path: string, line?: number) => {
     setOpenRequest({ path, line, n: ++reqN.current });
     setPanelOpen(true);
-  }, []);
-
-  const onActivity = useCallback((id: string) => {
-    setActivity((prev) => {
-      if (prev.has(id)) return prev;
-      const next = new Set(prev);
-      next.add(id);
-      return next;
-    });
-  }, []);
-
-  const onSeen = useCallback((id: string) => {
-    setActivity((prev) => {
-      if (!prev.has(id)) return prev;
-      const next = new Set(prev);
-      next.delete(id);
-      return next;
-    });
   }, []);
 
   function newWindow() {
@@ -133,14 +176,14 @@ export default function App() {
     });
   }
 
-  // Keyboard shortcuts: ⌘T new session, ⌘N new window.
+  // ⌘T new session (inherits cwd), ⌘N new window.
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (!(e.metaKey || e.ctrlKey)) return;
       const k = e.key.toLowerCase();
       if (k === "t") {
         e.preventDefault();
-        create();
+        newSession();
       } else if (k === "n") {
         e.preventDefault();
         newWindow();
@@ -148,9 +191,9 @@ export default function App() {
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [create]);
+  }, [newSession]);
 
-  // Zoom the focused surface (terminal or editor) with ⌘+ / ⌘- / ⌘0.
+  // Zoom the focused surface with ⌘+ / ⌘- / ⌘0.
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (!(e.metaKey || e.ctrlKey)) return;
@@ -166,25 +209,20 @@ export default function App() {
         return editor ? { editorFontSize: next } : { terminalFontSize: next };
       });
     }
-    // capture phase so we beat the webview's own page-zoom and xterm's key handling
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
   }, [update]);
 
-  // Persist pinned state.
   useEffect(() => {
     try {
-      localStorage.setItem("beecork.railPinned", railPinned ? "1" : "0");
+      localStorage.setItem("beecork.railExpanded", railExpanded ? "1" : "0");
     } catch {
       /* ignore */
     }
-  }, [railPinned]);
+  }, [railExpanded]);
 
-  // Reflect the active session's name in the OS window title.
   useEffect(() => {
-    getCurrentWindow()
-      .setTitle(`${activeName} — Beecork`)
-      .catch(() => {});
+    getCurrentWindow().setTitle(`${activeName} — Beecork`).catch(() => {});
   }, [activeName]);
 
   useEffect(() => {
@@ -205,6 +243,11 @@ export default function App() {
     };
   }, []);
 
+  function commitTopRename() {
+    rename(activeId, topEditValue);
+    setEditingTop(false);
+  }
+
   return (
     <div className="app-root">
       <UpdateBanner />
@@ -213,8 +256,31 @@ export default function App() {
           <span className="crumb-icon">
             <Folder size={15} />
           </span>
-          <span className="crumb-name">{activeName}</span>
-          {cwdName && cwdName !== activeName && (
+          {editingTop ? (
+            <input
+              className="crumb-edit"
+              autoFocus
+              value={topEditValue}
+              onChange={(e) => setTopEditValue(e.target.value)}
+              onBlur={commitTopRename}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") commitTopRename();
+                else if (e.key === "Escape") setEditingTop(false);
+              }}
+            />
+          ) : (
+            <span
+              className="crumb-name"
+              title="Double-click to rename"
+              onDoubleClick={() => {
+                setTopEditValue(activeName);
+                setEditingTop(true);
+              }}
+            >
+              {activeName}
+            </span>
+          )}
+          {!editingTop && cwdName && cwdName !== activeName && (
             <span className="crumb-path">— {cwdName}</span>
           )}
         </div>
@@ -236,15 +302,16 @@ export default function App() {
         <SessionRail
           sessions={sessions}
           activeId={activeId}
-          activity={activity}
-          pinned={railPinned}
+          working={working}
+          wantsYou={wantsYou}
+          expanded={railExpanded}
           onSelect={setActiveId}
-          onCreate={create}
+          onCreate={newSession}
           onClose={(id) => {
             const s = sessions.find((x) => x.id === id);
             if (s) setConfirmClose(s);
           }}
-          onTogglePin={() => setRailPinned((p) => !p)}
+          onToggleExpand={() => setRailExpanded((e) => !e)}
           onRename={rename}
         />
 
@@ -258,12 +325,14 @@ export default function App() {
               <TerminalPane
                 sessionId={s.id}
                 active={s.id === activeId}
+                startCwd={s.startCwd}
                 onOpenPath={onOpenPath}
-                onActivity={onActivity}
+                onOutput={onOutput}
+                onBell={onBell}
                 onSeen={onSeen}
                 onTitle={setDynamic}
                 onCwd={onCwd}
-                onCwdHint={onCwdHint}
+                onStatusHint={onStatusHint}
                 onFocusSurface={onFocusSurface}
               />
             </div>

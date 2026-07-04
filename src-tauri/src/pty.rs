@@ -209,37 +209,99 @@ pub fn pty_kill(state: tauri::State<PtyState>, id: String) -> Result<(), String>
     Ok(())
 }
 
-/// The current working directory of a session's shell — so the file browser can
-/// follow the terminal as the user `cd`s around.
-#[tauri::command]
-pub fn pty_cwd(state: tauri::State<PtyState>, id: String) -> Option<String> {
-    let pid = {
-        let g = state.sessions.lock().unwrap();
-        g.get(&id).and_then(|h| h.child.process_id())?
-    };
-    process_cwd(pid)
+#[derive(Serialize)]
+pub struct PtyStatus {
+    /// the shell's working directory (so the file browser follows `cd`)
+    cwd: Option<String>,
+    /// the foreground command running at the prompt (e.g. "claude"), if any
+    running: Option<String>,
 }
 
-fn process_cwd(pid: u32) -> Option<String> {
+/// A session's live status: where its shell is, and what (if anything) it's running.
+#[tauri::command]
+pub fn pty_status(state: tauri::State<PtyState>, id: String) -> PtyStatus {
+    let pid = {
+        let g = state.sessions.lock().unwrap();
+        g.get(&id).and_then(|h| h.child.process_id())
+    };
+    match pid {
+        Some(pid) => shell_status(pid),
+        None => PtyStatus {
+            cwd: None,
+            running: None,
+        },
+    }
+}
+
+const RUNTIMES: &[&str] = &[
+    "node", "deno", "bun", "python", "python3", "ruby", "perl", "sh", "bash", "zsh", "fish", "env",
+];
+const KNOWN_TOOLS: &[&str] = &["claude", "codex", "aider", "gemini", "ollama", "cursor"];
+
+fn shell_status(shell_pid: u32) -> PtyStatus {
     use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
     let mut sys = System::new();
-    let p = Pid::from_u32(pid);
     sys.refresh_processes_specifics(
-        ProcessesToUpdate::Some(&[p]),
+        ProcessesToUpdate::All,
         false,
-        ProcessRefreshKind::nothing().with_cwd(UpdateKind::Always),
+        ProcessRefreshKind::nothing()
+            .with_cwd(UpdateKind::Always)
+            .with_cmd(UpdateKind::Always),
     );
-    sys.process(p)
-        .and_then(|proc| proc.cwd())
+    let shell = Pid::from_u32(shell_pid);
+    let cwd = sys
+        .process(shell)
+        .and_then(|p| p.cwd())
+        .map(|c| c.to_string_lossy().into_owned());
+    PtyStatus {
+        cwd,
+        running: foreground_command(&sys, shell),
+    }
+}
+
+/// Best-effort label for the command running in the shell (None if at the prompt).
+fn foreground_command(sys: &sysinfo::System, shell: sysinfo::Pid) -> Option<String> {
+    let child = sys.processes().values().find(|p| p.parent() == Some(shell))?;
+    let argv: Vec<String> = child
+        .cmd()
+        .iter()
         .map(|c| c.to_string_lossy().into_owned())
+        .collect();
+    let joined = argv.join(" ");
+    // Recognize common coding agents however they're launched (often via node).
+    for t in KNOWN_TOOLS {
+        if joined.contains(t) {
+            return Some((*t).to_string());
+        }
+    }
+    let name = child.name().to_string_lossy().into_owned();
+    if RUNTIMES.contains(&name.as_str()) {
+        for arg in argv.iter().skip(1) {
+            if arg.starts_with('-') {
+                continue;
+            }
+            let base = arg.rsplit('/').next().unwrap_or(arg);
+            let stem = base
+                .trim_end_matches(".js")
+                .trim_end_matches(".mjs")
+                .trim_end_matches(".cjs")
+                .trim_end_matches(".ts")
+                .trim_end_matches(".py")
+                .trim_end_matches(".rb");
+            if !stem.is_empty() {
+                return Some(stem.to_string());
+            }
+        }
+    }
+    Some(name)
 }
 
 #[cfg(test)]
 mod tests {
     #[test]
-    fn resolves_own_cwd() {
-        // Verifies the platform cwd lookup works at all.
-        let cwd = super::process_cwd(std::process::id());
-        assert!(cwd.is_some_and(|c| !c.is_empty()));
+    fn resolves_own_status() {
+        // Verifies the platform process query works (cwd of our own process).
+        let s = super::shell_status(std::process::id());
+        assert!(s.cwd.is_some_and(|c| !c.is_empty()));
     }
 }

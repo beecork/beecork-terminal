@@ -110,6 +110,21 @@ body {
   white-space: nowrap;
   flex: 0 1 auto;
 }
+.crumb .crumb-name {
+  cursor: text;
+}
+.crumb-edit {
+  flex: 0 1 auto;
+  min-width: 90px;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--accent);
+  border-radius: 5px;
+  padding: 1px 6px;
+  font-size: 13px;
+  font-weight: 600;
+  outline: none;
+}
 .topbar-actions {
   display: flex;
   gap: 4px;
@@ -310,22 +325,13 @@ body {
 }
 
 /* ---- session rail (left) ---- */
-.rail-region {
-  position: relative;
-  flex: 0 0 auto;
-  height: 100%;
-}
 .session-rail {
-  position: absolute;
-  top: 0;
-  left: 0;
-  bottom: 0;
+  flex: 0 0 auto;
   display: flex;
   flex-direction: column;
   background: var(--panel);
   border-right: 1px solid var(--border);
   overflow: hidden;
-  z-index: 30;
   transition: width 0.12s ease;
 }
 .session-rail.collapsed {
@@ -334,18 +340,74 @@ body {
 .session-rail.expanded {
   width: 200px;
 }
-/* Overlay shadow only when expanding-on-hover (rail not pinned open). */
-.rail-region:not(.pinned) .session-rail.expanded {
-  box-shadow: 4px 0 16px rgba(0, 0, 0, 0.3);
+
+.rail-top {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 38px;
+  padding: 0 6px;
+  border-bottom: 1px solid var(--border);
 }
-.rail-num {
-  width: 100%;
-  text-align: center;
-  font-size: 12px;
+.session-rail.collapsed .rail-top {
+  justify-content: center;
+}
+.rail-top-label {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
   font-weight: 600;
 }
-.rail-hdr-label {
+.rail-expand-icon {
+  display: flex;
+  transition: transform 0.12s ease;
+}
+.rail-expand-icon.open {
+  transform: rotate(180deg);
+}
+
+.rail-list {
   flex: 1 1 auto;
+  overflow: auto;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.rail-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--muted);
+  white-space: nowrap;
+  position: relative;
+}
+.rail-item:hover {
+  background: var(--hover);
+}
+.rail-item.active {
+  background: var(--selected);
+  color: var(--fg);
+}
+.session-rail.collapsed .rail-item {
+  justify-content: center;
+  padding: 8px 4px;
+}
+.rail-name {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.rail-num {
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
 }
 .rail-rename {
   flex: 1 1 auto;
@@ -358,69 +420,28 @@ body {
   font-size: 13px;
   outline: none;
 }
-.session-rail.collapsed .rail-header {
-  flex-direction: column;
-  gap: 4px;
-  padding: 6px 4px;
-}
-.session-rail.collapsed .rail-item {
-  justify-content: center;
-  padding: 8px 4px;
-}
-.rail-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 6px 8px 6px 12px;
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--muted);
-  background: var(--panel-header);
-  border-bottom: 1px solid var(--border);
-}
-.rail-list {
-  flex: 1 1 auto;
-  overflow: auto;
-  padding: 4px;
-}
-.rail-item {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  padding: 6px 8px;
-  margin-bottom: 2px;
-  border-radius: 6px;
-  cursor: pointer;
-  font-size: 13px;
-  color: var(--muted);
-  white-space: nowrap;
-}
-.rail-item:hover {
-  background: var(--hover);
-}
-.rail-item.active {
-  background: var(--selected);
-  color: var(--fg);
-}
+
+/* status dots */
 .rail-dot {
-  width: 7px;
-  height: 7px;
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
-  background: #a6e3a1;
   flex: 0 0 auto;
 }
-.rail-item.active .rail-dot {
+.rail-dot.dot-active {
   background: var(--accent);
 }
-.rail-item.attention .rail-dot {
-  background: #fe8019;
-  animation: rail-pulse 1.2s ease-in-out infinite;
+.rail-dot.dot-working {
+  background: #89b4fa;
 }
-.rail-item.attention .rail-title {
-  color: var(--fg);
-  font-weight: 600;
+.rail-dot.dot-attention {
+  background: #fab387;
+}
+.rail-dot.dot-idle {
+  background: #585b70;
+}
+.rail-dot.working {
+  animation: rail-pulse 1.1s ease-in-out infinite;
 }
 @keyframes rail-pulse {
   0%,
@@ -428,14 +449,11 @@ body {
     opacity: 1;
   }
   50% {
-    opacity: 0.35;
+    opacity: 0.3;
   }
 }
-.rail-title {
-  flex: 1 1 auto;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
+
+/* row buttons (rename / close) */
 .rail-close {
   display: inline-flex;
   align-items: center;
@@ -451,14 +469,44 @@ body {
   flex: 0 0 auto;
 }
 .rail-item:hover .rail-close {
-  opacity: 0.75;
+  opacity: 0.7;
 }
 .rail-item:hover .rail-close:hover {
   opacity: 1;
   background: var(--hover);
-}
-.rail-close:hover {
   color: var(--fg);
+}
+.rail-close-mini {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  padding: 1px;
+}
+
+/* new-session button (bottom) */
+.rail-bottom {
+  flex: 0 0 auto;
+  padding: 6px;
+  border-top: 1px solid var(--border);
+}
+.rail-new {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  justify-content: center;
+  background: transparent;
+  border: 1px dashed var(--border);
+  color: var(--muted);
+  border-radius: 8px;
+  padding: 7px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.rail-new:hover {
+  color: var(--fg);
+  border-color: var(--accent);
+  background: var(--hover);
 }
 
 /* ---- terminals stack ---- */

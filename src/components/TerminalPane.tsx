@@ -42,26 +42,33 @@ function parseOsc7(data: string): string | null {
 interface Props {
   sessionId: string;
   active: boolean;
+  /** directory the shell should start in (new sessions inherit the active cwd) */
+  startCwd?: string;
   onOpenPath: (path: string, line?: number) => void;
-  onActivity: (id: string) => void;
+  /** the session produced output (drives the working/idle dot) */
+  onOutput: (id: string) => void;
+  /** terminal bell rang */
+  onBell: (id: string) => void;
   onSeen: (id: string) => void;
   onTitle: (id: string, title: string) => void;
   /** shell pushed its cwd via OSC 7 (instant) */
   onCwd: (id: string, path: string) => void;
-  /** output settled — a good moment to re-check cwd (covers shells without OSC 7) */
-  onCwdHint: (id: string) => void;
+  /** output settled — re-check cwd + running command */
+  onStatusHint: (id: string) => void;
   onFocusSurface: (s: "terminal" | "editor") => void;
 }
 
 export default function TerminalPane({
   sessionId,
   active,
+  startCwd,
   onOpenPath,
-  onActivity,
+  onOutput,
+  onBell,
   onSeen,
   onTitle,
   onCwd,
-  onCwdHint,
+  onStatusHint,
   onFocusSurface,
 }: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
@@ -70,7 +77,6 @@ export default function TerminalPane({
   const searchRef = useRef<SearchAddon | null>(null);
   const rootRef = useRef<string | null>(null);
   const activeRef = useRef(active);
-  const notifiedRef = useRef(false);
   activeRef.current = active;
 
   const { theme, settings, update } = useSettings();
@@ -78,8 +84,8 @@ export default function TerminalPane({
   lookRef.current = { theme, settings };
 
   // Callbacks captured in refs so the mount effect always sees current ones.
-  const cbRef = useRef({ onOpenPath, onActivity, onSeen, onTitle, onCwd, onCwdHint });
-  cbRef.current = { onOpenPath, onActivity, onSeen, onTitle, onCwd, onCwdHint };
+  const cbRef = useRef({ onOpenPath, onOutput, onBell, onSeen, onTitle, onCwd, onStatusHint });
+  cbRef.current = { onOpenPath, onOutput, onBell, onSeen, onTitle, onCwd, onStatusHint };
 
   const [showSearch, setShowSearch] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
@@ -184,26 +190,18 @@ export default function TerminalPane({
       if (disposed) return;
       if (msg.event === "output") {
         term.write(decodeBase64(msg.data));
-        if (!activeRef.current && !notifiedRef.current) {
-          notifiedRef.current = true;
-          cbRef.current.onActivity(sessionId);
-        }
-        // When output settles (a prompt likely returned), re-check the cwd.
+        cbRef.current.onOutput(sessionId);
+        // When output settles (a prompt likely returned), re-check status.
         if (activeRef.current) {
           clearTimeout(cwdHintTimer);
-          cwdHintTimer = setTimeout(() => cbRef.current.onCwdHint(sessionId), 150);
+          cwdHintTimer = setTimeout(() => cbRef.current.onStatusHint(sessionId), 150);
         }
       } else if (msg.event === "exit") {
         term.write("\r\n\x1b[90m[process exited]\x1b[0m\r\n");
       }
     };
 
-    const bellSub = term.onBell(() => {
-      if (!activeRef.current) {
-        notifiedRef.current = true;
-        cbRef.current.onActivity(sessionId);
-      }
-    });
+    const bellSub = term.onBell(() => cbRef.current.onBell(sessionId));
 
     const titleSub = term.onTitleChange((t) => {
       // Terminal output controls this via OSC escapes — strip control chars
@@ -222,7 +220,7 @@ export default function TerminalPane({
     invoke("pty_spawn", {
       id: sessionId,
       onEvent: channel,
-      cwd: null,
+      cwd: startCwd ?? null,
       shell: null,
       cols: term.cols,
       rows: term.rows,
@@ -262,10 +260,9 @@ export default function TerminalPane({
     };
   }, [sessionId]);
 
-  // Refit + focus + clear activity when this session becomes visible.
+  // Refit + focus + clear "wants you" when this session becomes visible.
   useEffect(() => {
     if (!active) return;
-    notifiedRef.current = false;
     cbRef.current.onSeen(sessionId);
     const term = termRef.current;
     if (!term) return;

@@ -10,6 +10,10 @@ export interface Session {
   custom?: string;
   /** the session's current working directory (follows `cd`) */
   cwd?: string;
+  /** the command running at the prompt, e.g. "claude" (undefined when idle) */
+  running?: string;
+  /** directory the shell should start in (inherited from the active session) */
+  startCwd?: string;
 }
 
 function basename(p: string): string {
@@ -17,9 +21,9 @@ function basename(p: string): string {
   return parts[parts.length - 1] ?? p;
 }
 
-/** A custom name wins; otherwise the session is named after its folder. */
+/** Priority: your rename → terminal title → running tool → folder → base name. */
 export function displayName(s: Session): string {
-  return s.custom || (s.cwd ? basename(s.cwd) : "") || s.dynamic || s.name;
+  return s.custom || s.dynamic || s.running || (s.cwd ? basename(s.cwd) : "") || s.name;
 }
 
 function uid(): string {
@@ -43,8 +47,8 @@ export function useSessions() {
     }
   }, [sessions, activeId]);
 
-  const create = useCallback(() => {
-    const s: Session = { id: uid(), name: `Session ${nextNum.current++}` };
+  const create = useCallback((startCwd?: string) => {
+    const s: Session = { id: uid(), name: `Session ${nextNum.current++}`, startCwd };
     setSessions((prev) => [...prev, s]);
     setActiveId(s.id);
   }, []);
@@ -79,5 +83,21 @@ export function useSessions() {
     );
   }, []);
 
-  return { sessions, activeId, setActiveId, create, close, rename, setDynamic, setCwd };
+  const setRunning = useCallback((id: string, running: string | undefined) => {
+    setSessions((prev) =>
+      prev.map((s) => (s.id === id && s.running !== running ? { ...s, running } : s))
+    );
+  }, []);
+
+  return {
+    sessions,
+    activeId,
+    setActiveId,
+    create,
+    close,
+    rename,
+    setDynamic,
+    setCwd,
+    setRunning,
+  };
 }

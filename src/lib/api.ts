@@ -13,8 +13,15 @@ export interface Listing {
 
 export const getRoot = () => invoke<string>("get_root");
 
-/** The current working directory of a session's shell (follows `cd`). */
-export const ptyCwd = (id: string) => invoke<string | null>("pty_cwd", { id });
+export interface PtyStatus {
+  /** the shell's working directory (follows `cd`) */
+  cwd: string | null;
+  /** the command running at the prompt, e.g. "claude" (null when idle) */
+  running: string | null;
+}
+
+/** A session's live status — where its shell is and what it's running. */
+export const ptyStatus = (id: string) => invoke<PtyStatus>("pty_status", { id });
 
 export const listDir = (path?: string) =>
   invoke<Listing>("list_dir", { path: path ?? null });
