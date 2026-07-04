@@ -154,6 +154,12 @@
   .bt-demo .editor .dl.del{ background:color-mix(in srgb,var(--red) 15%,transparent); color:var(--red); }
   .bt-demo .editor .dl.add{ background:color-mix(in srgb,var(--green) 14%,transparent); color:var(--green); }
   .bt-demo .editor .dl.ctx{ color:var(--muted); }
+  .bt-demo .code-view{ display:none; }
+  .bt-demo .win[data-mode="edit"] .panel{ width:min(290px,42%); }
+  .bt-demo .win[data-mode="edit"] .diff-view{ display:none; }
+  .bt-demo .win[data-mode="edit"] .code-view{ display:block; }
+  .bt-demo .code-view .cl{ padding:0 13px; white-space:pre; color:var(--text); }
+  .bt-demo .code-view .kw{ color:var(--accent-2); } .bt-demo .code-view .fn{ color:var(--blue); }
   .bt-demo .strip{ width:0; flex-shrink:0; background:var(--chrome); border-left:1px solid var(--border); overflow:hidden; display:flex; flex-direction:column; align-items:center; padding-top:11px; gap:11px; transition:width .42s; }
   .bt-demo .win[data-split="1"] .strip{ width:40px; } .bt-demo .win[data-mode="diff"] .strip{ width:0; }
   .bt-demo .strip .si{ color:var(--faint); font-size:15px; }
@@ -205,11 +211,8 @@
       <p class="download-version" id="download-version"></p>
     </section>
 
-    <!-- Interactive demo -->
-    <section style="border-top:none; padding-top:4px;">
-      <div class="section-label">See it in motion</div>
-      <h2 style="margin-bottom:6px;">Not a screenshot — tap a feature.</h2>
-      <p style="color:var(--text-dim); font-size:15px; margin-bottom:26px; max-width:560px;">The real Beecork window, right in your browser: splits, the live diff, the “needs&nbsp;you” signal, and resume.</p>
+    <!-- Interactive product demo -->
+    <section style="border-top:none; padding-top:0;">
       <div class="bt-demo">
         <div class="win" id="win" data-mode="diff" data-split="0">
           <div class="tb">
@@ -258,12 +261,21 @@
                 <div class="row ind">App.tsx</div>
               </div>
               <div class="editor">
-                <div class="dl ctx">  export async function session() {</div>
-                <div class="dl del">-   const t = readToken()</div>
-                <div class="dl add">+   const t = await tokens.current()</div>
-                <div class="dl del">-   return t ?? null</div>
-                <div class="dl add">+   return t</div>
-                <div class="dl ctx">  }</div>
+                <div class="diff-view">
+                  <div class="dl ctx">  export async function session() {</div>
+                  <div class="dl del">-   const t = readToken()</div>
+                  <div class="dl add">+   const t = await tokens.current()</div>
+                  <div class="dl del">-   return t ?? null</div>
+                  <div class="dl add">+   return t</div>
+                  <div class="dl ctx">  }</div>
+                </div>
+                <div class="code-view">
+                  <div class="cl"><span class="kw">export async function</span> <span class="fn">session</span>() {</div>
+                  <div class="cl">  <span class="kw">const</span> t = <span class="kw">await</span> tokens.<span class="fn">current</span>()</div>
+                  <div class="cl">  <span class="kw">if</span> (!t) <span class="kw">return</span> <span class="kw">null</span></div>
+                  <div class="cl">  <span class="kw">return</span> { token: t, at: <span class="fn">Date</span>.<span class="fn">now</span>() }</div>
+                  <div class="cl">}</div>
+                </div>
               </div>
             </div>
             <div class="toast">
@@ -273,12 +285,12 @@
           </div>
         </div>
         <div class="pills" id="pills">
-          <div class="pill-btn" data-mode="diff"><span class="k"></span>Watch it edit, live</div>
+          <div class="pill-btn" data-mode="diff"><span class="k"></span>Live git diff</div>
+          <div class="pill-btn" data-mode="edit"><span class="k"></span>Browse &amp; edit files</div>
           <div class="pill-btn" data-mode="split"><span class="k"></span>Two agents, side by side</div>
           <div class="pill-btn" data-mode="attn"><span class="k"></span>Know when it needs you</div>
           <div class="pill-btn" data-mode="resume"><span class="k"></span>Pick up where you left off</div>
         </div>
-        <div class="hint" id="hint">auto-playing — tap a feature to explore</div>
       </div>
     </section>
 
@@ -440,8 +452,7 @@
     var d1 = document.getElementById('d1'), d2 = document.getElementById('d2');
     var s2 = document.getElementById('s2');
     var right = document.querySelector('.bt-demo .term.right');
-    var hint = document.getElementById('hint');
-    var order = ['diff', 'split', 'attn', 'resume'];
+    var order = ['diff', 'edit', 'split', 'attn', 'resume'];
     var i = 0, timer = null;
 
     function apply(mode) {
@@ -461,14 +472,12 @@
       p.addEventListener('click', function () {
         if (timer) { clearInterval(timer); timer = null; }
         i = order.indexOf(p.dataset.mode); apply(p.dataset.mode);
-        hint.textContent = 'exploring — click another feature, or reload to auto-play';
       });
     });
 
     var reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     apply(order[0]);
-    if (reduce) { hint.textContent = 'tap a feature to see it'; }
-    else { start(); }
+    if (!reduce) start();
   })();
 </script>
 
