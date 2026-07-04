@@ -1,11 +1,13 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { gitStatus, type ChangeStatus, type FileStatus } from "../lib/api";
 import { onFsChanged } from "../lib/events";
 import { useSettings, zoomFont } from "../lib/settings";
 import type { OpenRequest } from "../App";
 import FileTree from "./FileTree";
-import FileEditor from "./FileEditor";
 import ZoomControl from "./ZoomControl";
+// Lazy so the ~750 kB CodeMirror editor stack loads on first file-open, not at
+// app startup (the terminal is the star).
+const FileEditor = lazy(() => import("./FileEditor"));
 import { basename, changedAncestors } from "../lib/paths";
 import { usePersistedState } from "../lib/persist";
 import { useDrag } from "../lib/useDrag";
@@ -207,13 +209,17 @@ export default function SidePanel({ openRequest, root, onFocusSurface, onCollaps
                 onMouseDown={() => setFocused(i)}
               >
                 {p ? (
-                  <FileEditor
-                    key={p}
-                    path={p}
-                    root={root}
-                    line={openRequest?.path === p ? openRequest?.line : undefined}
-                    onFocusSurface={onFocusSurface}
-                  />
+                  <Suspense
+                    fallback={<div className="editor-region editor-empty">Loading editor…</div>}
+                  >
+                    <FileEditor
+                      key={p}
+                      path={p}
+                      root={root}
+                      line={openRequest?.path === p ? openRequest?.line : undefined}
+                      onFocusSurface={onFocusSurface}
+                    />
+                  </Suspense>
                 ) : (
                   <div className="editor-region editor-empty">Select a file to view or edit</div>
                 )}
