@@ -16,7 +16,7 @@ on:
 jobs:
   # Gate: run tests + dependency audits before anything is built and published.
   checks:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
@@ -24,6 +24,18 @@ jobs:
           node-version: 20
           cache: npm
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+      # `cargo test` compiles the Tauri crate, which needs the WebKitGTK/glib
+      # system libs on Linux (same set the release job installs for its ubuntu leg).
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            build-essential \
+            libssl-dev
       - name: Install frontend dependencies
         run: npm ci
       - name: Frontend tests
