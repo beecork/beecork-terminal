@@ -102,6 +102,74 @@
   footer p { color: var(--text-dim); font-size: 13px; }
 
   @media (max-width: 640px) { .features, .download-grid { grid-template-columns: 1fr; } }
+
+  /* ===== interactive product demo (namespaced under .bt-demo) ===== */
+  :root{ --chrome:#141418; --border-2:#2f2f35; --muted:#8b8b96; --faint:#585b70; --blue:#89b4fa; --amber:#fab387; --green:#a6e3a1; --red:#f38ba8; }
+  .bt-demo{ display:flex; flex-direction:column; align-items:center; }
+  .bt-demo .win{ width:100%; border:1px solid var(--border); border-radius:14px; overflow:hidden; background:var(--surface); box-shadow:0 34px 90px -24px rgba(0,0,0,.75), 0 0 0 1px rgba(167,139,250,.05); }
+  .bt-demo .tb{ height:40px; display:flex; align-items:center; gap:13px; padding:0 15px; background:var(--chrome); border-bottom:1px solid var(--border); }
+  .bt-demo .lights{ display:flex; gap:8px; }
+  .bt-demo .lights i{ width:12px; height:12px; border-radius:50%; display:block; }
+  .bt-demo .lights i:nth-child(1){ background:#ff5f57; } .bt-demo .lights i:nth-child(2){ background:#febc2e; } .bt-demo .lights i:nth-child(3){ background:#28c840; }
+  .bt-demo .crumb{ display:flex; align-items:center; gap:7px; color:var(--muted); font-size:13px; }
+  .bt-demo .crumb b{ color:var(--text); font-weight:600; } .bt-demo .crumb .fold{ color:var(--faint); }
+  .bt-demo .tb-split{ margin-left:auto; display:flex; align-items:center; gap:6px; font-size:12px; color:var(--muted); border:1px solid var(--border); border-radius:7px; padding:4px 10px; transition:.25s; }
+  .bt-demo .win[data-split="1"] .tb-split{ color:var(--accent); border-color:var(--accent); background:color-mix(in srgb,var(--accent) 14%,transparent); }
+  .bt-demo .win-body{ display:flex; height:352px; font-family:var(--mono); }
+  .bt-demo .rail{ width:54px; background:var(--chrome); border-right:1px solid var(--border); display:flex; flex-direction:column; align-items:center; padding:10px 0; gap:7px; flex-shrink:0; }
+  .bt-demo .item{ width:38px; height:38px; border-radius:10px; display:flex; align-items:center; justify-content:center; position:relative; color:var(--muted); font-size:13px; transition:background .2s, box-shadow .3s; }
+  .bt-demo .item.active{ background:var(--surface-2); color:var(--text); }
+  .bt-demo .item.attn{ background:color-mix(in srgb,var(--amber) 15%,transparent); box-shadow:inset 2px 0 0 var(--amber); }
+  .bt-demo .dot{ position:absolute; top:5px; right:5px; width:7px; height:7px; border-radius:50%; background:var(--faint); transition:background .35s, box-shadow .35s; }
+  .bt-demo .dot.busy{ background:var(--blue); box-shadow:0 0 7px var(--blue); }
+  .bt-demo .dot.attn{ background:var(--amber); box-shadow:0 0 8px var(--amber); animation:bt-blink 1.05s ease-in-out infinite; }
+  @keyframes bt-blink{ 50%{ opacity:.32; } }
+  .bt-demo .item .add{ color:var(--faint); } .bt-demo .rail .gear{ margin-top:auto; color:var(--faint); font-size:15px; }
+  .bt-demo .stage{ flex:1; display:flex; min-width:0; position:relative; background:var(--surface); }
+  .bt-demo .term{ flex:1; min-width:0; display:flex; flex-direction:column; padding:14px 16px; font-size:12.5px; line-height:1.72; overflow:hidden; position:relative; }
+  .bt-demo .term.right{ flex:0; opacity:0; padding-left:0; padding-right:0; transition:flex .42s cubic-bezier(.4,0,.2,1), opacity .3s; }
+  .bt-demo .win[data-split="1"] .term.right{ flex:1; opacity:1; padding:14px 16px; }
+  .bt-demo .win[data-split="1"] .term.right.focus{ box-shadow:inset 0 0 0 1.5px color-mix(in srgb,var(--accent) 55%,transparent); }
+  .bt-demo .divider{ width:0; background:var(--border); transition:width .42s; } .bt-demo .win[data-split="1"] .divider{ width:1px; }
+  .bt-demo .term .ln{ white-space:pre; }
+  .bt-demo .p{ color:var(--green); } .bt-demo .path{ color:var(--blue); } .bt-demo .cmd{ color:var(--text); }
+  .bt-demo .mut{ color:var(--muted); } .bt-demo .vio{ color:var(--accent-2); } .bt-demo .amb{ color:var(--amber); } .bt-demo .grn{ color:var(--green); } .bt-demo .red{ color:var(--red); } .bt-demo .spin{ color:var(--accent); }
+  .bt-demo .caret{ display:inline-block; width:8px; height:15px; background:var(--accent-2); vertical-align:-2px; animation:bt-caret 1.05s step-end infinite; }
+  @keyframes bt-caret{ 50%{ opacity:0; } }
+  .bt-demo .thinking .spin{ display:inline-block; animation:bt-spin 1s steps(8) infinite; }
+  @keyframes bt-spin{ to{ transform:rotate(360deg); } }
+  .bt-demo .resume{ position:absolute; top:14px; left:50%; transform:translateX(-50%) translateY(-8px); display:inline-flex; align-items:center; gap:7px; padding:6px 14px; border-radius:999px; border:1px solid var(--accent); background:color-mix(in srgb,var(--accent) 20%,var(--chrome)); color:var(--accent-2); font-size:12px; font-weight:600; font-family:var(--sans); opacity:0; pointer-events:none; transition:.35s; z-index:5; box-shadow:0 8px 24px -8px rgba(167,139,250,.5); }
+  .bt-demo .win[data-mode="resume"] .resume{ opacity:1; transform:translateX(-50%) translateY(0); }
+  .bt-demo .win[data-mode="resume"] .term.main .live{ opacity:.32; }
+  .bt-demo .panel{ width:0; flex-shrink:0; background:var(--chrome); border-left:1px solid var(--border); overflow:hidden; transition:width .42s cubic-bezier(.4,0,.2,1); display:flex; flex-direction:column; }
+  .bt-demo .win[data-mode="diff"] .panel{ width:min(290px,42%); } .bt-demo .win[data-split="1"] .panel{ width:0; }
+  .bt-demo .pnl-h{ display:flex; align-items:center; gap:8px; height:34px; padding:0 13px; border-bottom:1px solid var(--border); color:var(--muted); font-size:12px; flex-shrink:0; }
+  .bt-demo .pnl-h .chip{ color:var(--text); font-weight:600; } .bt-demo .pnl-h .pill{ margin-left:auto; font-size:10px; background:color-mix(in srgb,var(--accent) 22%,transparent); color:var(--accent-2); border-radius:20px; padding:1px 7px; }
+  .bt-demo .tree{ padding:9px 11px; font-size:12px; line-height:1.95; color:var(--muted); border-bottom:1px solid var(--border); }
+  .bt-demo .tree .row{ display:flex; align-items:center; gap:7px; white-space:nowrap; }
+  .bt-demo .tree .fdot{ width:6px; height:6px; border-radius:50%; flex-shrink:0; } .bt-demo .tree .fdot.m{ background:var(--amber); } .bt-demo .tree .fdot.a{ background:var(--green); }
+  .bt-demo .tree .ind{ padding-left:15px; } .bt-demo .tree .ind2{ padding-left:30px; } .bt-demo .tree .chg{ color:var(--text); }
+  .bt-demo .editor{ flex:1; padding:9px 0; font-size:11.5px; line-height:1.85; overflow:hidden; }
+  .bt-demo .editor .dl{ padding:0 13px; white-space:pre; }
+  .bt-demo .editor .dl.del{ background:color-mix(in srgb,var(--red) 15%,transparent); color:var(--red); }
+  .bt-demo .editor .dl.add{ background:color-mix(in srgb,var(--green) 14%,transparent); color:var(--green); }
+  .bt-demo .editor .dl.ctx{ color:var(--muted); }
+  .bt-demo .strip{ width:0; flex-shrink:0; background:var(--chrome); border-left:1px solid var(--border); overflow:hidden; display:flex; flex-direction:column; align-items:center; padding-top:11px; gap:11px; transition:width .42s; }
+  .bt-demo .win[data-split="1"] .strip{ width:40px; } .bt-demo .win[data-mode="diff"] .strip{ width:0; }
+  .bt-demo .strip .si{ color:var(--faint); font-size:15px; }
+  .bt-demo .toast{ position:absolute; right:16px; bottom:16px; display:flex; gap:11px; align-items:flex-start; width:250px; padding:12px 13px; border-radius:11px; background:#1c1c22; border:1px solid var(--border-2); box-shadow:0 16px 40px -12px rgba(0,0,0,.7); opacity:0; transform:translateY(12px) scale(.97); transition:.4s cubic-bezier(.34,1.3,.64,1); z-index:8; font-family:var(--sans); }
+  .bt-demo .win[data-mode="attn"] .toast{ opacity:1; transform:translateY(0) scale(1); }
+  .bt-demo .toast .ti{ width:26px; height:26px; border-radius:7px; background:color-mix(in srgb,var(--amber) 22%,transparent); display:flex; align-items:center; justify-content:center; flex-shrink:0; font-size:14px; }
+  .bt-demo .toast b{ font-size:12.5px; display:block; } .bt-demo .toast small{ color:var(--muted); font-size:11.5px; }
+  .bt-demo .pills{ display:flex; flex-wrap:wrap; gap:9px; justify-content:center; margin-top:22px; }
+  .bt-demo .pill-btn{ display:flex; align-items:center; gap:8px; padding:9px 15px; border-radius:11px; cursor:pointer; border:1px solid var(--border); background:var(--surface); color:var(--muted); font-family:var(--sans); font-size:13.5px; font-weight:600; transition:.18s; }
+  .bt-demo .pill-btn:hover{ border-color:var(--text-dim); color:var(--text); }
+  .bt-demo .pill-btn.on{ border-color:var(--accent); color:var(--text); background:color-mix(in srgb,var(--accent) 12%,var(--surface)); box-shadow:0 0 0 1px var(--accent); }
+  .bt-demo .pill-btn .k{ width:8px; height:8px; border-radius:50%; background:var(--faint); transition:.2s; }
+  .bt-demo .pill-btn.on .k{ background:var(--accent); box-shadow:0 0 7px var(--accent); }
+  .bt-demo .hint{ margin-top:14px; color:var(--faint); font-size:12px; font-family:var(--mono); }
+  @media (max-width:640px){ .bt-demo .win-body{ height:300px; } }
+  @media (prefers-reduced-motion:reduce){ .bt-demo *{ transition-duration:.01ms!important; animation:none!important; } }
 </style>
 </head>
 <body>
@@ -135,6 +203,81 @@
       <p class="hero-sub">Beecork Terminal wraps any CLI agent — Claude Code, Codex, your shell — in a full-size terminal, with a live git-aware diff and a file browser/editor right beside it. Run two agents side by side, and see at a glance which one needs you. All native, all fast.</p>
       <a class="btn-primary" id="hero-download" href="#download">Download</a>
       <p class="download-version" id="download-version"></p>
+    </section>
+
+    <!-- Interactive demo -->
+    <section style="border-top:none; padding-top:4px;">
+      <div class="section-label">See it in motion</div>
+      <h2 style="margin-bottom:6px;">Not a screenshot — tap a feature.</h2>
+      <p style="color:var(--text-dim); font-size:15px; margin-bottom:26px; max-width:560px;">The real Beecork window, right in your browser: splits, the live diff, the “needs&nbsp;you” signal, and resume.</p>
+      <div class="bt-demo">
+        <div class="win" id="win" data-mode="diff" data-split="0">
+          <div class="tb">
+            <div class="lights"><i></i><i></i><i></i></div>
+            <div class="crumb">🗂 <b>my-app</b> <span class="fold">— src/auth</span></div>
+            <div class="tb-split">⑃ Split</div>
+          </div>
+          <div class="win-body">
+            <div class="rail">
+              <div class="item active" id="s1">1<span class="dot busy" id="d1"></span></div>
+              <div class="item" id="s2">2<span class="dot" id="d2"></span></div>
+              <div class="item"><span class="add">＋</span></div>
+              <div class="gear">⚙</div>
+            </div>
+            <div class="stage">
+              <div class="term main thinking">
+                <div class="live">
+                  <div class="ln"><span class="p">~/my-app</span> <span class="mut">$</span> <span class="cmd">claude</span></div>
+                  <div class="ln"><span class="vio">✳ Claude Code</span></div>
+                  <div class="ln"><span class="mut">›</span> <span class="cmd">refactor the auth flow to the new token service</span></div>
+                  <div class="ln"><span class="spin">⠿</span> <span class="mut">Editing</span> <span class="path">src/auth/session.ts</span><span class="mut">…</span></div>
+                  <div class="ln"><span class="grn">⏺</span> <span class="mut">Updated</span> <span class="path">src/auth/api.ts</span></div>
+                  <div class="ln"><span class="cmd"></span><span class="caret"></span></div>
+                </div>
+                <div class="resume">⟳ Resume claude</div>
+              </div>
+              <div class="divider"></div>
+              <div class="term right">
+                <div class="ln"><span class="p">~/my-app</span> <span class="mut">$</span> <span class="cmd">claude</span></div>
+                <div class="ln"><span class="mut">›</span> <span class="cmd">add tests for the token service</span></div>
+                <div class="ln"><span class="spin">⠿</span> <span class="mut">Running</span> <span class="cmd">vitest</span><span class="mut">…</span></div>
+                <div class="ln amb">⏺ waiting — approve the new test file? (y/n)</div>
+                <div class="ln"><span class="caret"></span></div>
+              </div>
+            </div>
+            <div class="strip"><div class="si">🗂</div><div class="si">✎</div></div>
+            <div class="panel">
+              <div class="pnl-h">🗂 <span class="chip">Files</span> <span class="pill">2 changed</span></div>
+              <div class="tree">
+                <div class="row">▾ src</div>
+                <div class="row ind">▾ auth</div>
+                <div class="row ind2 chg"><span class="fdot m"></span>session.ts</div>
+                <div class="row ind2 chg"><span class="fdot a"></span>api.ts</div>
+                <div class="row ind">App.tsx</div>
+              </div>
+              <div class="editor">
+                <div class="dl ctx">  export async function session() {</div>
+                <div class="dl del">-   const t = readToken()</div>
+                <div class="dl add">+   const t = await tokens.current()</div>
+                <div class="dl del">-   return t ?? null</div>
+                <div class="dl add">+   return t</div>
+                <div class="dl ctx">  }</div>
+              </div>
+            </div>
+            <div class="toast">
+              <div class="ti">🔔</div>
+              <div><b>Session 2 needs you</b><small>Your agent is waiting for an answer.</small></div>
+            </div>
+          </div>
+        </div>
+        <div class="pills" id="pills">
+          <div class="pill-btn" data-mode="diff"><span class="k"></span>Watch it edit, live</div>
+          <div class="pill-btn" data-mode="split"><span class="k"></span>Two agents, side by side</div>
+          <div class="pill-btn" data-mode="attn"><span class="k"></span>Know when it needs you</div>
+          <div class="pill-btn" data-mode="resume"><span class="k"></span>Pick up where you left off</div>
+        </div>
+        <div class="hint" id="hint">auto-playing — tap a feature to explore</div>
+      </div>
     </section>
 
     <!-- Download -->
@@ -283,6 +426,47 @@
         });
         if (heroBtn) heroBtn.href = 'https://github.com/' + REPO + '/releases/latest';
       });
+  })();
+</script>
+
+<script>
+  // Interactive product demo: auto-cycles feature modes; click a pill to drive it.
+  (function () {
+    var win = document.getElementById('win');
+    if (!win) return;
+    var pills = [].slice.call(document.querySelectorAll('.bt-demo .pill-btn'));
+    var d1 = document.getElementById('d1'), d2 = document.getElementById('d2');
+    var s2 = document.getElementById('s2');
+    var right = document.querySelector('.bt-demo .term.right');
+    var hint = document.getElementById('hint');
+    var order = ['diff', 'split', 'attn', 'resume'];
+    var i = 0, timer = null;
+
+    function apply(mode) {
+      win.dataset.mode = mode;
+      var split = (mode === 'split' || mode === 'attn') ? '1' : '0';
+      win.dataset.split = split;
+      d1.className = (mode === 'resume') ? 'dot' : 'dot busy';
+      d2.className = 'dot' + (split === '1' ? (mode === 'attn' ? ' attn' : ' busy') : '');
+      s2.className = 'item' + (mode === 'attn' ? ' attn' : '');
+      if (right) right.classList.toggle('focus', mode === 'attn');
+      pills.forEach(function (p) { p.classList.toggle('on', p.dataset.mode === mode); });
+    }
+    function play() { i = (i + 1) % order.length; apply(order[i]); }
+    function start() { if (timer) clearInterval(timer); timer = setInterval(play, 3600); }
+
+    pills.forEach(function (p) {
+      p.addEventListener('click', function () {
+        if (timer) { clearInterval(timer); timer = null; }
+        i = order.indexOf(p.dataset.mode); apply(p.dataset.mode);
+        hint.textContent = 'exploring — click another feature, or reload to auto-play';
+      });
+    });
+
+    var reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    apply(order[0]);
+    if (reduce) { hint.textContent = 'tap a feature to see it'; }
+    else { start(); }
   })();
 </script>
 
