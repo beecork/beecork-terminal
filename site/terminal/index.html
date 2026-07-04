@@ -115,7 +115,7 @@
   .bt-demo .crumb b{ color:var(--text); font-weight:600; } .bt-demo .crumb .fold{ color:var(--faint); }
   .bt-demo .tb-split{ margin-left:auto; display:flex; align-items:center; gap:6px; font-size:12px; color:var(--muted); border:1px solid var(--border); border-radius:7px; padding:4px 10px; transition:.25s; }
   .bt-demo .win[data-split="1"] .tb-split{ color:var(--accent); border-color:var(--accent); background:color-mix(in srgb,var(--accent) 14%,transparent); }
-  .bt-demo .win-body{ display:flex; height:352px; font-family:var(--mono); }
+  .bt-demo .win-body{ display:flex; height:352px; font-family:var(--mono); position:relative; }
   .bt-demo .rail{ width:54px; background:var(--chrome); border-right:1px solid var(--border); display:flex; flex-direction:column; align-items:center; padding:10px 0; gap:7px; flex-shrink:0; }
   .bt-demo .item{ width:38px; height:38px; border-radius:10px; display:flex; align-items:center; justify-content:center; position:relative; color:var(--muted); font-size:13px; transition:background .2s, box-shadow .3s; }
   .bt-demo .item.active{ background:var(--surface-2); color:var(--text); }
@@ -230,8 +230,10 @@
                   <div class="ln"><span class="p">~/my-app</span> <span class="mut">$</span> <span class="cmd">claude</span></div>
                   <div class="ln"><span class="vio">✳ Claude Code</span></div>
                   <div class="ln"><span class="mut">›</span> <span class="cmd">refactor the auth flow to the new token service</span></div>
-                  <div class="ln"><span class="spin">⠿</span> <span class="mut">Editing</span> <span class="path">src/auth/session.ts</span><span class="mut">…</span></div>
                   <div class="ln"><span class="grn">⏺</span> <span class="mut">Updated</span> <span class="path">src/auth/api.ts</span></div>
+                  <div class="ln"><span class="grn">⏺</span> <span class="mut">Updated</span> <span class="path">src/auth/session.ts</span></div>
+                  <div class="ln"><span class="spin">⠿</span> <span class="mut">Editing</span> <span class="path">src/auth/tokens.ts</span><span class="mut">…</span></div>
+                  <div class="ln"><span class="mut">  +18 −6 · 3 files changed</span></div>
                   <div class="ln"><span class="cmd"></span><span class="caret"></span></div>
                 </div>
                 <div class="resume">⟳ Resume claude</div>
