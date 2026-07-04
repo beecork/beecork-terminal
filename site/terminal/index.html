@@ -132,7 +132,7 @@
       <img class="mark" src="/logo.svg" alt="Beecork Terminal">
       <div class="hero-badge">open source · macOS · Windows · Linux</div>
       <h1>A cockpit for your<br><span class="accent">coding agent.</span></h1>
-      <p class="hero-sub">Beecork Terminal wraps any CLI agent — Claude Code, Codex, your shell — in a full-size terminal, with a live git-aware diff view and a file browser/editor right beside it. Sessions, splits, themes, all native and fast.</p>
+      <p class="hero-sub">Beecork Terminal wraps any CLI agent — Claude Code, Codex, your shell — in a full-size terminal, with a live git-aware diff and a file browser/editor right beside it. Run two agents side by side, and see at a glance which one needs you. All native, all fast.</p>
       <a class="btn-primary" id="hero-download" href="#download">Download</a>
       <p class="download-version" id="download-version"></p>
     </section>
@@ -174,24 +174,28 @@
           <p>A real, GPU-rendered terminal running your login shell — launch <code style="font-family:var(--mono);color:var(--accent-2)">claude</code> or any CLI agent and work full-size.</p>
         </div>
         <div class="feature">
-          <h3>Live diff view</h3>
-          <p>As the agent edits, the file tree colors changed folders and files, and each file shows a line-level diff against git.</p>
+          <h3>Live git-aware diff</h3>
+          <p>As the agent edits, the file tree colors changed folders and files and each shows a line-level diff against git — and it follows the terminal as you <code style="font-family:var(--mono);color:var(--accent-2)">cd</code> between repos.</p>
+        </div>
+        <div class="feature">
+          <h3>Two agents, side by side</h3>
+          <p>Split the view with ⌘D and supervise two sessions at once. Pairs are remembered per session, and the side panels step aside so both terminals get room.</p>
+        </div>
+        <div class="feature">
+          <h3>Know which agent needs you</h3>
+          <p>Every session shows its state at a glance — working, idle, or waiting on you (a soft amber). When a background agent finishes or asks while you're in another app, a native notification pings you.</p>
+        </div>
+        <div class="feature">
+          <h3>Picks up where you left off</h3>
+          <p>Quit and reopen and your sessions come back — same folders, same split layout. If a session was running Claude, one click resumes the conversation with <code style="font-family:var(--mono);color:var(--accent-2)">claude --continue</code>.</p>
         </div>
         <div class="feature">
           <h3>File browser + editor</h3>
-          <p>An expandable side panel: browse the folder, open files, edit with syntax highlighting, split into two views.</p>
+          <p>An expandable side panel: browse the folder, open files, edit with syntax highlighting, and save safely — it warns instead of clobbering when a file changed underneath you. Click a <code style="font-family:var(--mono);color:var(--accent-2)">file:line</code> in output to jump to it; ⌘F searches scrollback.</p>
         </div>
         <div class="feature">
-          <h3>Sessions that stay alive</h3>
-          <p>A left rail of terminal sessions — each keeps running in the background. Rename them, pin the rail, ⌘T for a new one.</p>
-        </div>
-        <div class="feature">
-          <h3>Clickable & searchable</h3>
-          <p>Click a <code style="font-family:var(--mono);color:var(--accent-2)">file:line</code> in output to open it. ⌘F to search scrollback. Alerts when a background agent needs you.</p>
-        </div>
-        <div class="feature">
-          <h3>Lean &amp; themeable</h3>
-          <p>Built with Tauri — a small, fast native app. Multiple color themes, adjustable font, tuned for how you work.</p>
+          <h3>Lean, native, self-updating</h3>
+          <p>Built with Tauri — small and fast, not a browser in disguise. Multiple color themes, adjustable fonts, and it updates itself when a new version ships.</p>
         </div>
       </div>
     </section>

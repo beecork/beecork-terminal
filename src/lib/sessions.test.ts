@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { displayName, wantsAttention, type Session } from "./sessions";
+import { displayName, wantsAttention, resumeCommand, type Session } from "./sessions";
 
 describe("displayName", () => {
   const base: Session = { id: "1", name: "Session 1" };
@@ -56,5 +56,16 @@ describe("wantsAttention", () => {
 
   it("does not fire while a command keeps running", () => {
     expect(wantsAttention("claude", "claude", false)).toBe(false);
+  });
+});
+
+describe("resumeCommand", () => {
+  it("knows how to resume Claude Code and Codex", () => {
+    expect(resumeCommand("claude")).toBe("claude --continue");
+    expect(resumeCommand("codex")).toBe("codex resume");
+  });
+
+  it("falls back to <agent> --continue for anything else", () => {
+    expect(resumeCommand("aider")).toBe("aider --continue");
   });
 });

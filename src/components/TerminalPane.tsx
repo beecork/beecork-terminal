@@ -7,6 +7,7 @@ import { invoke, Channel } from "@tauri-apps/api/core";
 import { getRoot } from "../lib/api";
 import { useSettings, zoomFont, type Surface } from "../lib/settings";
 import { decodeBase64, PATH_RE, looksLikePath, splitFileLine, parseOsc7 } from "../lib/paths";
+import { resumeCommand } from "../lib/sessions";
 import ZoomControl from "./ZoomControl";
 import { Close } from "./icons";
 import "@xterm/xterm/css/xterm.css";
@@ -37,6 +38,10 @@ interface Props {
   onFocusSurface: (s: Surface) => void;
   /** if set, show a close-session ✕ in the terminal (single view only) */
   onRequestClose?: () => void;
+  /** on a restored session, the agent to offer resuming (e.g. "claude") */
+  resumeAgent?: string;
+  /** called when the resume offer is used or dismissed (they started typing) */
+  onResumeConsumed: (id: string) => void;
 }
 
 export default function TerminalPane({
@@ -53,6 +58,8 @@ export default function TerminalPane({
   onActivity,
   onFocusSurface,
   onRequestClose,
+  resumeAgent,
+  onResumeConsumed,
 }: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
@@ -61,6 +68,8 @@ export default function TerminalPane({
   const rootRef = useRef<string | null>(null);
   const activeRef = useRef(active);
   activeRef.current = active;
+  const resumeRef = useRef(resumeAgent);
+  resumeRef.current = resumeAgent;
   // Revive a pane whose shell exited: restartRef re-spawns, exitedRef gates input.
   const restartRef = useRef<(() => void) | null>(null);
   const exitedRef = useRef(false);
@@ -73,8 +82,8 @@ export default function TerminalPane({
   lookRef.current = { theme, settings };
 
   // Callbacks captured in refs so the mount effect always sees current ones.
-  const cbRef = useRef({ onOpenPath, onBell, onSeen, onTitle, onCwd, onStatusHint, onActivity });
-  cbRef.current = { onOpenPath, onBell, onSeen, onTitle, onCwd, onStatusHint, onActivity };
+  const cbRef = useRef({ onOpenPath, onBell, onSeen, onTitle, onCwd, onStatusHint, onActivity, onResumeConsumed });
+  cbRef.current = { onOpenPath, onBell, onSeen, onTitle, onCwd, onStatusHint, onActivity, onResumeConsumed };
 
   const [showSearch, setShowSearch] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
@@ -241,6 +250,8 @@ export default function TerminalPane({
         restartRef.current?.();
         return;
       }
+      // Typing your own command dismisses the restored-session Resume offer.
+      if (resumeRef.current) cbRef.current.onResumeConsumed(sessionId);
       invoke("pty_write", { id: sessionId, data }).catch(() => {});
     });
     const resizeSub = term.onResize(({ cols, rows }) =>
@@ -351,6 +362,19 @@ export default function TerminalPane({
       {onRequestClose && (
         <button className="term-close" title="Close session" onClick={onRequestClose}>
           <Close size={14} />
+        </button>
+      )}
+      {resumeAgent && visible && (
+        <button
+          className="term-resume"
+          title={`Run "${resumeCommand(resumeAgent)}" to pick this agent back up`}
+          onClick={() => {
+            invoke("pty_write", { id: sessionId, data: resumeCommand(resumeAgent) + "\r" }).catch(() => {});
+            onResumeConsumed(sessionId);
+            termRef.current?.focus();
+          }}
+        >
+          ⟳ Resume {resumeAgent}
         </button>
       )}
       {active && (

@@ -64,6 +64,7 @@ export default function App() {
     setDynamic,
     setCwd,
     setRunning,
+    clearResume,
     pairSessions,
     unpairSession,
   } = useSessions();
@@ -323,6 +324,8 @@ export default function App() {
                   onActivity={onActivity}
                   onFocusSurface={onFocusSurface}
                   onRequestClose={!split && isFocused ? () => requestClose(s.id) : undefined}
+                  resumeAgent={s.resumeAgent}
+                  onResumeConsumed={clearResume}
                 />
               </div>
             );

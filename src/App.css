@@ -340,6 +340,33 @@ body {
   border-color: #f38ba8;
 }
 
+/* Restored-session "Resume <agent>" pill — a visible call to action (not hover-
+   gated like the close ✕), top-center, dismissed once used or once you type. */
+.term-resume {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 16;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 18%, var(--panel-header));
+  backdrop-filter: blur(4px);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.12s, transform 0.12s;
+}
+.term-resume:hover {
+  background: color-mix(in srgb, var(--accent) 30%, var(--panel-header));
+  transform: translateX(-50%) translateY(-1px);
+}
+
 /* ---- workspace layout ---- */
 .workspace {
   display: flex;

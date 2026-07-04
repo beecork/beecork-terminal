@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { basename } from "./paths";
+import { lsGet, lsSet } from "./persist";
 
 export interface Session {
   id: string;
@@ -17,6 +18,17 @@ export interface Session {
   startCwd?: string;
   /** the session this one is paired with in split view (symmetric + remembered) */
   partner?: string;
+  /** on a restored session, the agent that was running — we offer to resume it */
+  resumeAgent?: string;
+}
+
+/** The shell command that resumes a given agent's last conversation. */
+export function resumeCommand(agent: string): string {
+  const map: Record<string, string> = {
+    claude: "claude --continue",
+    codex: "codex resume",
+  };
+  return map[agent] ?? `${agent} --continue`;
 }
 
 /** Priority: your rename → terminal title → running tool → folder → base name. */
@@ -65,17 +77,91 @@ function patchSession<K extends keyof Session>(
   return next;
 }
 
+const PERSIST_KEY = "beecork.sessions.v1";
+
+interface PersistedSession {
+  id: string;
+  name: string;
+  custom?: string;
+  cwd?: string;
+  partner?: string;
+  /** the agent detected running when we saved — used later to offer "Resume". */
+  agent?: string;
+}
+interface PersistedState {
+  sessions: PersistedSession[];
+  activeId: string;
+  nextNum: number;
+}
+
+/** Read the saved session layout (null on first run / disabled / corrupt storage). */
+function loadSessions(): PersistedState | null {
+  const raw = lsGet(PERSIST_KEY);
+  if (!raw) return null;
+  try {
+    const p = JSON.parse(raw) as PersistedState;
+    if (p && Array.isArray(p.sessions) && p.sessions.length && typeof p.activeId === "string") {
+      return p;
+    }
+  } catch {
+    /* corrupt — ignore and start fresh */
+  }
+  return null;
+}
+
 export function useSessions() {
-  const nextNum = useRef(2);
-  const [sessions, setSessions] = useState<Session[]>(() => [
-    { id: uid(), name: "Session 1" },
-  ]);
-  const [activeId, setActiveId] = useState<string>(() => sessions[0].id);
+  // Restore the previous layout once (sessions, names, cwds, split pairing); each
+  // pane re-opens its shell in the saved cwd via startCwd. `running`/`dynamic` are
+  // live-only and intentionally not restored.
+  const [initial] = useState(() => {
+    const restored = loadSessions();
+    if (restored) {
+      const sessions: Session[] = restored.sessions.map((s) => ({
+        id: s.id,
+        name: s.name,
+        custom: s.custom,
+        cwd: s.cwd,
+        startCwd: s.cwd,
+        partner: s.partner,
+        resumeAgent: s.agent,
+      }));
+      const activeId = sessions.some((s) => s.id === restored.activeId)
+        ? restored.activeId
+        : sessions[0].id;
+      return { sessions, activeId, nextNum: restored.nextNum ?? 2 };
+    }
+    const id = uid();
+    return { sessions: [{ id, name: "Session 1" }] as Session[], activeId: id, nextNum: 2 };
+  });
+
+  const nextNum = useRef(initial.nextNum);
+  const [sessions, setSessions] = useState<Session[]>(initial.sessions);
+  const [activeId, setActiveId] = useState<string>(initial.activeId);
 
   useEffect(() => {
     if (sessions.length && !sessions.some((s) => s.id === activeId)) {
       setActiveId(sessions[0].id);
     }
+  }, [sessions, activeId]);
+
+  // Persist the layout so a relaunch restores your sessions. Runs only on real
+  // changes (patchSession keeps the poll from churning the list).
+  useEffect(() => {
+    lsSet(
+      PERSIST_KEY,
+      JSON.stringify({
+        sessions: sessions.map((s) => ({
+          id: s.id,
+          name: s.name,
+          custom: s.custom,
+          cwd: s.cwd,
+          partner: s.partner,
+          agent: s.running ?? s.resumeAgent,
+        })),
+        activeId,
+        nextNum: nextNum.current,
+      } satisfies PersistedState)
+    );
   }, [sessions, activeId]);
 
   // Returns the new session's id. `activate` (default true) also switches to it;
@@ -115,6 +201,12 @@ export function useSessions() {
     setSessions((prev) => patchSession(prev, id, "running", running));
   }, []);
 
+  // Dismiss a restored session's "Resume" offer (they resumed it, or started
+  // typing their own thing).
+  const clearResume = useCallback((id: string) => {
+    setSessions((prev) => patchSession(prev, id, "resumeAgent", undefined));
+  }, []);
+
   // Pair two sessions for split view. Symmetric and degree-≤1: each session has
   // at most one partner, so pairing a or b dissolves whatever they were paired
   // with before.
@@ -152,6 +244,7 @@ export function useSessions() {
     setDynamic,
     setCwd,
     setRunning,
+    clearResume,
     pairSessions,
     unpairSession,
   };
