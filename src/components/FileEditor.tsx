@@ -5,6 +5,7 @@ import { oneDark } from "@codemirror/theme-one-dark";
 import { unifiedMergeView } from "@codemirror/merge";
 import type { Extension } from "@codemirror/state";
 import { readFile, writeFile, gitFileOriginal } from "../lib/api";
+import { basename } from "../lib/paths";
 import { languageFor } from "../lib/language";
 import { onFsChanged } from "../lib/events";
 import { useSettings } from "../lib/settings";
@@ -119,7 +120,7 @@ export default function FileEditor({
     ...(showDiff ? [unifiedMergeView({ original: original!, mergeControls: false })] : []),
   ];
 
-  const name = path.split("/").pop() ?? path;
+  const name = basename(path);
 
   return (
     <div

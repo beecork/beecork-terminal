@@ -7,6 +7,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { lsGet, lsSet } from "./persist";
 
 export interface TerminalTheme {
   background: string;
@@ -161,27 +162,40 @@ const DEFAULTS: Settings = {
 const STORAGE_KEY = "beecork.settings";
 
 function load(): Settings {
+  const raw = lsGet(STORAGE_KEY);
+  if (!raw) return DEFAULTS;
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      // Migrate the old single `fontSize` into both surfaces.
-      if (typeof parsed.fontSize === "number") {
-        if (parsed.terminalFontSize == null) parsed.terminalFontSize = parsed.fontSize;
-        if (parsed.editorFontSize == null) parsed.editorFontSize = parsed.fontSize;
-        delete parsed.fontSize;
-      }
-      return { ...DEFAULTS, ...parsed };
+    const parsed = JSON.parse(raw);
+    // Migrate the old single `fontSize` into both surfaces.
+    if (typeof parsed.fontSize === "number") {
+      if (parsed.terminalFontSize == null) parsed.terminalFontSize = parsed.fontSize;
+      if (parsed.editorFontSize == null) parsed.editorFontSize = parsed.fontSize;
+      delete parsed.fontSize;
     }
+    return { ...DEFAULTS, ...parsed };
   } catch {
-    /* ignore */
+    return DEFAULTS;
   }
-  return DEFAULTS;
 }
 
 export const clampFont = (n: number) => Math.min(MAX_FONT, Math.max(MIN_FONT, n));
 
 type Patch = Partial<Settings> | ((s: Settings) => Partial<Settings>);
+
+export type Surface = "terminal" | "editor";
+
+/**
+ * Zoom a surface's font: `step` of ±1 nudges (clamped), "reset" returns to the
+ * default. Single source of the clamp/reset logic shared by the zoom buttons
+ * and the ⌘+/⌘−/⌘0 keyboard handler.
+ */
+export function zoomFont(update: (patch: Patch) => void, surface: Surface, step: number | "reset") {
+  update((s) => {
+    const cur = surface === "editor" ? s.editorFontSize : s.terminalFontSize;
+    const next = step === "reset" ? DEFAULT_FONT_SIZE : clampFont(cur + step);
+    return surface === "editor" ? { editorFontSize: next } : { terminalFontSize: next };
+  });
+}
 
 interface Ctx {
   settings: Settings;
@@ -212,11 +226,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     // seamlessly during a resize (no seam/flash when the panel opens or closes).
     root.style.setProperty("--term-bg", theme.terminal.background);
     root.setAttribute("data-theme", theme.editor);
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
-    } catch {
-      /* ignore */
-    }
+    lsSet(STORAGE_KEY, JSON.stringify(settings));
   }, [theme, settings]);
 
   // Stable identity — it only uses the functional setState updater, so effects

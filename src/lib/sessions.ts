@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { basename } from "./paths";
 
 export interface Session {
   id: string;
@@ -14,11 +15,6 @@ export interface Session {
   running?: string;
   /** directory the shell should start in (inherited from the active session) */
   startCwd?: string;
-}
-
-function basename(p: string): string {
-  const parts = p.split("/").filter(Boolean);
-  return parts[parts.length - 1] ?? p;
 }
 
 /** Priority: your rename → terminal title → running tool → folder → base name. */

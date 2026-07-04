@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { displayName, type Session } from "../lib/sessions";
 import { Plus, Close, Pencil, Chevron, Gear } from "./icons";
+import RenameInput from "./RenameInput";
 
 interface Props {
   sessions: Session[];
@@ -36,16 +37,6 @@ export default function SessionRail({
   onOpenSettings,
 }: Props) {
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [editValue, setEditValue] = useState("");
-
-  function startRename(s: Session) {
-    setEditingId(s.id);
-    setEditValue(displayName(s));
-  }
-  function commitRename() {
-    if (editingId) onRename(editingId, editValue);
-    setEditingId(null);
-  }
 
   return (
     <div className={`session-rail ${expanded ? "expanded" : "collapsed"}`}>
@@ -74,23 +65,20 @@ export default function SessionRail({
               key={s.id}
               className={`rail-item${isActive ? " active" : ""}`}
               onClick={() => onSelect(s.id)}
-              onDoubleClick={() => expanded && startRename(s)}
+              onDoubleClick={() => expanded && setEditingId(s.id)}
               title={expanded ? name : `${i + 1}. ${name}`}
             >
               <span className={dotClass(isActive, isBusy, wants)} />
               {expanded ? (
                 editing ? (
-                  <input
+                  <RenameInput
                     className="rail-rename"
-                    autoFocus
-                    value={editValue}
-                    onClick={(e) => e.stopPropagation()}
-                    onChange={(e) => setEditValue(e.target.value)}
-                    onBlur={commitRename}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") commitRename();
-                      else if (e.key === "Escape") setEditingId(null);
+                    initialValue={name}
+                    onCommit={(v) => {
+                      onRename(s.id, v);
+                      setEditingId(null);
                     }}
+                    onCancel={() => setEditingId(null)}
                   />
                 ) : (
                   <>
@@ -100,7 +88,7 @@ export default function SessionRail({
                       title="Rename"
                       onClick={(e) => {
                         e.stopPropagation();
-                        startRename(s);
+                        setEditingId(s.id);
                       }}
                     >
                       <Pencil size={13} />

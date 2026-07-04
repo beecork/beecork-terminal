@@ -7,10 +7,14 @@ import SettingsModal from "./components/SettingsModal";
 import SessionRail from "./components/SessionRail";
 import UpdateBanner from "./components/UpdateBanner";
 import ConfirmModal from "./components/ConfirmModal";
+import RenameInput from "./components/RenameInput";
 import { Folder, Chevron, Pencil } from "./components/icons";
 import { useSessions, displayName, wantsAttention, type Session } from "./lib/sessions";
+import { basename } from "./lib/paths";
+import { usePersistedState } from "./lib/persist";
+import { useDrag } from "./lib/useDrag";
 import { getRoot, ptyStatus, ptyStatusAll, type PtyStatus } from "./lib/api";
-import { useSettings, clampFont, DEFAULT_FONT_SIZE } from "./lib/settings";
+import { useSettings, zoomFont } from "./lib/settings";
 import "./App.css";
 
 export interface OpenRequest {
@@ -42,17 +46,14 @@ export default function App() {
   const [terminalCwd, setTerminalCwd] = useState<string | null>(null);
   const [wantsYou, setWantsYou] = useState<Set<string>>(() => new Set());
   const [confirmClose, setConfirmClose] = useState<Session | null>(null);
-  const [railExpanded, setRailExpanded] = useState<boolean>(() => {
-    try {
-      return localStorage.getItem("beecork.railExpanded") === "1";
-    } catch {
-      return false;
-    }
-  });
+  const [railExpanded, setRailExpanded] = usePersistedState(
+    "beecork.railExpanded",
+    false,
+    (r) => r === "1",
+    (v) => (v ? "1" : "0")
+  );
   const [editingTop, setEditingTop] = useState(false);
-  const [topEditValue, setTopEditValue] = useState("");
 
-  const dragging = useRef(false);
   const reqN = useRef(0);
   const zoomTargetRef = useRef<Surface>("terminal");
   const prevRunning = useRef<Record<string, string | undefined>>({});
@@ -84,7 +85,7 @@ export default function App() {
     const s = sessions.find((x) => x.id === activeId);
     return s ? displayName(s) : "Beecork Terminal";
   })();
-  const cwdName = terminalCwd ? terminalCwd.split("/").filter(Boolean).pop() ?? "" : "";
+  const cwdName = terminalCwd ? basename(terminalCwd) : "";
 
   const newSession = useCallback(
     () => create(cwdBySession.current[activeIdRef.current]),
@@ -206,51 +207,20 @@ export default function App() {
       const isZero = e.key === "0";
       if (!isPlus && !isMinus && !isZero) return;
       e.preventDefault();
-      const editor = zoomTargetRef.current === "editor";
-      update((s) => {
-        const cur = editor ? s.editorFontSize : s.terminalFontSize;
-        const next = isZero ? DEFAULT_FONT_SIZE : clampFont(cur + (isPlus ? 1 : -1));
-        return editor ? { editorFontSize: next } : { terminalFontSize: next };
-      });
+      zoomFont(update, zoomTargetRef.current, isZero ? "reset" : isPlus ? 1 : -1);
     }
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
   }, [update]);
 
   useEffect(() => {
-    try {
-      localStorage.setItem("beecork.railExpanded", railExpanded ? "1" : "0");
-    } catch {
-      /* ignore */
-    }
-  }, [railExpanded]);
-
-  useEffect(() => {
     getCurrentWindow().setTitle(`${activeName} — Beecork`).catch(() => {});
   }, [activeName]);
 
-  useEffect(() => {
-    function move(e: MouseEvent) {
-      if (!dragging.current) return;
-      const w = window.innerWidth - e.clientX;
-      setPanelWidth(Math.min(Math.max(w, 240), window.innerWidth - 360));
-    }
-    function up() {
-      dragging.current = false;
-      document.body.style.cursor = "";
-    }
-    window.addEventListener("mousemove", move);
-    window.addEventListener("mouseup", up);
-    return () => {
-      window.removeEventListener("mousemove", move);
-      window.removeEventListener("mouseup", up);
-    };
-  }, []);
-
-  function commitTopRename() {
-    rename(activeId, topEditValue);
-    setEditingTop(false);
-  }
+  const startPanelDrag = useDrag((e) => {
+    const w = window.innerWidth - e.clientX;
+    setPanelWidth(Math.min(Math.max(w, 240), window.innerWidth - 360));
+  }, "col-resize");
 
   return (
     <div className="app-root">
@@ -263,25 +233,20 @@ export default function App() {
             <Folder size={14} />
           </span>
           {editingTop ? (
-            <input
+            <RenameInput
               className="tb-edit"
-              autoFocus
-              value={topEditValue}
-              onChange={(e) => setTopEditValue(e.target.value)}
-              onBlur={commitTopRename}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") commitTopRename();
-                else if (e.key === "Escape") setEditingTop(false);
+              initialValue={activeName}
+              onCommit={(v) => {
+                rename(activeId, v);
+                setEditingTop(false);
               }}
+              onCancel={() => setEditingTop(false)}
             />
           ) : (
             <span
               className="tb-name"
               title="Double-click to rename"
-              onDoubleClick={() => {
-                setTopEditValue(activeName);
-                setEditingTop(true);
-              }}
+              onDoubleClick={() => setEditingTop(true)}
             >
               {activeName}
             </span>
@@ -336,14 +301,7 @@ export default function App() {
 
         {panelOpen ? (
           <>
-            <div
-              className="divider"
-              onMouseDown={(e) => {
-                dragging.current = true;
-                document.body.style.cursor = "col-resize";
-                e.preventDefault();
-              }}
-            >
+            <div className="divider" onMouseDown={startPanelDrag}>
               <span className="divider-grip" />
             </div>
             <div className="side-panel" style={{ width: panelWidth }}>

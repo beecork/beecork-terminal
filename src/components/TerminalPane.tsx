@@ -5,39 +5,14 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import { SearchAddon } from "@xterm/addon-search";
 import { invoke, Channel } from "@tauri-apps/api/core";
 import { getRoot } from "../lib/api";
-import { useSettings, clampFont } from "../lib/settings";
+import { useSettings, zoomFont } from "../lib/settings";
+import { decodeBase64, PATH_RE, looksLikePath, splitFileLine, parseOsc7 } from "../lib/paths";
+import ZoomControl from "./ZoomControl";
 import "@xterm/xterm/css/xterm.css";
 
 type PtyEvent =
   | { event: "output"; data: string }
   | { event: "exit"; data: number };
-
-function decodeBase64(b64: string): Uint8Array {
-  const bin = atob(b64);
-  const arr = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
-  return arr;
-}
-
-const PATH_RE = /(?:[\w.@~-]+\/)*[\w.@~-]+\.[A-Za-z]{1,10}(?::\d+(?::\d+)?)?/g;
-const CODE_EXT =
-  /\.(ts|tsx|js|jsx|mjs|cjs|json|rs|py|css|scss|less|html|md|txt|go|java|c|cc|cpp|h|hpp|toml|yml|yaml|sh|lock|rb|php|swift|kt|sql|vue|svelte)$/i;
-
-function looksLikePath(token: string): boolean {
-  const noPos = token.replace(/:\d+(?::\d+)?$/, "");
-  return token.includes("/") || CODE_EXT.test(noPos);
-}
-
-function parseOsc7(data: string): string | null {
-  // OSC 7 payload: file://<host>/<absolute-path> (percent-encoded).
-  const m = data.match(/^file:\/\/[^/]*(\/.*)$/);
-  if (!m) return null;
-  try {
-    return decodeURIComponent(m[1]);
-  } catch {
-    return m[1];
-  }
-}
 
 interface Props {
   sessionId: string;
@@ -99,13 +74,7 @@ export default function TerminalPane({
   }, []);
 
   function openToken(token: string) {
-    let file = token;
-    let line: number | undefined;
-    const pos = token.match(/:(\d+)(?::\d+)?$/);
-    if (pos && pos.index !== undefined) {
-      file = token.slice(0, pos.index);
-      line = parseInt(pos[1], 10);
-    }
+    const { file, line } = splitFileLine(token);
     let abs = file;
     if (!file.startsWith("/")) {
       const root = rootRef.current;
@@ -358,27 +327,12 @@ export default function TerminalPane({
     <div className="terminal-wrap" onFocusCapture={() => onFocusSurface("terminal")}>
       <div className="terminal-host" ref={hostRef} />
       {active && (
-        <div className="zoom-ctl term-zoom">
-          <button
-            className="zoom-btn"
-            title="Zoom out (⌘−)"
-            onClick={() =>
-              update((s) => ({ terminalFontSize: clampFont(s.terminalFontSize - 1) }))
-            }
-          >
-            −
-          </button>
-          <span className="zoom-size">{settings.terminalFontSize}</span>
-          <button
-            className="zoom-btn"
-            title="Zoom in (⌘+)"
-            onClick={() =>
-              update((s) => ({ terminalFontSize: clampFont(s.terminalFontSize + 1) }))
-            }
-          >
-            +
-          </button>
-        </div>
+        <ZoomControl
+          className="term-zoom"
+          size={settings.terminalFontSize}
+          onDec={() => zoomFont(update, "terminal", -1)}
+          onInc={() => zoomFont(update, "terminal", 1)}
+        />
       )}
       {showSearch && active && (
         <div className="term-search">
