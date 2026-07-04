@@ -223,6 +223,9 @@ export default function TerminalPane({
         // pane: mark it exited so a keypress retries, and say what happened.
         console.error("pty_spawn failed", e);
         exitedRef.current = true;
+        // The usual cause is a gone directory — clear it so the retry falls back
+        // to startCwd / root instead of failing on the same dead cwd forever.
+        lastCwdRef.current = null;
         term.write(`\r\n\x1b[31m[failed to start shell: ${e} — press any key to retry]\x1b[0m\r\n`);
       });
     };

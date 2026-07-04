@@ -217,15 +217,6 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey, true);
   }, [update]);
 
-  // Drop the stale key from the removed rail-pin feature (one-time cleanup).
-  useEffect(() => {
-    try {
-      localStorage.removeItem("beecork.railPinned");
-    } catch {
-      /* ignore */
-    }
-  }, []);
-
   useEffect(() => {
     try {
       localStorage.setItem("beecork.railExpanded", railExpanded ? "1" : "0");

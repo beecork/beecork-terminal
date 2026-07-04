@@ -25,15 +25,6 @@ export function Gear({ size, ...p }: P) {
   );
 }
 
-export function PanelToggle({ size, ...p }: P) {
-  return (
-    <svg {...svg(size, p)}>
-      <rect x="3" y="4" width="18" height="16" rx="2" />
-      <path d="M15 4v16" />
-    </svg>
-  );
-}
-
 export function Refresh({ size, ...p }: P) {
   return (
     <svg {...svg(size, p)}>

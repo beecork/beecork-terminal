@@ -64,14 +64,12 @@ export default function UpdateBanner() {
     <div className="update-banner">
       <span className="ub-text">
         {state === "error"
-          ? "Update failed — try again later."
+          ? "Update failed."
           : `Beecork Terminal ${update.version} is available.`}
       </span>
-      {state !== "error" && (
-        <button className="ub-install" onClick={install} disabled={state === "installing"}>
-          {state === "installing" ? "Installing…" : "Install & Restart"}
-        </button>
-      )}
+      <button className="ub-install" onClick={install} disabled={state === "installing"}>
+        {state === "installing" ? "Installing…" : state === "error" ? "Retry" : "Install & Restart"}
+      </button>
       <button className="ub-dismiss" onClick={dismiss} title="Dismiss">
         ✕
       </button>

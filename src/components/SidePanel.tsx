@@ -16,7 +16,6 @@ interface Props {
   onCollapse: () => void;
 }
 
-type Orientation = "vertical" | "horizontal";
 type PanelLayout = "stacked" | "sideBySide";
 
 export default function SidePanel({ openRequest, root, onFocusSurface, onCollapse }: Props) {
@@ -26,7 +25,6 @@ export default function SidePanel({ openRequest, root, onFocusSurface, onCollaps
 
   const [panes, setPanes] = useState<(string | null)[]>([null]);
   const [focused, setFocused] = useState(0);
-  const [orientation, setOrientation] = useState<Orientation>("vertical");
   const [panelLayout, setPanelLayout] = useState<PanelLayout>(() => {
     try {
       return localStorage.getItem("beecork.panelLayout") === "sideBySide"
@@ -250,24 +248,6 @@ export default function SidePanel({ openRequest, root, onFocusSurface, onCollaps
                   +
                 </button>
               </div>
-              {split && (
-                <div className="seg" title="Split orientation">
-                  <button
-                    className={orientation === "vertical" ? "on" : ""}
-                    title="Stacked (rows)"
-                    onClick={() => setOrientation("vertical")}
-                  >
-                    <LayoutRows size={14} />
-                  </button>
-                  <button
-                    className={orientation === "horizontal" ? "on" : ""}
-                    title="Side by side (columns)"
-                    onClick={() => setOrientation("horizontal")}
-                  >
-                    <LayoutColumns size={14} />
-                  </button>
-                </div>
-              )}
               <button
                 className={`icon-btn sm${split ? " on" : ""}`}
                 title={split ? "Unsplit editor" : "Split editor"}
@@ -278,7 +258,7 @@ export default function SidePanel({ openRequest, root, onFocusSurface, onCollaps
             </div>
           </div>
 
-          <div className={`editor-area ${orientation}`}>
+          <div className="editor-area vertical">
             {panes.map((p, i) => (
               <div
                 key={i}

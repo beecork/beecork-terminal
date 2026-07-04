@@ -48,6 +48,25 @@ function uid(): string {
   }
 }
 
+/**
+ * Update one session's field, returning the SAME array (referentially) when the
+ * value is unchanged — so React can bail out of the render. The frequent poll-
+ * driven setters (cwd/running) would otherwise allocate a fresh array every tick
+ * and re-render the whole app for no change.
+ */
+function patchSession<K extends keyof Session>(
+  prev: Session[],
+  id: string,
+  key: K,
+  value: Session[K]
+): Session[] {
+  const i = prev.findIndex((s) => s.id === id);
+  if (i < 0 || prev[i][key] === value) return prev;
+  const next = [...prev];
+  next[i] = { ...prev[i], [key]: value };
+  return next;
+}
+
 export function useSessions() {
   const nextNum = useRef(2);
   const [sessions, setSessions] = useState<Session[]>(() => [
@@ -77,30 +96,19 @@ export function useSessions() {
   }, []);
 
   const rename = useCallback((id: string, custom: string) => {
-    setSessions((prev) =>
-      prev.map((s) => (s.id === id ? { ...s, custom: custom.trim() || undefined } : s))
-    );
+    setSessions((prev) => patchSession(prev, id, "custom", custom.trim() || undefined));
   }, []);
 
   const setDynamic = useCallback((id: string, dynamic: string) => {
-    const clean = dynamic.trim();
-    setSessions((prev) =>
-      prev.map((s) =>
-        s.id === id && s.dynamic !== clean ? { ...s, dynamic: clean || undefined } : s
-      )
-    );
+    setSessions((prev) => patchSession(prev, id, "dynamic", dynamic.trim() || undefined));
   }, []);
 
   const setCwd = useCallback((id: string, cwd: string) => {
-    setSessions((prev) =>
-      prev.map((s) => (s.id === id && s.cwd !== cwd ? { ...s, cwd } : s))
-    );
+    setSessions((prev) => patchSession(prev, id, "cwd", cwd));
   }, []);
 
   const setRunning = useCallback((id: string, running: string | undefined) => {
-    setSessions((prev) =>
-      prev.map((s) => (s.id === id && s.running !== running ? { ...s, running } : s))
-    );
+    setSessions((prev) => patchSession(prev, id, "running", running));
   }, []);
 
   return {

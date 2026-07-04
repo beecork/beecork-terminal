@@ -1,5 +1,6 @@
 import {
   createContext,
+  useCallback,
   useContext,
   useEffect,
   useMemo,
@@ -218,15 +219,17 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     }
   }, [theme, settings]);
 
+  // Stable identity — it only uses the functional setState updater, so effects
+  // that depend on `update` don't re-subscribe on every settings/theme change.
+  const update = useCallback(
+    (patch: Patch) =>
+      setSettings((s) => ({ ...s, ...(typeof patch === "function" ? patch(s) : patch) })),
+    []
+  );
+
   const value = useMemo<Ctx>(
-    () => ({
-      settings,
-      theme,
-      themes: THEMES,
-      update: (patch) =>
-        setSettings((s) => ({ ...s, ...(typeof patch === "function" ? patch(s) : patch) })),
-    }),
-    [settings, theme]
+    () => ({ settings, theme, themes: THEMES, update }),
+    [settings, theme, update]
   );
 
   return <SettingsContext.Provider value={value}>{children}</SettingsContext.Provider>;

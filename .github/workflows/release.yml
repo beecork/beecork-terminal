@@ -1,11 +1,12 @@
 name: Release
 
-# Cut a release by pushing a version tag, e.g.:
-#   npm version patch   (or minor/major)  -> creates the git tag
-#   git push --follow-tags
+# Cut a release by bumping the version in ALL THREE files, then tagging:
+#   package.json + src-tauri/tauri.conf.json + src-tauri/Cargo.toml  (Tauri uses
+#   tauri.conf.json for the bundle + updater — npm version alone is NOT enough),
+#   then: git commit -am vX.Y.Z && git tag vX.Y.Z && git push --follow-tags
 # The tag (vX.Y.Z) triggers tests + dependency audits, then a matrix build on
 # mac/win/linux that publishes a GitHub Release with the installers and the
-# signed updater manifest (latest.json). See RELEASING.md.
+# signed updater manifest (latest.json). See RELEASING.md "Cutting a release".
 
 on:
   push:

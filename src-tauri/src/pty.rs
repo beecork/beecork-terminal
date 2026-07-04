@@ -270,25 +270,6 @@ pub struct PtyStatus {
     running: Option<String>,
 }
 
-/// A single session's live status (where its shell is + what it's running).
-#[tauri::command]
-pub fn pty_status(state: tauri::State<PtyState>, id: String) -> PtyStatus {
-    let target = {
-        let g = state.sessions.lock().unwrap();
-        g.get(&id).and_then(session_pids).map(|(s, f)| (id.clone(), s, f))
-    };
-    match target {
-        Some(t) => statuses_for(vec![t]).remove(&id).unwrap_or(PtyStatus {
-            cwd: None,
-            running: None,
-        }),
-        None => PtyStatus {
-            cwd: None,
-            running: None,
-        },
-    }
-}
-
 /// Live status for many sessions at once. ONE narrow process refresh serves the
 /// whole batch, so the 2s poll costs a single cheap syscall burst rather than a
 /// full process-table scan per session.

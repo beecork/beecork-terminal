@@ -105,7 +105,7 @@ body {
   cursor: text;
 }
 .tb-path {
-  color: var(--faint, var(--muted));
+  color: var(--muted);
   font-size: 12px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -154,10 +154,6 @@ body {
   width: 24px;
   height: 24px;
 }
-.icon-btn.danger:hover {
-  background: rgba(243, 139, 168, 0.16);
-  color: #f38ba8;
-}
 
 .seg {
   display: inline-flex;
@@ -188,7 +184,7 @@ body {
   color: var(--fg);
 }
 
-/* folder chip + change count pill (panel + top bar) */
+/* folder chip + change count pill (panel) */
 .folder-chip {
   display: flex;
   align-items: center;

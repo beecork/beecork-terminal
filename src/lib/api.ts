@@ -20,12 +20,13 @@ export interface PtyStatus {
   running: string | null;
 }
 
-/** A session's live status — where its shell is and what it's running. */
-export const ptyStatus = (id: string) => invoke<PtyStatus>("pty_status", { id });
-
 /** Live status for many sessions in one call (a single process refresh serves all). */
 export const ptyStatusAll = (ids: string[]) =>
   invoke<Record<string, PtyStatus>>("pty_status_all", { ids });
+
+/** A single session's live status — a thin convenience over the batched command. */
+export const ptyStatus = (id: string): Promise<PtyStatus> =>
+  ptyStatusAll([id]).then((m) => m[id] ?? { cwd: null, running: null });
 
 export const listDir = (path?: string) =>
   invoke<Listing>("list_dir", { path: path ?? null });
