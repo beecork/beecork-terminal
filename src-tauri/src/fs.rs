@@ -111,6 +111,15 @@ pub fn write_file(
     content: String,
     expected_mtime: Option<f64>,
 ) -> Result<f64, String> {
+    // Refuse to write THROUGH a symlink. A malicious repo can commit a symlink
+    // (e.g. `NOTES.md -> ~/.zshrc`) that the tree shows as an ordinary in-repo
+    // file; `std::fs::write` follows it, so a save would silently clobber the
+    // target outside the repo. `symlink_metadata` does not follow the leaf.
+    if let Ok(meta) = std::fs::symlink_metadata(&path) {
+        if meta.file_type().is_symlink() {
+            return Err("Refusing to write through a symlink (the file points elsewhere).".into());
+        }
+    }
     // Conflict detection: if the file changed on disk since it was loaded
     // (e.g. the agent edited it), refuse to clobber it.
     if let Some(expected) = expected_mtime {

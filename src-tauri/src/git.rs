@@ -130,18 +130,41 @@ pub fn git_file_original(path: String, root: Option<String>) -> Result<String, S
         .unwrap_or_else(|_| PathBuf::from(&path));
     let rel_str = rel.to_string_lossy().replace('\\', "/");
 
+    let spec = format!("HEAD:{}", rel_str);
+
+    // Check the blob size BEFORE reading it. `git show` via .output() buffers the
+    // WHOLE committed blob into memory on the (sync, main-thread) command, so a
+    // hostile repo that commits a giant file could freeze the UI / OOM us just by
+    // having it clicked. `git cat-file -s <spec>` prints only the object size.
+    let size_out = git()
+        .arg("-C")
+        .arg(&dir)
+        .arg("cat-file")
+        .arg("-s")
+        .arg(&spec)
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !size_out.status.success() {
+        // Not a committed blob (new/untracked file) — no baseline.
+        return Ok(String::new());
+    }
+    let size: usize = String::from_utf8_lossy(&size_out.stdout)
+        .trim()
+        .parse()
+        .unwrap_or(usize::MAX);
+    if size > MAX_BASELINE {
+        return Ok(String::new());
+    }
+
     let out = git()
         .arg("-C")
         .arg(&dir)
         .arg("show")
-        .arg(format!("HEAD:{}", rel_str))
+        .arg(&spec)
         .output()
         .map_err(|e| e.to_string())?;
 
     if out.status.success() {
-        if out.stdout.len() > MAX_BASELINE {
-            return Ok(String::new());
-        }
         Ok(String::from_utf8_lossy(&out.stdout).into_owned())
     } else {
         Ok(String::new())

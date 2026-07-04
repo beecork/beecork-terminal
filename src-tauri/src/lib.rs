@@ -10,7 +10,9 @@ use tauri::{Manager, WindowEvent};
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_notification::init())
         .manage(PtyState::default())
+        .manage(watcher::WatchControl::default())
         .on_window_event(|window, event| {
             // Closing a window kills the PTY sessions it owns (no orphans).
             if let WindowEvent::Destroyed = event {
@@ -38,6 +40,7 @@ pub fn run() {
             fs::write_file,
             git::git_status,
             git::git_file_original,
+            watcher::set_watch_root,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

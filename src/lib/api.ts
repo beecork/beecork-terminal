@@ -28,6 +28,10 @@ export const ptyStatusAll = (ids: string[]) =>
 export const ptyStatus = (id: string): Promise<PtyStatus> =>
   ptyStatusAll([id]).then((m) => m[id] ?? { cwd: null, running: null });
 
+/** Re-root the file watcher to follow the active terminal's working directory. */
+export const setWatchRoot = (root: string) =>
+  invoke<void>("set_watch_root", { root });
+
 export const listDir = (path?: string) =>
   invoke<Listing>("list_dir", { path: path ?? null });
 

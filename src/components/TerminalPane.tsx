@@ -5,9 +5,10 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import { SearchAddon } from "@xterm/addon-search";
 import { invoke, Channel } from "@tauri-apps/api/core";
 import { getRoot } from "../lib/api";
-import { useSettings, zoomFont } from "../lib/settings";
+import { useSettings, zoomFont, type Surface } from "../lib/settings";
 import { decodeBase64, PATH_RE, looksLikePath, splitFileLine, parseOsc7 } from "../lib/paths";
 import ZoomControl from "./ZoomControl";
+import { Close } from "./icons";
 import "@xterm/xterm/css/xterm.css";
 
 type PtyEvent =
@@ -16,6 +17,9 @@ type PtyEvent =
 
 interface Props {
   sessionId: string;
+  /** on screen right now (single view = the active session; split = either pane) */
+  visible: boolean;
+  /** the focused pane — gets keyboard focus, status hints, and ⌘F search */
   active: boolean;
   /** directory the shell should start in (new sessions inherit the active cwd) */
   startCwd?: string;
@@ -28,11 +32,16 @@ interface Props {
   onCwd: (id: string, path: string) => void;
   /** output settled — re-check cwd + running command */
   onStatusHint: (id: string) => void;
-  onFocusSurface: (s: "terminal" | "editor") => void;
+  /** the shell produced output — drives the busy dot (works for TUI agents) */
+  onActivity: (id: string) => void;
+  onFocusSurface: (s: Surface) => void;
+  /** if set, show a close-session ✕ in the terminal (single view only) */
+  onRequestClose?: () => void;
 }
 
 export default function TerminalPane({
   sessionId,
+  visible,
   active,
   startCwd,
   onOpenPath,
@@ -41,7 +50,9 @@ export default function TerminalPane({
   onTitle,
   onCwd,
   onStatusHint,
+  onActivity,
   onFocusSurface,
+  onRequestClose,
 }: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
@@ -62,8 +73,8 @@ export default function TerminalPane({
   lookRef.current = { theme, settings };
 
   // Callbacks captured in refs so the mount effect always sees current ones.
-  const cbRef = useRef({ onOpenPath, onBell, onSeen, onTitle, onCwd, onStatusHint });
-  cbRef.current = { onOpenPath, onBell, onSeen, onTitle, onCwd, onStatusHint };
+  const cbRef = useRef({ onOpenPath, onBell, onSeen, onTitle, onCwd, onStatusHint, onActivity });
+  cbRef.current = { onOpenPath, onBell, onSeen, onTitle, onCwd, onStatusHint, onActivity };
 
   const [showSearch, setShowSearch] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
@@ -167,6 +178,9 @@ export default function TerminalPane({
         if (disposed) return;
         if (msg.event === "output") {
           term.write(decodeBase64(msg.data));
+          // Output = this session is actively working (drives the busy dot even
+          // for TUI agents, which the OS foreground check can't see into).
+          cbRef.current.onActivity(sessionId);
           // When output settles (a prompt likely returned), re-check status.
           if (activeRef.current) {
             clearTimeout(cwdHintTimer);
@@ -267,20 +281,28 @@ export default function TerminalPane({
     };
   }, [sessionId]);
 
-  // Refit + focus + clear "wants you" when this session becomes visible.
+  // On becoming visible (either split pane), refit and clear "wants you" — you
+  // can see it now. (A width change while already visible is handled by the
+  // ResizeObserver.)
   useEffect(() => {
-    if (!active) return;
+    if (!visible) return;
     cbRef.current.onSeen(sessionId);
-    const term = termRef.current;
-    if (!term) return;
     const raf = requestAnimationFrame(() => {
       try {
         fitRef.current?.fit();
       } catch {
         /* ignore */
       }
-      term.focus();
     });
+    return () => cancelAnimationFrame(raf);
+  }, [visible, sessionId]);
+
+  // Only the focused pane grabs the keyboard.
+  useEffect(() => {
+    if (!active) return;
+    const term = termRef.current;
+    if (!term) return;
+    const raf = requestAnimationFrame(() => term.focus());
     return () => cancelAnimationFrame(raf);
   }, [active, sessionId]);
 
@@ -326,6 +348,11 @@ export default function TerminalPane({
   return (
     <div className="terminal-wrap" onFocusCapture={() => onFocusSurface("terminal")}>
       <div className="terminal-host" ref={hostRef} />
+      {onRequestClose && (
+        <button className="term-close" title="Close session" onClick={onRequestClose}>
+          <Close size={14} />
+        </button>
+      )}
       {active && (
         <ZoomControl
           className="term-zoom"

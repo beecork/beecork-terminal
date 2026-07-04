@@ -16,6 +16,15 @@ function svg(size: number | undefined, extra: Partial<SVGProps<SVGSVGElement>>) 
   };
 }
 
+export function Split({ size, ...p }: P) {
+  return (
+    <svg {...svg(size, p)}>
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <path d="M12 4v16" />
+    </svg>
+  );
+}
+
 export function Gear({ size, ...p }: P) {
   return (
     <svg {...svg(size, p)}>

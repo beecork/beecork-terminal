@@ -1,7 +1,7 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { gitStatus, type ChangeStatus, type FileStatus } from "../lib/api";
 import { onFsChanged } from "../lib/events";
-import { useSettings, zoomFont } from "../lib/settings";
+import { useSettings, zoomFont, type Surface } from "../lib/settings";
 import type { OpenRequest } from "../App";
 import FileTree from "./FileTree";
 import ZoomControl from "./ZoomControl";
@@ -17,7 +17,7 @@ interface Props {
   openRequest: OpenRequest | null;
   /** The active terminal's working directory — the browser follows it. */
   root: string | null;
-  onFocusSurface: (s: "terminal" | "editor") => void;
+  onFocusSurface: (s: Surface) => void;
   /** collapse the whole panel back to the thin strip */
   onCollapse: () => void;
 }

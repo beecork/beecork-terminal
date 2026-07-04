@@ -1,0 +1,20 @@
+# cargo-audit configuration — read by the `cargo audit` step in CI (release.yml).
+#
+# The audit step is no longer `continue-on-error`, so it now BLOCKS a release on
+# any new advisory. The few advisories below are ones we cannot act on ourselves;
+# each is ignored with a justification. Revisit this list whenever `tauri` is
+# upgraded (that is what would clear them).
+#
+# Note: unmaintained/unsound advisories (the gtk-rs GTK3 bindings, unic-*, glib)
+# are reported as warnings and do NOT fail the audit by default, so they are not
+# listed here — they are all transitive through tauri's Linux webkit stack and
+# unfixable at this layer.
+[advisories]
+ignore = [
+  # quick-xml DoS advisories, reached only transitively via plist -> tauri, which
+  # pins quick-xml ^0.39 (cannot upgrade to the fixed >=0.41 here). Not runtime-
+  # reachable in this app: plist parses our own macOS bundle at build time, the
+  # updater speaks JSON, and we never parse untrusted XML. Recheck on tauri bumps.
+  "RUSTSEC-2026-0194", # quick-xml: quadratic run time on duplicate attribute names
+  "RUSTSEC-2026-0195", # quick-xml: unbounded namespace-declaration allocation (DoS)
+]

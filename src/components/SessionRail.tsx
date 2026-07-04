@@ -8,6 +8,8 @@ interface Props {
   activeId: string;
   /** background sessions that finished / rang the bell and haven't been seen */
   wantsYou: Set<string>;
+  /** sessions producing output right now (busy) */
+  busy: Set<string>;
   expanded: boolean;
   onSelect: (id: string) => void;
   onCreate: () => void;
@@ -17,17 +19,20 @@ interface Props {
   onOpenSettings: () => void;
 }
 
-function dotClass(isActive: boolean, isBusy: boolean, wants: boolean): string {
-  if (isActive) return "rail-dot dot-active";
-  if (wants) return "rail-dot dot-attention"; // the only state that blinks
-  if (isBusy) return "rail-dot dot-busy"; // a program is running — steady
-  return "rail-dot dot-idle";
+// The dot tells the truth about the session's state on EVERY row — which one is
+// active is shown by the row highlight, not the dot, so you can see that the
+// session you're on is busy too.
+function dotClass(isBusy: boolean, wants: boolean): string {
+  if (wants) return "rail-dot dot-attention"; // finished / waiting — blinks amber
+  if (isBusy) return "rail-dot dot-busy"; // a command is running — steady blue
+  return "rail-dot dot-idle"; // at the prompt — grey
 }
 
 export default function SessionRail({
   sessions,
   activeId,
   wantsYou,
+  busy,
   expanded,
   onSelect,
   onCreate,
@@ -57,18 +62,18 @@ export default function SessionRail({
         {sessions.map((s, i) => {
           const name = displayName(s);
           const isActive = s.id === activeId;
-          const isBusy = !!s.running;
+          const isBusy = busy.has(s.id);
           const wants = wantsYou.has(s.id);
           const editing = editingId === s.id;
           return (
             <div
               key={s.id}
-              className={`rail-item${isActive ? " active" : ""}`}
+              className={`rail-item${isActive ? " active" : ""}${wants ? " needs-you" : ""}`}
               onClick={() => onSelect(s.id)}
               onDoubleClick={() => expanded && setEditingId(s.id)}
               title={expanded ? name : `${i + 1}. ${name}`}
             >
-              <span className={dotClass(isActive, isBusy, wants)} />
+              <span className={dotClass(isBusy, wants)} />
               {expanded ? (
                 editing ? (
                   <RenameInput
@@ -106,19 +111,9 @@ export default function SessionRail({
                   </>
                 )
               ) : (
-                <>
-                  <span className="rail-num">{i + 1}</span>
-                  <button
-                    className="rail-close rail-close-mini"
-                    title="Close session"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onClose(s.id);
-                    }}
-                  >
-                    <Close size={12} />
-                  </button>
-                </>
+                // Collapsed = pure navigation. No close × here (too easy to
+                // mis-hit); close from the expanded rail or the terminal window.
+                <span className="rail-num">{i + 1}</span>
               )}
             </div>
           );

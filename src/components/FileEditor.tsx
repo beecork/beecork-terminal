@@ -8,7 +8,7 @@ import { readFile, writeFile, gitFileOriginal } from "../lib/api";
 import { basename } from "../lib/paths";
 import { languageFor } from "../lib/language";
 import { onFsChanged } from "../lib/events";
-import { useSettings } from "../lib/settings";
+import { useSettings, type Surface } from "../lib/settings";
 
 type Status = "loading" | "ready" | "error";
 type Mode = "edit" | "diff";
@@ -22,7 +22,7 @@ export default function FileEditor({
   path: string;
   line?: number;
   root?: string | null;
-  onFocusSurface: (s: "terminal" | "editor") => void;
+  onFocusSurface: (s: Surface) => void;
 }) {
   const { theme } = useSettings();
   const [content, setContent] = useState("");
@@ -31,6 +31,9 @@ export default function FileEditor({
   const [error, setError] = useState("");
   const [saveMsg, setSaveMsg] = useState("");
   const [dirty, setDirty] = useState(false);
+  // A save was rejected because the file changed on disk under our edits. Until
+  // the user resolves it (Overwrite or Reload), plain Save/live-reload stay stuck.
+  const [conflict, setConflict] = useState(false);
   const [mode, setMode] = useState<Mode>("edit");
 
   const mtimeRef = useRef(0);
@@ -39,17 +42,19 @@ export default function FileEditor({
   const cmRef = useRef<ReactCodeMirrorRef>(null);
 
   const load = useCallback(
-    (initial: boolean) => {
+    (initial: boolean, force = false) => {
       if (initial) setStatus("loading");
       setError("");
       Promise.all([readFile(path), gitFileOriginal(path, root ?? undefined).catch(() => "")])
         .then(([data, orig]) => {
-          // Don't clobber unsaved edits made during an in-flight reload.
-          if (!initial && dirtyRef.current) return;
+          // Don't clobber unsaved edits made during an in-flight reload — unless
+          // the user explicitly asked to reload (force), discarding their edits.
+          if (!initial && !force && dirtyRef.current) return;
           mtimeRef.current = data.mtime;
           setContent(data.content);
           setOriginal(orig);
           setDirty(false);
+          setConflict(false);
           setSaveMsg("");
           setStatus("ready");
           setMode(orig && orig !== data.content ? "diff" : "edit");
@@ -92,18 +97,26 @@ export default function FileEditor({
     }
   }, [line, status, path]);
 
-  const save = useCallback(async () => {
-    setSaveMsg("Saving…");
-    try {
-      const newMtime = await writeFile(path, content, mtimeRef.current);
-      mtimeRef.current = newMtime;
-      setDirty(false);
-      setSaveMsg("Saved");
-    } catch (e) {
-      // Conflict (or write error) — keep the editor and the user's edits visible.
-      setSaveMsg(String(e).replace(/^Error:\s*/, ""));
-    }
-  }, [path, content]);
+  const save = useCallback(
+    async (overwrite = false) => {
+      setSaveMsg("Saving…");
+      try {
+        // Overwrite bypasses the mtime conflict guard — the user chose to win.
+        const newMtime = await writeFile(path, content, overwrite ? undefined : mtimeRef.current);
+        mtimeRef.current = newMtime;
+        setDirty(false);
+        setConflict(false);
+        setSaveMsg("Saved");
+      } catch (e) {
+        const msg = String(e).replace(/^Error:\s*/, "");
+        // A disk-conflict is recoverable (Overwrite / Reload); other write errors
+        // aren't, so only offer the escape hatch for the conflict case.
+        setConflict(/changed on disk/i.test(msg));
+        setSaveMsg(msg);
+      }
+    },
+    [path, content]
+  );
 
   function onKeyDown(e: KeyboardEvent) {
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
@@ -144,9 +157,28 @@ export default function FileEditor({
           </div>
         )}
         <span className="editor-status">{saveMsg}</span>
-        <button className="editor-save" disabled={!dirty} onClick={() => void save()}>
-          Save
-        </button>
+        {conflict ? (
+          <>
+            <button
+              className="editor-save"
+              title="Overwrite the version on disk with your edits"
+              onClick={() => void save(true)}
+            >
+              Overwrite
+            </button>
+            <button
+              className="editor-save"
+              title="Discard your edits and load the version on disk"
+              onClick={() => load(false, true)}
+            >
+              Reload
+            </button>
+          </>
+        ) : (
+          <button className="editor-save" disabled={!dirty} onClick={() => void save()}>
+            Save
+          </button>
+        )}
       </div>
       <div className="editor-body">
         {status === "error" ? (

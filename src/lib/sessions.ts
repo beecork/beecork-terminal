@@ -15,6 +15,8 @@ export interface Session {
   running?: string;
   /** directory the shell should start in (inherited from the active session) */
   startCwd?: string;
+  /** the session this one is paired with in split view (symmetric + remembered) */
+  partner?: string;
 }
 
 /** Priority: your rename → terminal title → running tool → folder → base name. */
@@ -76,15 +78,21 @@ export function useSessions() {
     }
   }, [sessions, activeId]);
 
-  const create = useCallback((startCwd?: string) => {
+  // Returns the new session's id. `activate` (default true) also switches to it;
+  // pass false to create a session without stealing focus (e.g. a split pane).
+  const create = useCallback((startCwd?: string, activate = true): string => {
     const s: Session = { id: uid(), name: `Session ${nextNum.current++}`, startCwd };
     setSessions((prev) => [...prev, s]);
-    setActiveId(s.id);
+    if (activate) setActiveId(s.id);
+    return s.id;
   }, []);
 
   const close = useCallback((id: string) => {
     setSessions((prev) => {
-      const next = prev.filter((s) => s.id !== id);
+      const next = prev
+        .filter((s) => s.id !== id)
+        // dissolve any pair that included the closed session (keeps it symmetric)
+        .map((s) => (s.partner === id ? { ...s, partner: undefined } : s));
       return next.length
         ? next
         : [{ id: uid(), name: `Session ${nextNum.current++}` }];
@@ -107,6 +115,33 @@ export function useSessions() {
     setSessions((prev) => patchSession(prev, id, "running", running));
   }, []);
 
+  // Pair two sessions for split view. Symmetric and degree-≤1: each session has
+  // at most one partner, so pairing a or b dissolves whatever they were paired
+  // with before.
+  const pairSessions = useCallback((a: string, b: string) => {
+    if (a === b) return;
+    setSessions((prev) => {
+      const oldA = prev.find((s) => s.id === a)?.partner;
+      const oldB = prev.find((s) => s.id === b)?.partner;
+      return prev.map((s) => {
+        if (s.id === a) return { ...s, partner: b };
+        if (s.id === b) return { ...s, partner: a };
+        if (s.id === oldA || s.id === oldB) return { ...s, partner: undefined };
+        return s;
+      });
+    });
+  }, []);
+
+  // Dissolve `id`'s pair (clears both sides).
+  const unpairSession = useCallback((id: string) => {
+    setSessions((prev) => {
+      const other = prev.find((s) => s.id === id)?.partner;
+      return prev.map((s) =>
+        s.id === id || s.id === other ? { ...s, partner: undefined } : s
+      );
+    });
+  }, []);
+
   return {
     sessions,
     activeId,
@@ -117,5 +152,7 @@ export function useSessions() {
     setDynamic,
     setCwd,
     setRunning,
+    pairSessions,
+    unpairSession,
   };
 }

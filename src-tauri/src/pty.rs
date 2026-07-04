@@ -290,9 +290,11 @@ pub fn pty_status_all(
 const RUNTIMES: &[&str] = &[
     "node", "deno", "bun", "python", "python3", "ruby", "perl", "sh", "bash", "zsh", "fish", "env",
 ];
-/// Agent names we label prettily when detected. This is *cosmetic labeling only*
-/// — the busy/idle dot is process-based and fully agent-agnostic; unknown tools
-/// fall back to their own command name. See the decision brief.
+/// Agent names we label prettily when detected. This is *cosmetic labeling only*:
+/// the busy/idle dot is driven by webview output-activity (frontend), not this
+/// process check, so it stays fully agent-agnostic. This `running` label feeds
+/// only the session title (displayName) and the "come look" attention path;
+/// unknown tools fall back to their own command name. See the decision brief.
 const KNOWN_TOOLS: &[&str] = &["claude", "codex", "aider", "gemini", "ollama", "cursor"];
 
 /// The shell pid and the tty's current foreground pid for a session. The
@@ -303,8 +305,9 @@ fn session_pids(h: &PtyHandle) -> Option<(u32, Option<u32>)> {
     let shell = h.child.process_id()?;
     // The tty's foreground process group is a unix concept (`tcgetpgrp`);
     // portable-pty only exposes `process_group_leader` on unix. On Windows we
-    // don't detect the foreground command yet — the busy dot just stays idle
-    // there (cwd tracking still works).
+    // don't detect the foreground command yet — so the `running` label is absent
+    // there (the busy dot is output-activity based and works cross-platform; cwd
+    // tracking works too).
     #[cfg(unix)]
     let fg = h.master.process_group_leader().map(|p| p as u32);
     #[cfg(not(unix))]
@@ -412,6 +415,51 @@ mod tests {
 
     fn argv(parts: &[&str]) -> Vec<String> {
         parts.iter().map(|s| s.to_string()).collect()
+    }
+
+    // Empirically confirm the running-command / foreground-group signal (which
+    // feeds the session label + the "come look" attention path, not the dot): an
+    // interactive shell's foreground process group (tcgetpgrp, via
+    // process_group_leader) equals the shell at the prompt and DIFFERS while a
+    // foreground command runs.
+    #[cfg(unix)]
+    #[test]
+    fn foreground_group_tracks_the_running_command() {
+        use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
+        use std::io::{Read, Write};
+        use std::time::Duration;
+
+        let pair = native_pty_system()
+            .openpty(PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 })
+            .unwrap();
+        let mut cmd = CommandBuilder::new("/bin/sh");
+        cmd.arg("-i");
+        let mut child = pair.slave.spawn_command(cmd).unwrap();
+        drop(pair.slave);
+        let shell_pid = child.process_id().unwrap() as i32;
+
+        // Drain output so the pty never blocks the shell.
+        let mut reader = pair.master.try_clone_reader().unwrap();
+        std::thread::spawn(move || {
+            let mut buf = [0u8; 4096];
+            while reader.read(&mut buf).map(|n| n > 0).unwrap_or(false) {}
+        });
+        let mut writer = pair.master.take_writer().unwrap();
+
+        let fg = |m: &Box<dyn MasterPty + Send>| m.process_group_leader();
+        std::thread::sleep(Duration::from_millis(400));
+        let idle = fg(&pair.master);
+        writer.write_all(b"sleep 3\n").unwrap();
+        writer.flush().unwrap();
+        std::thread::sleep(Duration::from_millis(600));
+        let busy = fg(&pair.master);
+        let _ = child.kill();
+
+        assert_eq!(idle, Some(shell_pid), "at the prompt the fg group is the shell");
+        assert!(
+            busy.is_some() && busy != Some(shell_pid),
+            "while `sleep` runs the fg group should differ from the shell (idle={idle:?}, busy={busy:?})"
+        );
     }
 
     #[test]

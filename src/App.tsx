@@ -8,13 +8,16 @@ import SessionRail from "./components/SessionRail";
 import UpdateBanner from "./components/UpdateBanner";
 import ConfirmModal from "./components/ConfirmModal";
 import RenameInput from "./components/RenameInput";
-import { Folder, Chevron, Pencil } from "./components/icons";
+import PaneHeader from "./components/PaneHeader";
+import { Folder, Chevron, Pencil, Split } from "./components/icons";
 import { useSessions, displayName, type Session } from "./lib/sessions";
 import { useSessionStatus } from "./lib/useSessionStatus";
 import { basename } from "./lib/paths";
+import { setWatchRoot } from "./lib/api";
 import { usePersistedState } from "./lib/persist";
 import { useDrag } from "./lib/useDrag";
-import { useSettings, zoomFont } from "./lib/settings";
+import { initNotifications } from "./lib/notify";
+import { useSettings, zoomFont, type Surface } from "./lib/settings";
 import "./App.css";
 
 export interface OpenRequest {
@@ -22,8 +25,6 @@ export interface OpenRequest {
   line?: number;
   n: number;
 }
-
-type Surface = "terminal" | "editor";
 
 export default function App() {
   const [panelOpen, setPanelOpen] = useState(true);
@@ -38,9 +39,19 @@ export default function App() {
     (v) => (v ? "1" : "0")
   );
   const [editingTop, setEditingTop] = useState(false);
+  const [splitPct, setSplitPct] = usePersistedState(
+    "beecork.splitPct",
+    50,
+    (r) => {
+      const n = Number(r);
+      return n >= 20 && n <= 80 ? n : 50;
+    },
+    (v) => String(Math.round(v))
+  );
 
   const reqN = useRef(0);
   const zoomTargetRef = useRef<Surface>("terminal");
+  const terminalsRef = useRef<HTMLDivElement>(null);
 
   const { update } = useSettings();
   const {
@@ -53,7 +64,29 @@ export default function App() {
     setDynamic,
     setCwd,
     setRunning,
+    pairSessions,
+    unpairSession,
   } = useSessions();
+
+  // A pair is symmetric and lives on the session (`partner`), so it's remembered.
+  // `activeId` is the focused session; its partner (if any) is shown beside it.
+  // Left/right order is stable (by rail position), so focus can move between the
+  // panes without the layout jumping. Everything derives from these two.
+  const active = sessions.find((s) => s.id === activeId);
+  const partnerId =
+    active?.partner && active.partner !== activeId && sessions.some((s) => s.id === active.partner)
+      ? active.partner
+      : null;
+  let leftId = activeId;
+  let rightId: string | null = null;
+  if (partnerId) {
+    const ai = sessions.findIndex((s) => s.id === activeId);
+    const pi = sessions.findIndex((s) => s.id === partnerId);
+    [leftId, rightId] = ai <= pi ? [activeId, partnerId] : [partnerId, activeId];
+  }
+  const split = rightId != null;
+  // Sessions on screen right now: both panes in split, else just the focused one.
+  const visibleIds = rightId ? [leftId, rightId] : [activeId];
 
   const activeIdRef = useRef(activeId);
   activeIdRef.current = activeId;
@@ -61,23 +94,60 @@ export default function App() {
   sessionsRef.current = sessions;
 
   // cwd / running-command / attention-dot state machine + polling.
-  const { terminalCwd, wantsYou, onCwd, onStatusHint, onBell, onSeen, markClosed } =
-    useSessionStatus(sessions, activeId, setCwd, setRunning);
+  const { terminalCwd, wantsYou, busy, onCwd, onStatusHint, onActivity, onBell, onSeen, markClosed } =
+    useSessionStatus(sessions, activeId, visibleIds, setCwd, setRunning);
 
   const onFocusSurface = useCallback((s: Surface) => {
     zoomTargetRef.current = s;
   }, []);
 
-  const activeName = (() => {
-    const s = sessions.find((x) => x.id === activeId);
-    return s ? displayName(s) : "Beecork Terminal";
-  })();
+  const activeName = active ? displayName(active) : "Beecork Terminal";
   const cwdName = terminalCwd ? basename(terminalCwd) : "";
 
-  // A new session inherits the active session's cwd.
+  // A new session inherits the focused session's cwd.
   const newSession = useCallback(() => {
     create(sessionsRef.current.find((s) => s.id === activeIdRef.current)?.cwd);
   }, [create]);
+
+  // Drag the split divider — updates the left pane's width %.
+  const startSplitDrag = useDrag((e) => {
+    const el = terminalsRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    const pct = ((e.clientX - r.left) / r.width) * 100;
+    setSplitPct(Math.min(80, Math.max(20, pct)));
+  }, "col-resize");
+
+  // Replace one pane's session with `id`, keeping the other pane and re-pairing.
+  // Focus moves to `id` only if you edited the pane you were focused on.
+  function setPaneSession(paneSessionId: string, id: string) {
+    if (!rightId) return;
+    const otherShown = paneSessionId === leftId ? rightId : leftId;
+    if (id === otherShown || id === paneSessionId) return;
+    pairSessions(otherShown, id);
+    if (paneSessionId === activeId) setActiveId(id);
+  }
+
+  // Split the active session with its neighbour (or a new one), or unsplit it.
+  function toggleSplit() {
+    if (partnerId) {
+      unpairSession(activeId);
+      return;
+    }
+    const idx = sessions.findIndex((s) => s.id === activeId);
+    const next = sessions[idx + 1] ?? sessions.find((s) => s.id !== activeId);
+    const partner = next?.id ?? create(active?.cwd, false);
+    pairSessions(activeId, partner);
+    setPanelOpen(false);
+  }
+  const toggleSplitRef = useRef(toggleSplit);
+  toggleSplitRef.current = toggleSplit;
+
+  // Closing always goes through the confirmation modal.
+  function requestClose(id: string) {
+    const s = sessions.find((x) => x.id === id);
+    if (s) setConfirmClose(s);
+  }
 
   const onOpenPath = useCallback((path: string, line?: number) => {
     setOpenRequest({ path, line, n: ++reqN.current });
@@ -94,7 +164,18 @@ export default function App() {
     });
   }
 
-  // ⌘T new session (inherits cwd), ⌘N new window.
+  // Ask for notification permission once so background-agent pings can fire.
+  useEffect(() => {
+    initNotifications();
+  }, []);
+
+  // Keep the file watcher on the active terminal's directory, so the live diff
+  // keeps updating after the terminal cd's outside the launch folder.
+  useEffect(() => {
+    if (terminalCwd) setWatchRoot(terminalCwd).catch(() => {});
+  }, [terminalCwd]);
+
+  // ⌘T new session (inherits cwd), ⌘N new window, ⌘D toggle split view.
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (!(e.metaKey || e.ctrlKey)) return;
@@ -105,6 +186,9 @@ export default function App() {
       } else if (k === "n") {
         e.preventDefault();
         newWindow();
+      } else if (k === "d") {
+        e.preventDefault();
+        toggleSplitRef.current();
       }
     }
     window.addEventListener("keydown", onKey);
@@ -168,6 +252,13 @@ export default function App() {
             <span className="tb-path">— {cwdName}</span>
           )}
         </span>
+        <button
+          className={`tb-action${split ? " on" : ""}`}
+          title={split ? "Unsplit (⌘D)" : "Split — pair with another session (⌘D)"}
+          onClick={toggleSplit}
+        >
+          <Split size={15} />
+        </button>
       </div>
 
       <UpdateBanner />
@@ -177,39 +268,68 @@ export default function App() {
           sessions={sessions}
           activeId={activeId}
           wantsYou={wantsYou}
+          busy={busy}
           expanded={railExpanded}
           onSelect={setActiveId}
           onCreate={newSession}
-          onClose={(id) => {
-            const s = sessions.find((x) => x.id === id);
-            if (s) setConfirmClose(s);
-          }}
+          onClose={requestClose}
           onToggleExpand={() => setRailExpanded((e) => !e)}
           onRename={rename}
           onOpenSettings={() => setSettingsOpen(true)}
         />
 
-        <div className="terminals">
-          {sessions.map((s) => (
-            <div
-              key={s.id}
-              className="terminal-slot"
-              style={{ display: s.id === activeId ? "block" : "none" }}
-            >
-              <TerminalPane
-                sessionId={s.id}
-                active={s.id === activeId}
-                startCwd={s.startCwd}
-                onOpenPath={onOpenPath}
-                onBell={onBell}
-                onSeen={onSeen}
-                onTitle={setDynamic}
-                onCwd={onCwd}
-                onStatusHint={onStatusHint}
-                onFocusSurface={onFocusSurface}
-              />
-            </div>
-          ))}
+        <div className={`terminals${split ? " split" : ""}`} ref={terminalsRef}>
+          {sessions.map((s) => {
+            const isLeftPane = s.id === leftId;
+            const isRightPane = split && s.id === rightId;
+            const visible = split ? isLeftPane || isRightPane : s.id === activeId;
+            const isFocused = s.id === activeId;
+            return (
+              <div
+                key={s.id}
+                className={`terminal-slot${split && visible && isFocused ? " focused" : ""}`}
+                style={
+                  split && visible
+                    ? {
+                        display: "flex",
+                        order: isRightPane ? 2 : 0,
+                        flex: isLeftPane ? `0 0 ${splitPct}%` : "1 1 0",
+                      }
+                    : { display: visible ? "block" : "none" }
+                }
+                onMouseDown={() => split && setActiveId(s.id)}
+              >
+                {split && visible && (
+                  <PaneHeader
+                    sessions={sessions}
+                    currentId={s.id}
+                    otherId={isRightPane ? leftId : rightId}
+                    focused={isFocused}
+                    onPick={(id) => setPaneSession(s.id, id)}
+                    onClose={() => requestClose(s.id)}
+                  />
+                )}
+                <TerminalPane
+                  sessionId={s.id}
+                  visible={visible}
+                  active={isFocused && visible}
+                  startCwd={s.startCwd}
+                  onOpenPath={onOpenPath}
+                  onBell={onBell}
+                  onSeen={onSeen}
+                  onTitle={setDynamic}
+                  onCwd={onCwd}
+                  onStatusHint={onStatusHint}
+                  onActivity={onActivity}
+                  onFocusSurface={onFocusSurface}
+                  onRequestClose={!split && isFocused ? () => requestClose(s.id) : undefined}
+                />
+              </div>
+            );
+          })}
+          {split && (
+            <div className="term-divider" style={{ order: 1 }} onMouseDown={startSplitDrag} />
+          )}
         </div>
 
         {panelOpen ? (

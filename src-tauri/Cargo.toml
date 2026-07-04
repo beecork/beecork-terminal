@@ -1,6 +1,6 @@
 [package]
 name = "beecork-terminal"
-version = "0.1.3"
+version = "0.1.4"
 description = "A desktop cockpit for CLI coding agents — terminal, live diff, and file browser."
 authors = ["Beecork"]
 edition = "2021"
@@ -26,5 +26,6 @@ base64 = "0.22"
 notify = "6"
 tauri-plugin-updater = "2.10.1"
 tauri-plugin-process = "2.3.1"
+tauri-plugin-notification = "2"
 sysinfo = "0.38.4"
 

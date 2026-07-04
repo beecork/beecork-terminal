@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getRoot, ptyStatus, ptyStatusAll, type PtyStatus } from "./api";
-import { wantsAttention, type Session } from "./sessions";
+import { wantsAttention, displayName, type Session } from "./sessions";
+import { notify } from "./notify";
 
 function addId(set: Set<string>, id: string): Set<string> {
   if (set.has(id)) return set;
@@ -26,17 +27,31 @@ function delId(set: Set<string>, id: string): Set<string> {
 export function useSessionStatus(
   sessions: Session[],
   activeId: string,
+  visibleIds: string[],
   setCwd: (id: string, cwd: string) => void,
   setRunning: (id: string, running: string | undefined) => void
 ) {
   const [terminalCwd, setTerminalCwd] = useState<string | null>(null);
   const [wantsYou, setWantsYou] = useState<Set<string>>(() => new Set());
+  // Sessions producing output right now — the busy dot. Output activity reflects
+  // an agent actually working, which the OS foreground check can't see (a TUI
+  // agent is "running" the whole time it's open, working or waiting).
+  const [busy, setBusy] = useState<Set<string>>(() => new Set());
+  const idleTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const prevRunning = useRef<Record<string, string | undefined>>({});
 
   const activeIdRef = useRef(activeId);
   activeIdRef.current = activeId;
   const sessionsRef = useRef(sessions);
   sessionsRef.current = sessions;
+  // The sessions on screen right now (both panes in split, else the focused one).
+  // Attention keys off *visibility*, not focus — a pane you can see is "seen".
+  const visibleIdsRef = useRef(visibleIds);
+  visibleIdsRef.current = visibleIds;
+  // Sessions with an unacknowledged bell — the agent's explicit "I need you".
+  // Bell-set attention is sticky (only onSeen clears it); attention *inferred*
+  // from output going quiet is a proxy that self-clears when output resumes.
+  const bellRang = useRef<Set<string>>(new Set());
 
   const applyCwd = useCallback(
     (id: string, cwd: string) => {
@@ -56,8 +71,13 @@ export function useSessionStatus(
       if (st.cwd) applyCwd(id, st.cwd);
       const nowRunning = st.running ?? undefined;
       const was = prevRunning.current[id];
-      // A background command that just finished → "wants you" (come look).
-      if (wantsAttention(was, nowRunning, id === activeIdRef.current)) {
+      // Two producers feed wantsYou, deliberately complementary: this process-
+      // detection path catches a *silent* background command finishing
+      // (running→idle) — the one case output-activity misses — while onActivity's
+      // quiet-timer catches TUI agents (always the tty's foreground process). A
+      // session on screen (visible in either split pane) counts as seen, so a pane
+      // you can see never nags.
+      if (wantsAttention(was, nowRunning, visibleIdsRef.current.includes(id))) {
         setWantsYou((prev) => addId(prev, id));
       }
       prevRunning.current[id] = nowRunning;
@@ -76,18 +96,46 @@ export function useSessionStatus(
     [applyStatus]
   );
 
+  // Every output chunk marks the session busy and (re)arms a quiet timer. When it
+  // stays quiet for ~1.5s, an *off-screen* session that was working becomes a
+  // "come look". Resumed output disproves a quiet-inferred "come look", so clear
+  // it here — unless a bell rang (a real "I need you" that waits until you look).
+  const onActivity = useCallback((id: string) => {
+    setBusy((prev) => (prev.has(id) ? prev : addId(prev, id)));
+    if (!bellRang.current.has(id)) setWantsYou((prev) => delId(prev, id));
+    clearTimeout(idleTimers.current[id]);
+    idleTimers.current[id] = setTimeout(() => {
+      setBusy((prev) => delId(prev, id));
+      if (!visibleIdsRef.current.includes(id)) setWantsYou((prev) => addId(prev, id));
+    }, 1500);
+  }, []);
+
+  // The bell is the agent's explicit "I need you" — the precise attention signal.
+  // No nag for a session already on screen; a bell stays sticky until onSeen.
   const onBell = useCallback((id: string) => {
-    if (id !== activeIdRef.current) setWantsYou((prev) => addId(prev, id));
+    if (visibleIdsRef.current.includes(id)) return;
+    bellRang.current.add(id);
+    setWantsYou((prev) => addId(prev, id));
+    // If you're in another app, ping the OS so you don't miss it.
+    if (!document.hasFocus()) {
+      const s = sessionsRef.current.find((x) => x.id === id);
+      notify(`${s ? displayName(s) : "A session"} needs you`, "Your agent is waiting for you.");
+    }
   }, []);
 
   const onSeen = useCallback((id: string) => {
+    bellRang.current.delete(id);
     setWantsYou((prev) => delId(prev, id));
   }, []);
 
   // Forget a closed session so nothing leaks or resurrects its id.
   const markClosed = useCallback((id: string) => {
     delete prevRunning.current[id];
+    clearTimeout(idleTimers.current[id]);
+    delete idleTimers.current[id];
+    bellRang.current.delete(id);
     setWantsYou((prev) => delId(prev, id));
+    setBusy((prev) => delId(prev, id));
   }, []);
 
   useEffect(() => {
@@ -115,5 +163,5 @@ export function useSessionStatus(
     return () => clearInterval(t);
   }, [applyStatus]);
 
-  return { terminalCwd, wantsYou, onCwd, onStatusHint, onBell, onSeen, markClosed };
+  return { terminalCwd, wantsYou, busy, onCwd, onStatusHint, onActivity, onBell, onSeen, markClosed };
 }

@@ -84,6 +84,29 @@ body {
   -webkit-user-select: none;
   user-select: none;
 }
+.tb-action {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  flex: 0 0 auto;
+  transition: background 0.12s, color 0.12s;
+}
+.tb-action:hover {
+  background: var(--hover);
+  color: var(--fg);
+}
+.tb-action.on {
+  background: var(--selected);
+  color: var(--fg);
+}
 .tb-crumb {
   display: flex;
   align-items: center;
@@ -288,6 +311,35 @@ body {
   opacity: 1;
 }
 
+/* close-session ✕ in the terminal (single view) — hover-revealed, top-right */
+.term-close {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  z-index: 15;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--panel-header) 82%, transparent);
+  backdrop-filter: blur(4px);
+  color: var(--muted);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s, background 0.12s, color 0.12s;
+}
+.terminal-wrap:hover .term-close {
+  opacity: 0.55;
+}
+.terminal-wrap:hover .term-close:hover {
+  opacity: 1;
+  color: #f38ba8;
+  border-color: #f38ba8;
+}
+
 /* ---- workspace layout ---- */
 .workspace {
   display: flex;
@@ -381,6 +433,18 @@ body {
   background: var(--selected);
   color: var(--fg);
 }
+/* a session that needs you — amber, beyond just the dot (catch it at a glance) */
+.rail-item.needs-you {
+  background: color-mix(in srgb, #fab387 12%, transparent);
+  box-shadow: inset 2px 0 0 #fab387;
+}
+.rail-item.needs-you:hover {
+  background: color-mix(in srgb, #fab387 18%, transparent);
+}
+.rail-item.needs-you .rail-name,
+.rail-item.needs-you .rail-num {
+  color: #fab387;
+}
 .session-rail.collapsed .rail-item {
   justify-content: center;
   padding: 8px 4px;
@@ -413,9 +477,6 @@ body {
   height: 8px;
   border-radius: 50%;
   flex: 0 0 auto;
-}
-.rail-dot.dot-active {
-  background: var(--accent);
 }
 .rail-dot.dot-busy {
   background: #89b4fa;
@@ -459,12 +520,6 @@ body {
   opacity: 1;
   background: var(--hover);
   color: var(--fg);
-}
-.rail-close-mini {
-  position: absolute;
-  top: 1px;
-  right: 1px;
-  padding: 1px;
 }
 
 /* "+ new session" — the last row in the list */
@@ -531,6 +586,142 @@ body {
 .terminal-wrap {
   position: absolute;
   inset: 0;
+}
+
+/* ---- split view: two sessions side by side ---- */
+.terminals.split {
+  display: flex;
+  flex-direction: row;
+}
+/* in split, the two visible slots flow as flex children (header over terminal) */
+.terminals.split .terminal-slot {
+  position: relative;
+  inset: auto;
+  min-width: 0;
+  flex-direction: column;
+}
+.terminals.split .terminal-slot .terminal-wrap {
+  position: relative;
+  inset: auto;
+  flex: 1 1 0;
+  min-height: 0;
+}
+.terminals.split .terminal-slot.focused {
+  box-shadow: inset 0 0 0 1.5px var(--accent);
+}
+.term-divider {
+  flex: 0 0 6px;
+  cursor: col-resize;
+  background: var(--border);
+}
+.term-divider:hover {
+  background: var(--accent);
+}
+
+/* per-pane session picker header */
+.pane-header {
+  flex: 0 0 auto;
+  position: relative;
+  display: flex;
+  align-items: center;
+  height: 28px;
+  padding: 0 6px;
+  background: var(--panel-header);
+  border-bottom: 1px solid var(--border);
+}
+.pane-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 3px 6px;
+  border-radius: 6px;
+}
+.pane-header.focused .pane-picker {
+  color: var(--fg);
+}
+.pane-picker:hover {
+  background: var(--hover);
+  color: var(--fg);
+}
+.pane-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pane-close {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  flex: 0 0 auto;
+  opacity: 0.55;
+}
+.pane-close:hover {
+  opacity: 1;
+  background: var(--hover);
+  color: #f38ba8;
+}
+.pane-menu {
+  position: absolute;
+  top: 30px;
+  left: 6px;
+  z-index: 20;
+  min-width: 160px;
+  max-height: 260px;
+  overflow: auto;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 4px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+.pane-menu-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  color: var(--fg);
+  cursor: pointer;
+  font-size: 13px;
+  padding: 6px 8px;
+  border-radius: 6px;
+}
+.pane-menu-item:hover {
+  background: var(--hover);
+}
+.pane-menu-item.current {
+  color: var(--accent);
+}
+.pane-menu-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pane-menu-tag {
+  flex: 0 0 auto;
+  font-size: 10px;
+  color: var(--muted);
+  background: var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
 }
 
 /* in-terminal search bar */
