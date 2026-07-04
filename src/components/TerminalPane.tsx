@@ -261,18 +261,25 @@ export default function TerminalPane({
       invoke("pty_resize", { id: sessionId, cols, rows }).catch(() => {})
     );
 
+    // Coalesce size changes to one fit per frame — smooths continuous resizes
+    // (dragging the panel divider) instead of thrashing the terminal each tick.
+    let roRaf = 0;
     const ro = new ResizeObserver(() => {
-      try {
-        fit.fit();
-      } catch {
-        /* container not ready / hidden */
-      }
+      cancelAnimationFrame(roRaf);
+      roRaf = requestAnimationFrame(() => {
+        try {
+          fit.fit();
+        } catch {
+          /* container not ready / hidden */
+        }
+      });
     });
     ro.observe(hostRef.current);
 
     return () => {
       disposed = true;
       clearTimeout(cwdHintTimer);
+      cancelAnimationFrame(roRaf);
       ro.disconnect();
       linkProvider.dispose();
       bellSub.dispose();

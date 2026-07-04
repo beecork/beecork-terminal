@@ -207,6 +207,9 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     }
     root.style.setProperty("--font-mono", settings.fontFamily);
     root.style.setProperty("--editor-font-size", `${settings.editorFontSize}px`);
+    // Exact terminal background, so the container behind the xterm canvas blends
+    // seamlessly during a resize (no seam/flash when the panel opens or closes).
+    root.style.setProperty("--term-bg", theme.terminal.background);
     root.setAttribute("data-theme", theme.editor);
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));

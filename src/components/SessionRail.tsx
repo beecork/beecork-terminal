@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { displayName, type Session } from "../lib/sessions";
-import { Plus, Close, Pencil, Chevron } from "./icons";
+import { Plus, Close, Pencil, Chevron, Gear } from "./icons";
 
 interface Props {
   sessions: Session[];
@@ -13,6 +13,7 @@ interface Props {
   onClose: (id: string) => void;
   onToggleExpand: () => void;
   onRename: (id: string, name: string) => void;
+  onOpenSettings: () => void;
 }
 
 function dotClass(isActive: boolean, isBusy: boolean, wants: boolean): string {
@@ -32,6 +33,7 @@ export default function SessionRail({
   onClose,
   onToggleExpand,
   onRename,
+  onOpenSettings,
 }: Props) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
@@ -144,6 +146,15 @@ export default function SessionRail({
           </span>
           {expanded && <span className="rail-name">New session</span>}
         </div>
+      </div>
+
+      <div className="rail-footer">
+        <button className="rail-gear" onClick={onOpenSettings} title="Settings">
+          <span className="rail-gear-ic">
+            <Gear size={16} />
+          </span>
+          {expanded && <span className="rail-name">Settings</span>}
+        </button>
       </div>
     </div>
   );

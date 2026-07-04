@@ -5,19 +5,21 @@ import { useSettings, clampFont } from "../lib/settings";
 import type { OpenRequest } from "../App";
 import FileTree from "./FileTree";
 import FileEditor from "./FileEditor";
-import { Folder, Refresh, LayoutRows, LayoutColumns } from "./icons";
+import { Folder, Refresh, LayoutRows, LayoutColumns, Chevron } from "./icons";
 
 interface Props {
   openRequest: OpenRequest | null;
   /** The active terminal's working directory — the browser follows it. */
   root: string | null;
   onFocusSurface: (s: "terminal" | "editor") => void;
+  /** collapse the whole panel back to the thin strip */
+  onCollapse: () => void;
 }
 
 type Orientation = "vertical" | "horizontal";
 type PanelLayout = "stacked" | "sideBySide";
 
-export default function SidePanel({ openRequest, root, onFocusSurface }: Props) {
+export default function SidePanel({ openRequest, root, onFocusSurface, onCollapse }: Props) {
   const { settings, update } = useSettings();
   const [statuses, setStatuses] = useState<FileStatus[]>([]);
   const [treeKey, setTreeKey] = useState(0);
@@ -181,6 +183,13 @@ export default function SidePanel({ openRequest, root, onFocusSurface }: Props) 
             }}
           >
             <Refresh size={15} />
+          </button>
+          <button
+            className="icon-btn sm collapse-panel"
+            title="Collapse panel"
+            onClick={onCollapse}
+          >
+            <Chevron size={15} />
           </button>
         </div>
       </div>

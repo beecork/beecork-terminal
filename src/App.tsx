@@ -7,7 +7,7 @@ import SettingsModal from "./components/SettingsModal";
 import SessionRail from "./components/SessionRail";
 import UpdateBanner from "./components/UpdateBanner";
 import ConfirmModal from "./components/ConfirmModal";
-import { Gear, PanelToggle, Folder } from "./components/icons";
+import { Folder, Chevron, Pencil } from "./components/icons";
 import { useSessions, displayName, wantsAttention, type Session } from "./lib/sessions";
 import { getRoot, ptyStatus, ptyStatusAll, type PtyStatus } from "./lib/api";
 import { useSettings, clampFont, DEFAULT_FONT_SIZE } from "./lib/settings";
@@ -263,15 +263,17 @@ export default function App() {
 
   return (
     <div className="app-root">
-      <UpdateBanner />
-      <div className="topbar">
-        <div className="crumb">
-          <span className="crumb-icon">
-            <Folder size={15} />
+      {/* The window's title bar: native chrome is transparent (titleBarStyle:
+          Overlay), so the traffic lights float over this strip. Empty areas drag
+          the window; the folder name stays double-click-to-rename. */}
+      <div className="titlebar" data-tauri-drag-region>
+        <span className="tb-crumb">
+          <span className="tb-icon">
+            <Folder size={14} />
           </span>
           {editingTop ? (
             <input
-              className="crumb-edit"
+              className="tb-edit"
               autoFocus
               value={topEditValue}
               onChange={(e) => setTopEditValue(e.target.value)}
@@ -283,7 +285,7 @@ export default function App() {
             />
           ) : (
             <span
-              className="crumb-name"
+              className="tb-name"
               title="Double-click to rename"
               onDoubleClick={() => {
                 setTopEditValue(activeName);
@@ -294,22 +296,12 @@ export default function App() {
             </span>
           )}
           {!editingTop && cwdName && cwdName !== activeName && (
-            <span className="crumb-path">— {cwdName}</span>
+            <span className="tb-path">— {cwdName}</span>
           )}
-        </div>
-        <div className="topbar-actions">
-          <button className="icon-btn" onClick={() => setSettingsOpen(true)} title="Settings">
-            <Gear />
-          </button>
-          <button
-            className={`icon-btn${panelOpen ? " on" : ""}`}
-            onClick={() => setPanelOpen((o) => !o)}
-            title={panelOpen ? "Hide file panel" : "Show file panel"}
-          >
-            <PanelToggle />
-          </button>
-        </div>
+        </span>
       </div>
+
+      <UpdateBanner />
 
       <div className="workspace">
         <SessionRail
@@ -325,6 +317,7 @@ export default function App() {
           }}
           onToggleExpand={() => setRailExpanded((e) => !e)}
           onRename={rename}
+          onOpenSettings={() => setSettingsOpen(true)}
         />
 
         <div className="terminals">
@@ -350,26 +343,53 @@ export default function App() {
           ))}
         </div>
 
-        {panelOpen && (
-          <div
-            className="divider"
-            onMouseDown={(e) => {
-              dragging.current = true;
-              document.body.style.cursor = "col-resize";
-              e.preventDefault();
-            }}
-          >
-            <span className="divider-grip" />
-          </div>
-        )}
-
-        {panelOpen && (
-          <div className="side-panel" style={{ width: panelWidth }}>
-            <SidePanel
-              openRequest={openRequest}
-              root={terminalCwd}
-              onFocusSurface={onFocusSurface}
-            />
+        {panelOpen ? (
+          <>
+            <div
+              className="divider"
+              onMouseDown={(e) => {
+                dragging.current = true;
+                document.body.style.cursor = "col-resize";
+                e.preventDefault();
+              }}
+            >
+              <span className="divider-grip" />
+            </div>
+            <div className="side-panel" style={{ width: panelWidth }}>
+              <SidePanel
+                openRequest={openRequest}
+                root={terminalCwd}
+                onFocusSurface={onFocusSurface}
+                onCollapse={() => setPanelOpen(false)}
+              />
+            </div>
+          </>
+        ) : (
+          <div className="panel-strip">
+            <button
+              className="panel-strip-btn expand"
+              title="Expand panel"
+              onClick={() => setPanelOpen(true)}
+            >
+              <Chevron size={16} />
+            </button>
+            <button
+              className="panel-strip-btn"
+              title="Files"
+              onClick={() => setPanelOpen(true)}
+            >
+              <Folder size={16} />
+            </button>
+            <button
+              className="panel-strip-btn"
+              title="Editor"
+              onClick={() => {
+                setPanelOpen(true);
+                onFocusSurface("editor");
+              }}
+            >
+              <Pencil size={15} />
+            </button>
           </div>
         )}
       </div>
