@@ -1,3 +1,5 @@
+import { noFocusSteal } from "../lib/keepFocus";
+
 interface Props {
   /** current font size to display */
   size: number;
@@ -14,11 +16,11 @@ export default function ZoomControl({ size, onDec, onInc, label, className }: Pr
   const what = label ? `${label} ` : "";
   return (
     <div className={`zoom-ctl${className ? " " + className : ""}`}>
-      <button className="zoom-btn" title={`${what}zoom out (⌘−)`} onClick={onDec}>
+      <button className="zoom-btn" title={`${what}zoom out (⌘−)`} onClick={onDec} {...noFocusSteal}>
         −
       </button>
       <span className="zoom-size">{size}</span>
-      <button className="zoom-btn" title={`${what}zoom in (⌘+)`} onClick={onInc}>
+      <button className="zoom-btn" title={`${what}zoom in (⌘+)`} onClick={onInc} {...noFocusSteal}>
         +
       </button>
     </div>

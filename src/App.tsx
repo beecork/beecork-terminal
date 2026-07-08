@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { invoke } from "@tauri-apps/api/core";
 import TerminalPane from "./components/TerminalPane";
 import SidePanel from "./components/SidePanel";
 import SettingsModal from "./components/SettingsModal";
+import FirstRunModal from "./components/FirstRunModal";
 import SessionRail from "./components/SessionRail";
 import UpdateBanner from "./components/UpdateBanner";
 import ConfirmModal from "./components/ConfirmModal";
@@ -18,12 +20,18 @@ import { usePersistedState } from "./lib/persist";
 import { useDrag } from "./lib/useDrag";
 import { initNotifications } from "./lib/notify";
 import { useSettings, zoomFont, type Surface } from "./lib/settings";
+import { noFocusSteal } from "./lib/keepFocus";
 import "./App.css";
 
 export interface OpenRequest {
   path: string;
   line?: number;
   n: number;
+}
+
+/** Single-quote a path for a POSIX shell (bash/zsh/fish/sh) — safe for `cd`. */
+function shellQuote(p: string): string {
+  return `'${p.replace(/'/g, "'\\''")}'`;
 }
 
 export default function App() {
@@ -53,7 +61,11 @@ export default function App() {
   const zoomTargetRef = useRef<Surface>("terminal");
   const terminalsRef = useRef<HTMLDivElement>(null);
 
-  const { update } = useSettings();
+  // Bump to pull keyboard focus back to the active terminal (after an overlay closes).
+  const [focusNonce, setFocusNonce] = useState(0);
+  const focusTerminal = useCallback(() => setFocusNonce((n) => n + 1), []);
+
+  const { settings, update } = useSettings();
   const {
     sessions,
     activeId,
@@ -73,6 +85,9 @@ export default function App() {
   // `activeId` is the focused session; its partner (if any) is shown beside it.
   // Left/right order is stable (by rail position), so focus can move between the
   // panes without the layout jumping. Everything derives from these two.
+  // First run (or a user who never set one): ask for a default startup folder.
+  const needsDefaultFolder = settings.defaultCwd === undefined;
+
   const active = sessions.find((s) => s.id === activeId);
   const partnerId =
     active?.partner && active.partner !== activeId && sessions.some((s) => s.id === active.partner)
@@ -257,6 +272,7 @@ export default function App() {
           className={`tb-action${split ? " on" : ""}`}
           title={split ? "Unsplit (⌘D)" : "Split — pair with another session (⌘D)"}
           onClick={toggleSplit}
+          {...noFocusSteal}
         >
           <Split size={15} />
         </button>
@@ -323,6 +339,7 @@ export default function App() {
                   onStatusHint={onStatusHint}
                   onActivity={onActivity}
                   onFocusSurface={onFocusSurface}
+                  focusSignal={focusNonce}
                   onRequestClose={!split && isFocused ? () => requestClose(s.id) : undefined}
                   resumeAgent={s.resumeAgent}
                   onResumeConsumed={clearResume}
@@ -345,7 +362,10 @@ export default function App() {
                 openRequest={openRequest}
                 root={terminalCwd}
                 onFocusSurface={onFocusSurface}
-                onCollapse={() => setPanelOpen(false)}
+                onCollapse={() => {
+                  setPanelOpen(false);
+                  focusTerminal();
+                }}
               />
             </div>
           </>
@@ -355,6 +375,7 @@ export default function App() {
               className="panel-strip-btn expand"
               title="Expand panel"
               onClick={() => setPanelOpen(true)}
+              {...noFocusSteal}
             >
               <Chevron size={16} />
             </button>
@@ -362,6 +383,7 @@ export default function App() {
               className="panel-strip-btn"
               title="Files"
               onClick={() => setPanelOpen(true)}
+              {...noFocusSteal}
             >
               <Folder size={16} />
             </button>
@@ -372,6 +394,7 @@ export default function App() {
                 setPanelOpen(true);
                 onFocusSurface("editor");
               }}
+              {...noFocusSteal}
             >
               <Pencil size={15} />
             </button>
@@ -379,18 +402,39 @@ export default function App() {
         )}
       </div>
 
-      {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
+      {needsDefaultFolder && (
+        <FirstRunModal
+          onChoose={(path) => {
+            update({ defaultCwd: path });
+            // Move the already-spawned first shell there right away (fresh prompt).
+            invoke("pty_write", { id: activeId, data: `cd ${shellQuote(path)}\n` }).catch(() => {});
+            focusTerminal();
+          }}
+        />
+      )}
+      {settingsOpen && (
+        <SettingsModal
+          onClose={() => {
+            setSettingsOpen(false);
+            focusTerminal();
+          }}
+        />
+      )}
       {confirmClose && (
         <ConfirmModal
           title="Close session?"
           message={`“${displayName(confirmClose)}” and its running process will be terminated.`}
           confirmLabel="Close session"
           danger
-          onCancel={() => setConfirmClose(null)}
+          onCancel={() => {
+            setConfirmClose(null);
+            focusTerminal();
+          }}
           onConfirm={() => {
             close(confirmClose.id);
             markClosed(confirmClose.id);
             setConfirmClose(null);
+            focusTerminal();
           }}
         />
       )}

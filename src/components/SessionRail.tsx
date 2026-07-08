@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { displayName, type Session } from "../lib/sessions";
 import { Plus, Close, Pencil, Chevron, Gear } from "./icons";
+import { noFocusSteal } from "../lib/keepFocus";
 import RenameInput from "./RenameInput";
 
 interface Props {
@@ -50,6 +51,7 @@ export default function SessionRail({
           className="icon-btn sm"
           onClick={onToggleExpand}
           title={expanded ? "Collapse" : "Expand"}
+          {...noFocusSteal}
         >
           <span className={`rail-expand-icon${expanded ? " open" : ""}`}>
             <Chevron size={16} />

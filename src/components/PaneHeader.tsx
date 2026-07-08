@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { displayName, type Session } from "../lib/sessions";
 import { Chevron, Close } from "./icons";
+import { noFocusSteal } from "../lib/keepFocus";
 
 interface Props {
   sessions: Session[];
@@ -48,11 +49,12 @@ export default function PaneHeader({
         className="pane-picker"
         onClick={() => setOpen((o) => !o)}
         title="Choose the session for this pane"
+        {...noFocusSteal}
       >
         <span className="pane-name">{current ? displayName(current) : "—"}</span>
         <Chevron size={12} open={open} />
       </button>
-      <button className="pane-close" title="Close session" onClick={onClose}>
+      <button className="pane-close" title="Close session" onClick={onClose} {...noFocusSteal}>
         <Close size={13} />
       </button>
       {open && (
@@ -65,6 +67,7 @@ export default function PaneHeader({
                 onPick(s.id);
                 setOpen(false);
               }}
+              {...noFocusSteal}
             >
               <span className="pane-menu-name">{displayName(s)}</span>
               {s.id === otherId && <span className="pane-menu-tag">other pane</span>}

@@ -51,6 +51,13 @@ pub fn get_root() -> String {
     project_root().to_string_lossy().into_owned()
 }
 
+/// The user's home directory — offered as the default startup folder on first run.
+#[tauri::command]
+pub fn home_dir() -> String {
+    let var = if cfg!(target_os = "windows") { "USERPROFILE" } else { "HOME" };
+    std::env::var(var).unwrap_or_else(|_| "/".to_string())
+}
+
 #[tauri::command]
 pub fn list_dir(path: Option<String>) -> Result<Listing, String> {
     let dir = path.map(PathBuf::from).unwrap_or_else(project_root);

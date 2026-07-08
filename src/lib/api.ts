@@ -13,6 +13,9 @@ export interface Listing {
 
 export const getRoot = () => invoke<string>("get_root");
 
+/** The user's home directory — the sensible default startup folder. */
+export const getHomeDir = () => invoke<string>("home_dir");
+
 export interface PtyStatus {
   /** the shell's working directory (follows `cd`) */
   cwd: string | null;

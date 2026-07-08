@@ -1266,6 +1266,32 @@ body {
   font-size: 12px;
   font-family: var(--font-mono);
 }
+/* path input + native "Choose folder…" button, side by side */
+.folder-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.folder-row .setting-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.folder-row .btn {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+/* a row whose control sits inline to the right (e.g. a checkbox toggle) */
+.setting-row-inline {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+}
+.setting-check {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
 .theme-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -1306,15 +1332,45 @@ body {
 }
 
 /* scrollbars */
-.xterm-viewport::-webkit-scrollbar,
 .file-tree::-webkit-scrollbar,
 .cm-scroller::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
-.xterm-viewport::-webkit-scrollbar-thumb,
 .file-tree::-webkit-scrollbar-thumb,
 .cm-scroller::-webkit-scrollbar-thumb {
   background: var(--selected);
   border-radius: 4px;
+}
+/* The terminal uses a custom draggable scrollbar overlay (.term-scrollbar), so
+   hide the native xterm one — otherwise you'd see two bars. */
+.xterm-viewport::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+/* ---- custom terminal scrollbar (always-visible + draggable) ---- */
+.term-scrollbar {
+  position: absolute;
+  top: 6px;
+  bottom: 6px;
+  right: 2px;
+  width: 12px;
+  z-index: 4;
+  cursor: default;
+}
+.term-scrollbar-thumb {
+  position: absolute;
+  left: 3px;
+  right: 3px;
+  min-height: 24px;
+  border-radius: 4px;
+  background: var(--muted);
+  opacity: 0.35;
+  transition: opacity 0.12s ease, background 0.12s ease;
+}
+.term-scrollbar:hover .term-scrollbar-thumb,
+.term-scrollbar-thumb:active {
+  opacity: 0.7;
+  background: var(--accent);
 }

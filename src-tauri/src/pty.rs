@@ -65,6 +65,14 @@ fn default_shell() -> String {
     }
 }
 
+/// Where a shell opens when no cwd is supplied and none is configured. A bundled
+/// `.app` launches with cwd `/` (the drive root — a useless place to land), so we
+/// fall back to the user's home directory instead. Only `/` if HOME is unset.
+fn fallback_cwd() -> String {
+    let var = if cfg!(target_os = "windows") { "USERPROFILE" } else { "HOME" };
+    std::env::var(var).unwrap_or_else(|_| "/".to_string())
+}
+
 /// Remove a session under lock, then kill+reap it with the lock released.
 fn take_and_reap(state: &PtyState, id: &str) {
     let removed = state.sessions.lock().unwrap().remove(id);
@@ -150,7 +158,7 @@ pub fn pty_spawn(
     {
         cmd.env_remove("GIT_ASKPASS");
     }
-    let dir = cwd.unwrap_or_else(|| crate::fs::project_root().to_string_lossy().into_owned());
+    let dir = cwd.unwrap_or_else(fallback_cwd);
     cmd.cwd(dir);
 
     let child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;

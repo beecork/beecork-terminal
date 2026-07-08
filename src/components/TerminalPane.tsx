@@ -1,13 +1,15 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { SearchAddon } from "@xterm/addon-search";
 import { invoke, Channel } from "@tauri-apps/api/core";
 import { getRoot } from "../lib/api";
-import { useSettings, zoomFont, type Surface } from "../lib/settings";
+import { useSettings, zoomFont, SMOOTH_SCROLL_MS, type Surface } from "../lib/settings";
 import { decodeBase64, PATH_RE, looksLikePath, splitFileLine, parseOsc7 } from "../lib/paths";
 import { resumeCommand } from "../lib/sessions";
+import { scrollbarGeometry, viewportYForFraction } from "../lib/scroll";
+import { useDrag } from "../lib/useDrag";
 import ZoomControl from "./ZoomControl";
 import { Close } from "./icons";
 import "@xterm/xterm/css/xterm.css";
@@ -36,6 +38,8 @@ interface Props {
   /** the shell produced output — drives the busy dot (works for TUI agents) */
   onActivity: (id: string) => void;
   onFocusSurface: (s: Surface) => void;
+  /** bump this to pull keyboard focus back to the active terminal (e.g. a modal closed) */
+  focusSignal: number;
   /** if set, show a close-session ✕ in the terminal (single view only) */
   onRequestClose?: () => void;
   /** on a restored session, the agent to offer resuming (e.g. "claude") */
@@ -57,6 +61,7 @@ export default function TerminalPane({
   onStatusHint,
   onActivity,
   onFocusSurface,
+  focusSignal,
   onRequestClose,
   resumeAgent,
   onResumeConsumed,
@@ -89,6 +94,45 @@ export default function TerminalPane({
   const [searchTerm, setSearchTerm] = useState("");
   const searchInputRef = useRef<HTMLInputElement>(null);
 
+  // Custom draggable scrollbar overlay (the native one auto-hides on macOS).
+  const [bar, setBar] = useState({ visible: false, topPct: 0, heightPct: 100 });
+  const trackRef = useRef<HTMLDivElement>(null);
+  // Captured at mousedown so a drag maps the pointer to an absolute scroll line.
+  const dragRef = useRef<{ trackTop: number; trackH: number; thumbH: number; grab: number } | null>(null);
+
+  const startBarDrag = useDrag((e) => {
+    const term = termRef.current;
+    const d = dragRef.current;
+    if (!term || !d) return;
+    const rel = e.clientY - d.trackTop - d.grab; // thumb-top position within the track (px)
+    const travel = d.trackH - d.thumbH; // available thumb travel (px)
+    const frac = travel > 0 ? rel / travel : 0;
+    term.scrollToLine(viewportYForFraction(frac, term.buffer.active.baseY));
+  }, "default");
+
+  function onThumbMouseDown(e: ReactMouseEvent<HTMLDivElement>) {
+    e.stopPropagation(); // don't also fire the track's jump-to-position handler
+    const track = trackRef.current;
+    if (!termRef.current || !track) return;
+    const trackRect = track.getBoundingClientRect();
+    const thumbRect = e.currentTarget.getBoundingClientRect();
+    dragRef.current = {
+      trackTop: trackRect.top,
+      trackH: trackRect.height,
+      thumbH: thumbRect.height,
+      grab: e.clientY - thumbRect.top,
+    };
+    startBarDrag(e);
+  }
+
+  function onTrackMouseDown(e: ReactMouseEvent<HTMLDivElement>) {
+    const term = termRef.current;
+    const track = trackRef.current;
+    if (!term || !track) return;
+    const rect = track.getBoundingClientRect();
+    term.scrollToLine(viewportYForFraction((e.clientY - rect.top) / rect.height, term.buffer.active.baseY));
+  }
+
   useEffect(() => {
     getRoot().then((r) => (rootRef.current = r)).catch(() => {});
   }, []);
@@ -114,6 +158,10 @@ export default function TerminalPane({
       fontSize: settings.terminalFontSize,
       cursorBlink: true,
       allowProposedApi: true,
+      scrollback: 5000,
+      scrollSensitivity: settings.scrollSpeed,
+      fastScrollSensitivity: settings.scrollSpeed * 4,
+      smoothScrollDuration: settings.smoothScroll ? SMOOTH_SCROLL_MS : 0,
       theme: {
         background: theme.terminal.background,
         foreground: theme.terminal.foreground,
@@ -149,6 +197,18 @@ export default function TerminalPane({
     } catch {
       /* hidden on mount */
     }
+
+    // Custom scrollbar: recompute the thumb from xterm's live scroll state.
+    const recomputeBar = () => {
+      const b = term.buffer.active;
+      setBar(scrollbarGeometry(b.baseY, term.rows, b.viewportY));
+    };
+    let barRaf = 0;
+    const scheduleBar = () => {
+      cancelAnimationFrame(barRaf);
+      barRaf = requestAnimationFrame(recomputeBar);
+    };
+    const scrollSub = term.onScroll(recomputeBar);
 
     // Clickable file:line paths.
     const linkProvider = term.registerLinkProvider({
@@ -190,6 +250,8 @@ export default function TerminalPane({
           // Output = this session is actively working (drives the busy dot even
           // for TUI agents, which the OS foreground check can't see into).
           cbRef.current.onActivity(sessionId);
+          // The scrollback grew — refresh the scrollbar thumb (rAF-throttled).
+          scheduleBar();
           // When output settles (a prompt likely returned), re-check status.
           if (activeRef.current) {
             clearTimeout(cwdHintTimer);
@@ -204,8 +266,9 @@ export default function TerminalPane({
       };
       invoke("pty_spawn", {
         id: sessionId,
-        // Restart where the session actually is; fall back to the mount cwd, then root.
-        cwd: lastCwdRef.current ?? startCwd ?? null,
+        // Restart where the session actually is; fall back to the mount cwd, then
+        // the configured default folder, then the Rust home fallback (null).
+        cwd: lastCwdRef.current ?? startCwd ?? lookRef.current.settings.defaultCwd ?? null,
         onEvent: channel,
         shell: null,
         cols: term.cols,
@@ -269,6 +332,7 @@ export default function TerminalPane({
         } catch {
           /* container not ready / hidden */
         }
+        recomputeBar();
       });
     });
     ro.observe(hostRef.current);
@@ -277,7 +341,9 @@ export default function TerminalPane({
       disposed = true;
       clearTimeout(cwdHintTimer);
       cancelAnimationFrame(roRaf);
+      cancelAnimationFrame(barRaf);
       ro.disconnect();
+      scrollSub.dispose();
       linkProvider.dispose();
       bellSub.dispose();
       titleSub.dispose();
@@ -308,14 +374,15 @@ export default function TerminalPane({
     return () => cancelAnimationFrame(raf);
   }, [visible, sessionId]);
 
-  // Only the focused pane grabs the keyboard.
+  // Only the focused pane grabs the keyboard. `focusSignal` bumps when an overlay
+  // (settings, confirm, file panel) closes, so the terminal refocuses without a click.
   useEffect(() => {
     if (!active) return;
     const term = termRef.current;
     if (!term) return;
     const raf = requestAnimationFrame(() => term.focus());
     return () => cancelAnimationFrame(raf);
-  }, [active, sessionId]);
+  }, [active, sessionId, focusSignal]);
 
   // ⌘F opens search in the active terminal.
   useEffect(() => {
@@ -343,12 +410,22 @@ export default function TerminalPane({
     };
     term.options.fontSize = settings.terminalFontSize;
     term.options.fontFamily = settings.fontFamily;
+    // Scroll tuning applies live (no remount).
+    term.options.scrollSensitivity = settings.scrollSpeed;
+    term.options.fastScrollSensitivity = settings.scrollSpeed * 4;
+    term.options.smoothScrollDuration = settings.smoothScroll ? SMOOTH_SCROLL_MS : 0;
     try {
       fitRef.current?.fit();
     } catch {
       /* ignore */
     }
-  }, [theme, settings.terminalFontSize, settings.fontFamily]);
+  }, [
+    theme,
+    settings.terminalFontSize,
+    settings.fontFamily,
+    settings.scrollSpeed,
+    settings.smoothScroll,
+  ]);
 
   function runSearch(term: string, dir: "next" | "prev") {
     if (!term) return;
@@ -359,6 +436,15 @@ export default function TerminalPane({
   return (
     <div className="terminal-wrap" onFocusCapture={() => onFocusSurface("terminal")}>
       <div className="terminal-host" ref={hostRef} />
+      {bar.visible && (
+        <div className="term-scrollbar" ref={trackRef} onMouseDown={onTrackMouseDown}>
+          <div
+            className="term-scrollbar-thumb"
+            style={{ top: `${bar.topPct}%`, height: `${bar.heightPct}%` }}
+            onMouseDown={onThumbMouseDown}
+          />
+        </div>
+      )}
       {onRequestClose && (
         <button className="term-close" title="Close session" onClick={onRequestClose}>
           <Close size={14} />

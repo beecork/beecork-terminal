@@ -145,6 +145,12 @@ export interface Settings {
   /** editor (CodeMirror) font size — zoomable independently */
   editorFontSize: number;
   fontFamily: string;
+  /** folder new shells open in when they don't inherit a cwd (undefined = ask on first run) */
+  defaultCwd?: string;
+  /** wheel/trackpad lines per notch (xterm scrollSensitivity) */
+  scrollSpeed: number;
+  /** eased/animated viewport scrolling (xterm smoothScrollDuration > 0) */
+  smoothScroll: boolean;
 }
 
 export const MIN_FONT = 9;
@@ -152,11 +158,18 @@ export const MAX_FONT = 28;
 /** Default font size for both surfaces (⌘0 reset uses this — single source of truth). */
 export const DEFAULT_FONT_SIZE = 13;
 
+export const MIN_SCROLL_SPEED = 1;
+export const MAX_SCROLL_SPEED = 10;
+/** ms of eased animation when smooth scrolling is on (0 elsewhere = instant). */
+export const SMOOTH_SCROLL_MS = 90;
+
 const DEFAULTS: Settings = {
   themeId: "mocha",
   terminalFontSize: DEFAULT_FONT_SIZE,
   editorFontSize: DEFAULT_FONT_SIZE,
   fontFamily: 'Menlo, "SF Mono", Monaco, "Cascadia Code", monospace',
+  scrollSpeed: 3,
+  smoothScroll: false,
 };
 
 const STORAGE_KEY = "beecork.settings";

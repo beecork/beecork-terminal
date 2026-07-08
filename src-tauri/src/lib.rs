@@ -11,6 +11,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(PtyState::default())
         .manage(watcher::WatchControl::default())
         .on_window_event(|window, event| {
@@ -35,6 +36,7 @@ pub fn run() {
             pty::pty_kill,
             pty::pty_status_all,
             fs::get_root,
+            fs::home_dir,
             fs::list_dir,
             fs::read_file,
             fs::write_file,
