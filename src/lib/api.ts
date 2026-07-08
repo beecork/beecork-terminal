@@ -16,6 +16,20 @@ export const getRoot = () => invoke<string>("get_root");
 /** The user's home directory — the sensible default startup folder. */
 export const getHomeDir = () => invoke<string>("home_dir");
 
+/** Reveal a path in the OS file manager (Finder / Explorer). */
+export const revealPath = (path: string) => invoke<void>("reveal_path", { path });
+
+/** Rename / move a filesystem entry (rejects if the target exists). */
+export const renamePath = (from: string, to: string) =>
+  invoke<void>("rename_path", { from, to });
+
+/** Create an empty file or a directory (rejects if the path exists). */
+export const createPath = (path: string, isDir: boolean) =>
+  invoke<void>("create_path", { path, isDir });
+
+/** Move a path to the OS trash (recoverable). */
+export const deletePath = (path: string) => invoke<void>("delete_path", { path });
+
 export interface PtyStatus {
   /** the shell's working directory (follows `cd`) */
   cwd: string | null;

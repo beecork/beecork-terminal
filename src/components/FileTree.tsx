@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { listDir, type ChangeStatus, type Entry } from "../lib/api";
 import { onFsChanged } from "../lib/events";
 import { Chevron, Folder, File } from "./icons";
@@ -9,6 +9,7 @@ interface Props {
   onOpenFile: (path: string) => void;
   statusByPath: Map<string, ChangeStatus>;
   changedDirs: Set<string>;
+  onRowContextMenu?: (e: ReactMouseEvent, entry: Entry) => void;
 }
 
 export default function FileTree({
@@ -17,6 +18,7 @@ export default function FileTree({
   onOpenFile,
   statusByPath,
   changedDirs,
+  onRowContextMenu,
 }: Props) {
   const [entries, setEntries] = useState<Entry[] | null>(null);
   const [error, setError] = useState("");
@@ -55,6 +57,7 @@ export default function FileTree({
           onOpenFile={onOpenFile}
           statusByPath={statusByPath}
           changedDirs={changedDirs}
+          onRowContextMenu={onRowContextMenu}
         />
       ))}
     </div>
@@ -68,6 +71,7 @@ interface NodeProps {
   onOpenFile: (path: string) => void;
   statusByPath: Map<string, ChangeStatus>;
   changedDirs: Set<string>;
+  onRowContextMenu?: (e: ReactMouseEvent, entry: Entry) => void;
 }
 
 function TreeNode({
@@ -77,6 +81,7 @@ function TreeNode({
   onOpenFile,
   statusByPath,
   changedDirs,
+  onRowContextMenu,
 }: NodeProps) {
   const [open, setOpen] = useState(false);
   const [children, setChildren] = useState<Entry[] | null>(null);
@@ -126,6 +131,7 @@ function TreeNode({
         }`}
         style={{ paddingLeft: 8 + depth * 14 }}
         onClick={activate}
+        onContextMenu={(e) => onRowContextMenu?.(e, entry)}
         title={entry.name}
       >
         <span className="tree-chev">
@@ -153,6 +159,7 @@ function TreeNode({
               onOpenFile={onOpenFile}
               statusByPath={statusByPath}
               changedDirs={changedDirs}
+              onRowContextMenu={onRowContextMenu}
             />
           ))}
         </>

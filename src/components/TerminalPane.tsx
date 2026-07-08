@@ -10,6 +10,9 @@ import { decodeBase64, PATH_RE, looksLikePath, splitFileLine, parseOsc7 } from "
 import { resumeCommand } from "../lib/sessions";
 import { scrollbarGeometry, viewportYForFraction } from "../lib/scroll";
 import { useDrag } from "../lib/useDrag";
+import { useContextMenu } from "../lib/useContextMenu";
+import { copyText, readText } from "../lib/clipboard";
+import ContextMenu, { type MenuEntry } from "./ContextMenu";
 import ZoomControl from "./ZoomControl";
 import { Close } from "./icons";
 import "@xterm/xterm/css/xterm.css";
@@ -40,6 +43,12 @@ interface Props {
   onFocusSurface: (s: Surface) => void;
   /** bump this to pull keyboard focus back to the active terminal (e.g. a modal closed) */
   focusSignal: number;
+  /** right-click menu: start a new session (inherits cwd) */
+  onNewSession: () => void;
+  /** right-click menu: split / unsplit this session */
+  onToggleSplit: () => void;
+  /** right-click menu: close this session */
+  onCloseSession: () => void;
   /** if set, show a close-session ✕ in the terminal (single view only) */
   onRequestClose?: () => void;
   /** on a restored session, the agent to offer resuming (e.g. "claude") */
@@ -62,6 +71,9 @@ export default function TerminalPane({
   onActivity,
   onFocusSurface,
   focusSignal,
+  onNewSession,
+  onToggleSplit,
+  onCloseSession,
   onRequestClose,
   resumeAgent,
   onResumeConsumed,
@@ -131,6 +143,68 @@ export default function TerminalPane({
     if (!term || !track) return;
     const rect = track.getBoundingClientRect();
     term.scrollToLine(viewportYForFraction((e.clientY - rect.top) / rect.height, term.buffer.active.baseY));
+  }
+
+  // Right-click menu for the terminal. Selection state is captured at open time.
+  const { menu: ctxMenu, openMenu: openCtx, closeMenu: closeCtx } = useContextMenu<{
+    hasSelection: boolean;
+  }>();
+
+  function onTermContextMenu(e: ReactMouseEvent<HTMLDivElement>) {
+    openCtx(e, { hasSelection: !!termRef.current?.hasSelection() });
+  }
+
+  function termMenu(hasSelection: boolean): MenuEntry[] {
+    const term = termRef.current;
+    return [
+      {
+        label: "Copy",
+        hint: "⌘C",
+        disabled: !hasSelection,
+        onSelect: () => {
+          const sel = term?.getSelection() ?? "";
+          if (sel) copyText(sel);
+          term?.focus();
+        },
+      },
+      {
+        label: "Paste",
+        hint: "⌘V",
+        onSelect: () => {
+          readText().then((t) => {
+            if (t) term?.paste(t);
+            term?.focus();
+          });
+        },
+      },
+      {
+        label: "Select all",
+        onSelect: () => {
+          term?.selectAll();
+          term?.focus();
+        },
+      },
+      {
+        label: "Clear",
+        onSelect: () => {
+          term?.clear();
+          term?.focus();
+        },
+      },
+      "separator",
+      {
+        label: "Find…",
+        hint: "⌘F",
+        onSelect: () => {
+          setShowSearch(true);
+          requestAnimationFrame(() => searchInputRef.current?.focus());
+        },
+      },
+      { label: "Split", hint: "⌘D", onSelect: onToggleSplit },
+      { label: "New session", hint: "⌘T", onSelect: onNewSession },
+      "separator",
+      { label: "Close session", danger: true, onSelect: onCloseSession },
+    ];
   }
 
   useEffect(() => {
@@ -434,7 +508,11 @@ export default function TerminalPane({
   }
 
   return (
-    <div className="terminal-wrap" onFocusCapture={() => onFocusSurface("terminal")}>
+    <div
+      className="terminal-wrap"
+      onFocusCapture={() => onFocusSurface("terminal")}
+      onContextMenu={onTermContextMenu}
+    >
       <div className="terminal-host" ref={hostRef} />
       {bar.visible && (
         <div className="term-scrollbar" ref={trackRef} onMouseDown={onTrackMouseDown}>
@@ -505,6 +583,14 @@ export default function TerminalPane({
             ✕
           </button>
         </div>
+      )}
+      {ctxMenu && (
+        <ContextMenu
+          x={ctxMenu.x}
+          y={ctxMenu.y}
+          items={termMenu(ctxMenu.payload.hasSelection)}
+          onClose={closeCtx}
+        />
       )}
     </div>
   );

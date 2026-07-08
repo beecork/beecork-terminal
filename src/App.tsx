@@ -40,6 +40,7 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [openRequest, setOpenRequest] = useState<OpenRequest | null>(null);
   const [confirmClose, setConfirmClose] = useState<Session | null>(null);
+  const [confirmCloseOthers, setConfirmCloseOthers] = useState<string | null>(null);
   const [railExpanded, setRailExpanded] = usePersistedState(
     "beecork.railExpanded",
     false,
@@ -165,10 +166,43 @@ export default function App() {
     if (s) setConfirmClose(s);
   }
 
+  // Right-click → "Split with active": pair the clicked session with the focused
+  // one (or plain split-toggle when you right-click the active one itself).
+  function splitWith(id: string) {
+    if (id === activeIdRef.current) {
+      toggleSplitRef.current();
+      return;
+    }
+    pairSessions(activeIdRef.current, id);
+    setPanelOpen(false);
+  }
+
+  // Right-click → "Close others": tear down every session but `keepId`.
+  function closeOthers(keepId: string) {
+    for (const s of sessionsRef.current) {
+      if (s.id !== keepId) {
+        close(s.id);
+        markClosed(s.id);
+      }
+    }
+    setActiveId(keepId);
+  }
+
   const onOpenPath = useCallback((path: string, line?: number) => {
     setOpenRequest({ path, line, n: ++reqN.current });
     setPanelOpen(true);
   }, []);
+
+  // File-browser right-click → "Open folder in terminal": cd the active session there.
+  const openInTerminal = useCallback(
+    (dir: string) => {
+      invoke("pty_write", { id: activeIdRef.current, data: `cd ${shellQuote(dir)}\n` }).catch(
+        () => {}
+      );
+      focusTerminal();
+    },
+    [focusTerminal]
+  );
 
   function newWindow() {
     const label = "win-" + Date.now();
@@ -293,6 +327,10 @@ export default function App() {
           onToggleExpand={() => setRailExpanded((e) => !e)}
           onRename={rename}
           onOpenSettings={() => setSettingsOpen(true)}
+          onCreateIn={(cwd) => create(cwd)}
+          onSplitWith={splitWith}
+          onUnsplit={unpairSession}
+          onCloseOthers={(id) => setConfirmCloseOthers(id)}
         />
 
         <div className={`terminals${split ? " split" : ""}`} ref={terminalsRef}>
@@ -340,6 +378,9 @@ export default function App() {
                   onActivity={onActivity}
                   onFocusSurface={onFocusSurface}
                   focusSignal={focusNonce}
+                  onNewSession={newSession}
+                  onToggleSplit={() => toggleSplitRef.current()}
+                  onCloseSession={() => requestClose(s.id)}
                   onRequestClose={!split && isFocused ? () => requestClose(s.id) : undefined}
                   resumeAgent={s.resumeAgent}
                   onResumeConsumed={clearResume}
@@ -362,6 +403,7 @@ export default function App() {
                 openRequest={openRequest}
                 root={terminalCwd}
                 onFocusSurface={onFocusSurface}
+                onOpenInTerminal={openInTerminal}
                 onCollapse={() => {
                   setPanelOpen(false);
                   focusTerminal();
@@ -434,6 +476,23 @@ export default function App() {
             close(confirmClose.id);
             markClosed(confirmClose.id);
             setConfirmClose(null);
+            focusTerminal();
+          }}
+        />
+      )}
+      {confirmCloseOthers && (
+        <ConfirmModal
+          title="Close other sessions?"
+          message={`Every session except this one — and their running processes — will be terminated.`}
+          confirmLabel="Close others"
+          danger
+          onCancel={() => {
+            setConfirmCloseOthers(null);
+            focusTerminal();
+          }}
+          onConfirm={() => {
+            closeOthers(confirmCloseOthers);
+            setConfirmCloseOthers(null);
             focusTerminal();
           }}
         />

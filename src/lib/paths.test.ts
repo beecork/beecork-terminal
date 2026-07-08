@@ -1,6 +1,9 @@
 import { describe, it, expect } from "vitest";
 import {
   basename,
+  dirname,
+  joinPath,
+  relativePath,
   looksLikePath,
   splitFileLine,
   parseOsc7,
@@ -16,6 +19,45 @@ describe("basename", () => {
   });
   it("returns '/' for root", () => {
     expect(basename("/")).toBe("/");
+  });
+});
+
+describe("dirname", () => {
+  it("returns the parent directory", () => {
+    expect(dirname("/a/b/c")).toBe("/a/b");
+  });
+  it("tolerates a trailing slash", () => {
+    expect(dirname("/a/b/")).toBe("/a");
+  });
+  it("returns '/' for a top-level entry", () => {
+    expect(dirname("/a")).toBe("/");
+  });
+  it("returns '' for a bare name", () => {
+    expect(dirname("a")).toBe("");
+  });
+});
+
+describe("joinPath", () => {
+  it("joins with a single separator", () => {
+    expect(joinPath("/a/b", "c.txt")).toBe("/a/b/c.txt");
+  });
+  it("collapses redundant separators", () => {
+    expect(joinPath("/a/b/", "/c.txt")).toBe("/a/b/c.txt");
+  });
+});
+
+describe("relativePath", () => {
+  it("strips the root prefix", () => {
+    expect(relativePath("/r/a/b", "/r")).toBe("a/b");
+  });
+  it("tolerates a trailing slash on root", () => {
+    expect(relativePath("/r/a", "/r/")).toBe("a");
+  });
+  it("returns the basename when the path is the root itself", () => {
+    expect(relativePath("/r", "/r")).toBe("r");
+  });
+  it("returns the full path when outside the root", () => {
+    expect(relativePath("/other/x", "/r")).toBe("/other/x");
   });
 });
 

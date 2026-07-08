@@ -15,6 +15,27 @@ export function basename(p: string): string {
   return parts[parts.length - 1] ?? p;
 }
 
+/** Parent directory ("/a/b/c" → "/a/b", "/a" → "/", "a" → ""). */
+export function dirname(p: string): string {
+  const trimmed = p.replace(/\/+$/, "");
+  const idx = trimmed.lastIndexOf("/");
+  if (idx < 0) return "";
+  return idx === 0 ? "/" : trimmed.slice(0, idx);
+}
+
+/** Join a directory and a name with exactly one separator. */
+export function joinPath(dir: string, name: string): string {
+  return dir.replace(/\/+$/, "") + "/" + name.replace(/^\/+/, "");
+}
+
+/** Path relative to `root` ("/r/a/b" under "/r" → "a/b"); returns it unchanged if outside root. */
+export function relativePath(full: string, root: string): string {
+  if (!root) return full;
+  const r = root.replace(/\/+$/, "");
+  if (full === r) return basename(full);
+  return full.startsWith(r + "/") ? full.slice(r.length + 1) : full;
+}
+
 /** Matches file-ish tokens (optionally with :line[:col]) in terminal output. */
 export const PATH_RE =
   /(?:[\w.@~-]+\/)*[\w.@~-]+\.[A-Za-z]{1,10}(?::\d+(?::\d+)?)?/g;

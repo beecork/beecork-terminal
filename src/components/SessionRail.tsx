@@ -2,6 +2,9 @@ import { useState } from "react";
 import { displayName, type Session } from "../lib/sessions";
 import { Plus, Close, Pencil, Chevron, Gear } from "./icons";
 import { noFocusSteal } from "../lib/keepFocus";
+import { useContextMenu } from "../lib/useContextMenu";
+import { copyText } from "../lib/clipboard";
+import ContextMenu, { type MenuEntry } from "./ContextMenu";
 import RenameInput from "./RenameInput";
 
 interface Props {
@@ -18,6 +21,14 @@ interface Props {
   onToggleExpand: () => void;
   onRename: (id: string, name: string) => void;
   onOpenSettings: () => void;
+  /** new session started in a specific folder (right-click → "New session here") */
+  onCreateIn: (cwd?: string) => void;
+  /** pair this session with the active one in split view */
+  onSplitWith: (id: string) => void;
+  /** dissolve this session's split pair */
+  onUnsplit: (id: string) => void;
+  /** close every session except this one */
+  onCloseOthers: (id: string) => void;
 }
 
 // The dot tells the truth about the session's state on EVERY row — which one is
@@ -41,8 +52,40 @@ export default function SessionRail({
   onToggleExpand,
   onRename,
   onOpenSettings,
+  onCreateIn,
+  onSplitWith,
+  onUnsplit,
+  onCloseOthers,
 }: Props) {
   const [editingId, setEditingId] = useState<string | null>(null);
+  const { menu, openMenu, closeMenu } = useContextMenu<Session>();
+
+  function sessionMenu(s: Session): MenuEntry[] {
+    const isActive = s.id === activeId;
+    const items: MenuEntry[] = [
+      { label: "New session here", onSelect: () => onCreateIn(s.cwd) },
+      {
+        label: "Rename",
+        onSelect: () => {
+          if (!expanded) onToggleExpand();
+          setEditingId(s.id);
+        },
+      },
+      s.partner
+        ? { label: "Unsplit", onSelect: () => onUnsplit(s.id) }
+        : {
+            label: isActive ? "Split view" : "Split with active",
+            onSelect: () => onSplitWith(s.id),
+          },
+      { label: "Copy folder path", disabled: !s.cwd, onSelect: () => s.cwd && copyText(s.cwd) },
+      "separator",
+      { label: "Close session", danger: true, onSelect: () => onClose(s.id) },
+    ];
+    if (sessions.length > 1) {
+      items.push({ label: "Close others", danger: true, onSelect: () => onCloseOthers(s.id) });
+    }
+    return items;
+  }
 
   return (
     <div className={`session-rail ${expanded ? "expanded" : "collapsed"}`}>
@@ -73,6 +116,7 @@ export default function SessionRail({
               className={`rail-item${isActive ? " active" : ""}${wants ? " needs-you" : ""}`}
               onClick={() => onSelect(s.id)}
               onDoubleClick={() => expanded && setEditingId(s.id)}
+              onContextMenu={(e) => openMenu(e, s)}
               title={expanded ? name : `${i + 1}. ${name}`}
             >
               <span className={dotClass(isBusy, wants)} />
@@ -141,6 +185,10 @@ export default function SessionRail({
           {expanded && <span className="rail-name">Settings</span>}
         </button>
       </div>
+
+      {menu && (
+        <ContextMenu x={menu.x} y={menu.y} items={sessionMenu(menu.payload)} onClose={closeMenu} />
+      )}
     </div>
   );
 }

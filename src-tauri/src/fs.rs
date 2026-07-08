@@ -58,6 +58,67 @@ pub fn home_dir() -> String {
     std::env::var(var).unwrap_or_else(|_| "/".to_string())
 }
 
+/// Reveal a path in the OS file manager (Finder / Explorer / default), selecting
+/// it where the platform supports it.
+#[tauri::command]
+pub fn reveal_path(path: String) -> Result<(), String> {
+    use std::process::Command;
+    #[cfg(target_os = "macos")]
+    let spawned = Command::new("open").args(["-R", &path]).spawn();
+    #[cfg(target_os = "windows")]
+    let spawned = Command::new("explorer").arg(format!("/select,{}", path)).spawn();
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let spawned = {
+        // Linux has no standard "reveal + select"; open the containing folder.
+        let dir = std::path::Path::new(&path)
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| std::path::PathBuf::from(&path));
+        Command::new("xdg-open").arg(dir).spawn()
+    };
+    spawned.map(|_| ()).map_err(|e| e.to_string())
+}
+
+/// Rename / move a filesystem entry. Refuses to clobber an existing target.
+#[tauri::command]
+pub fn rename_path(from: String, to: String) -> Result<(), String> {
+    if std::path::Path::new(&to).exists() {
+        return Err(format!("“{}” already exists", basename(&to)));
+    }
+    std::fs::rename(&from, &to).map_err(|e| e.to_string())
+}
+
+/// Create an empty file or a directory. Errors if the path already exists.
+#[tauri::command]
+pub fn create_path(path: String, is_dir: bool) -> Result<(), String> {
+    let p = std::path::Path::new(&path);
+    if p.exists() {
+        return Err(format!("“{}” already exists", basename(&path)));
+    }
+    if is_dir {
+        std::fs::create_dir_all(p).map_err(|e| e.to_string())
+    } else {
+        if let Some(parent) = p.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        std::fs::File::create(p).map(|_| ()).map_err(|e| e.to_string())
+    }
+}
+
+/// Move a path to the OS trash — recoverable, never a permanent delete.
+#[tauri::command]
+pub fn delete_path(path: String) -> Result<(), String> {
+    trash::delete(&path).map_err(|e| e.to_string())
+}
+
+/// Last path segment (for user-facing error messages).
+fn basename(p: &str) -> &str {
+    p.trim_end_matches(['/', '\\'])
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(p)
+}
+
 #[tauri::command]
 pub fn list_dir(path: Option<String>) -> Result<Listing, String> {
     let dir = path.map(PathBuf::from).unwrap_or_else(project_root);

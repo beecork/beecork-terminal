@@ -1374,3 +1374,70 @@ body {
   opacity: 0.7;
   background: var(--accent);
 }
+
+/* ---- right-click context menu (shared by rail / terminal / file tree) ---- */
+.ctx-menu {
+  position: fixed;
+  z-index: 9999;
+  min-width: 180px;
+  max-width: 320px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 4px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+}
+.ctx-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  color: var(--fg);
+  cursor: pointer;
+  font-size: 13px;
+  padding: 6px 10px;
+  border-radius: 6px;
+}
+.ctx-item:hover:not(:disabled) {
+  background: var(--hover);
+}
+.ctx-item:disabled {
+  color: var(--muted);
+  opacity: 0.5;
+  cursor: default;
+}
+.ctx-item.danger {
+  color: #f38ba8;
+}
+.ctx-item.danger:hover:not(:disabled) {
+  background: rgba(243, 139, 168, 0.14);
+}
+.ctx-ic {
+  flex: 0 0 auto;
+  display: inline-flex;
+  width: 16px;
+  color: var(--muted);
+}
+.ctx-item.danger .ctx-ic {
+  color: inherit;
+}
+.ctx-label {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ctx-hint {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--muted);
+  letter-spacing: 0.02em;
+}
+.ctx-sep {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--border);
+}
