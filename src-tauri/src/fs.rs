@@ -79,6 +79,23 @@ pub fn reveal_path(path: String) -> Result<(), String> {
     spawned.map(|_| ()).map_err(|e| e.to_string())
 }
 
+/// Open an http(s) URL in the user's default browser. Only web URLs are allowed —
+/// never `file://`, `javascript:`, etc. — since URLs can come from terminal output.
+#[tauri::command]
+pub fn open_url(url: String) -> Result<(), String> {
+    if !(url.starts_with("http://") || url.starts_with("https://")) {
+        return Err("Refusing to open a non-http(s) URL.".into());
+    }
+    use std::process::Command;
+    #[cfg(target_os = "macos")]
+    let spawned = Command::new("open").arg(&url).spawn();
+    #[cfg(target_os = "windows")]
+    let spawned = Command::new("cmd").args(["/C", "start", "", &url]).spawn();
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let spawned = Command::new("xdg-open").arg(&url).spawn();
+    spawned.map(|_| ()).map_err(|e| e.to_string())
+}
+
 /// Rename / move a filesystem entry. Refuses to clobber an existing target.
 #[tauri::command]
 pub fn rename_path(from: String, to: String) -> Result<(), String> {

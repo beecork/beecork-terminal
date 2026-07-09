@@ -4,9 +4,9 @@ import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { SearchAddon } from "@xterm/addon-search";
 import { invoke, Channel } from "@tauri-apps/api/core";
-import { getRoot } from "../lib/api";
+import { getRoot, revealPath, openUrl } from "../lib/api";
 import { useSettings, zoomFont, SMOOTH_SCROLL_MS, type Surface } from "../lib/settings";
-import { decodeBase64, PATH_RE, looksLikePath, splitFileLine, parseOsc7 } from "../lib/paths";
+import { decodeBase64, PATH_RE, URL_RE, looksLikePath, splitFileLine, parseOsc7 } from "../lib/paths";
 import { resumeCommand } from "../lib/sessions";
 import { scrollbarGeometry, viewportYForFraction } from "../lib/scroll";
 import { useDrag } from "../lib/useDrag";
@@ -212,14 +212,16 @@ export default function TerminalPane({
     getRoot().then((r) => (rootRef.current = r)).catch(() => {});
   }, []);
 
-  function openToken(token: string) {
+  function openToken(token: string, reveal = false) {
     const { file, line } = splitFileLine(token);
     let abs = file;
     if (!file.startsWith("/")) {
       const root = rootRef.current;
       if (root) abs = root.replace(/\/$/, "") + "/" + file.replace(/^\.\//, "");
     }
-    cbRef.current.onOpenPath(abs, line);
+    // ⌘/Ctrl-click reveals in Finder; a plain click opens it in the editor.
+    if (reveal) void revealPath(abs).catch(() => {});
+    else cbRef.current.onOpenPath(abs, line);
   }
 
   useEffect(() => {
@@ -285,7 +287,8 @@ export default function TerminalPane({
     };
     const scrollSub = term.onScroll(recomputeBar);
 
-    // Clickable file:line paths.
+    // Clickable links in output: http(s) URLs (→ browser) and file:line paths
+    // (click → editor, ⌘/Ctrl-click → reveal in Finder).
     const linkProvider = term.registerLinkProvider({
       provideLinks(y, callback) {
         const bufLine = term.buffer.active.getLine(y - 1);
@@ -295,17 +298,36 @@ export default function TerminalPane({
         }
         const text = bufLine.translateToString(true);
         const links = [];
-        PATH_RE.lastIndex = 0;
+        const urlRanges: Array<[number, number]> = [];
         let m: RegExpExecArray | null;
+
+        // URLs first — open in the system browser. (localhost will route to the
+        // in-app preview once that pane exists; system browser for now.)
+        URL_RE.lastIndex = 0;
+        while ((m = URL_RE.exec(text)) !== null) {
+          const token = m[0];
+          const start = m.index;
+          const end = m.index + token.length;
+          urlRanges.push([start, end]);
+          links.push({
+            text: token,
+            range: { start: { x: start + 1, y }, end: { x: end, y } },
+            activate: () => void openUrl(token).catch(() => {}),
+          });
+        }
+
+        // File paths — but skip any that sit inside a URL we already linked.
+        PATH_RE.lastIndex = 0;
         while ((m = PATH_RE.exec(text)) !== null) {
           const token = m[0];
           if (!looksLikePath(token)) continue;
-          const startX = m.index + 1;
-          const endX = m.index + token.length;
+          const start = m.index;
+          const end = m.index + token.length;
+          if (urlRanges.some(([s, e]) => start < e && end > s)) continue;
           links.push({
             text: token,
-            range: { start: { x: startX, y }, end: { x: endX, y } },
-            activate: () => openToken(token),
+            range: { start: { x: start + 1, y }, end: { x: end, y } },
+            activate: (e: MouseEvent) => openToken(token, e.metaKey || e.ctrlKey),
           });
         }
         callback(links.length ? links : undefined);

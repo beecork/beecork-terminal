@@ -26,6 +26,9 @@ export const getHomeDir = () => invoke<string>("home_dir");
 /** Reveal a path in the OS file manager (Finder / Explorer). */
 export const revealPath = (path: string) => invoke<void>("reveal_path", { path });
 
+/** Open an http(s) URL in the user's default browser. */
+export const openUrl = (url: string) => invoke<void>("open_url", { url });
+
 /** Rename / move a filesystem entry (rejects if the target exists). */
 export const renamePath = (from: string, to: string) =>
   invoke<void>("rename_path", { from, to });

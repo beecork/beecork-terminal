@@ -38,6 +38,7 @@ pub fn run() {
             fs::get_root,
             fs::home_dir,
             fs::reveal_path,
+            fs::open_url,
             fs::rename_path,
             fs::create_path,
             fs::delete_path,

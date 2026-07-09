@@ -40,6 +40,16 @@ export function relativePath(full: string, root: string): string {
 export const PATH_RE =
   /(?:[\w.@~-]+\/)*[\w.@~-]+\.[A-Za-z]{1,10}(?::\d+(?::\d+)?)?/g;
 
+/** Matches http(s) URLs (incl. localhost) in terminal output, up to whitespace/
+ *  quotes/brackets. The final char excludes trailing sentence punctuation so
+ *  "visit http://localhost:3000." links to the URL without the period. */
+export const URL_RE = /https?:\/\/[^\s'"()<>[\]]*[^\s'"()<>[\].,;:!?]/g;
+
+/** True for a localhost / loopback URL (candidate for the in-app preview vs system browser). */
+export function isLocalUrl(url: string): boolean {
+  return /^https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(:|\/|$)/i.test(url);
+}
+
 const CODE_EXT =
   /\.(ts|tsx|js|jsx|mjs|cjs|json|rs|py|css|scss|less|html|md|txt|go|java|c|cc|cpp|h|hpp|toml|yml|yaml|sh|lock|rb|php|swift|kt|sql|vue|svelte)$/i;
 

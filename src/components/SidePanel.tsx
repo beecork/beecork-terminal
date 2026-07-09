@@ -32,6 +32,8 @@ interface Props {
   openRequest: OpenRequest | null;
   /** The active terminal's working directory — the browser follows it. */
   root: string | null;
+  /** The active session id — the editor remembers open files per session. */
+  sessionId: string;
   onFocusSurface: (s: Surface) => void;
   /** right-click → "Open in terminal": cd the active session into a folder */
   onOpenInTerminal: (dir: string) => void;
@@ -54,6 +56,7 @@ type PanelLayout = "stacked" | "sideBySide";
 export default function SidePanel({
   openRequest,
   root,
+  sessionId,
   onFocusSurface,
   onOpenInTerminal,
   onCollapse,
@@ -86,6 +89,23 @@ export default function SidePanel({
   const focusedRef = useRef(focused);
   focusedRef.current = focused;
   const bodyRef = useRef<HTMLDivElement>(null);
+
+  // Remember open files per terminal session (tab): when the active session
+  // changes, save the outgoing session's editor state and restore the incoming
+  // one (a fresh empty editor if it has none).
+  const paneStateRef = useRef({ panes, focused });
+  paneStateRef.current = { panes, focused };
+  const paneMemory = useRef<Record<string, { panes: (string | null)[]; focused: number }>>({});
+  const prevSessionRef = useRef(sessionId);
+  useEffect(() => {
+    const prev = prevSessionRef.current;
+    if (prev === sessionId) return;
+    paneMemory.current[prev] = paneStateRef.current; // save outgoing (latest)
+    const saved = paneMemory.current[sessionId];
+    setPanes(saved?.panes ?? [null]);
+    setFocused(saved?.focused ?? 0);
+    prevSessionRef.current = sessionId;
+  }, [sessionId]);
 
   // Drag the Files/Editor divider (vertical in stacked, horizontal in side-by-side).
   const startTreeDrag = useDrag((e) => {

@@ -496,6 +496,7 @@ export default function App() {
               <SidePanel
                 openRequest={openRequest}
                 root={terminalCwd}
+                sessionId={activeId}
                 onFocusSurface={onFocusSurface}
                 onOpenInTerminal={openInTerminal}
                 onCollapse={() => {

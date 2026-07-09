@@ -9,6 +9,8 @@ import {
   parseOsc7,
   changedAncestors,
   mediaKind,
+  URL_RE,
+  isLocalUrl,
 } from "./paths";
 
 describe("basename", () => {
@@ -136,5 +138,38 @@ describe("mediaKind", () => {
   it("returns null for extensionless paths and dotfiles", () => {
     expect(mediaKind("README")).toBeNull();
     expect(mediaKind("/repo/.env")).toBeNull();
+  });
+});
+
+describe("URL_RE", () => {
+  const find = (text: string): string[] => {
+    URL_RE.lastIndex = 0;
+    return text.match(URL_RE) ?? [];
+  };
+  it("extracts http(s) URLs, including localhost with a port and path", () => {
+    expect(find("  ➜  Local:   http://localhost:3000/")).toEqual(["http://localhost:3000/"]);
+    expect(find("ready on https://127.0.0.1:5173/app")).toEqual(["https://127.0.0.1:5173/app"]);
+  });
+  it("drops trailing sentence punctuation", () => {
+    expect(find("see http://localhost:3000.")).toEqual(["http://localhost:3000"]);
+    expect(find("(open https://example.com/x)")).toEqual(["https://example.com/x"]);
+  });
+  it("finds multiple URLs on one line", () => {
+    expect(find("a http://a.com b https://b.com/y c")).toEqual(["http://a.com", "https://b.com/y"]);
+  });
+  it("ignores bare paths and non-http schemes", () => {
+    expect(find("src/App.tsx and file:///etc/hosts")).toEqual([]);
+  });
+});
+
+describe("isLocalUrl", () => {
+  it("is true for loopback hosts", () => {
+    expect(isLocalUrl("http://localhost:3000/")).toBe(true);
+    expect(isLocalUrl("https://127.0.0.1:5173")).toBe(true);
+    expect(isLocalUrl("http://0.0.0.0:8080/x")).toBe(true);
+  });
+  it("is false for external hosts", () => {
+    expect(isLocalUrl("https://example.com")).toBe(false);
+    expect(isLocalUrl("http://localhost.evil.com")).toBe(false);
   });
 });
