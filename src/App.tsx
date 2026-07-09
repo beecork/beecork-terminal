@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { invoke } from "@tauri-apps/api/core";
 import TerminalPane from "./components/TerminalPane";
 import SidePanel from "./components/SidePanel";
@@ -19,6 +20,7 @@ import { setWatchRoot } from "./lib/api";
 import { usePersistedState } from "./lib/persist";
 import { useDrag } from "./lib/useDrag";
 import { initNotifications } from "./lib/notify";
+import * as sound from "./lib/sound";
 import { useSettings, zoomFont, type Surface } from "./lib/settings";
 import { noFocusSteal } from "./lib/keepFocus";
 import "./App.css";
@@ -114,6 +116,23 @@ export default function App() {
   const { terminalCwd, wantsYou, busy, onCwd, onStatusHint, onActivity, onBell, onSeen, markClosed } =
     useSessionStatus(sessions, activeId, visibleIds, setCwd, setRunning);
 
+  // A soft chime the instant a session newly needs you — agent finished, bell
+  // rang, or a background command ended. `wantsYou` is already gated on the
+  // session being off-screen, so this only ever fires when you're not looking
+  // (exactly when an audible nudge helps). One chime per batch of new attention.
+  const prevWantsRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    let fresh = false;
+    for (const id of wantsYou) {
+      if (!prevWantsRef.current.has(id)) {
+        fresh = true;
+        break;
+      }
+    }
+    prevWantsRef.current = wantsYou;
+    if (fresh) sound.attention();
+  }, [wantsYou]);
+
   const onFocusSurface = useCallback((s: Surface) => {
     zoomTargetRef.current = s;
   }, []);
@@ -121,9 +140,11 @@ export default function App() {
   const activeName = active ? displayName(active) : "Beecork Terminal";
   const cwdName = terminalCwd ? basename(terminalCwd) : "";
 
-  // A new session inherits the focused session's cwd.
+  // A new session inherits the focused session's cwd. (Action before sound, so a
+  // throwing sound call can never swallow the action — same rule as the send path.)
   const newSession = useCallback(() => {
     create(sessionsRef.current.find((s) => s.id === activeIdRef.current)?.cwd);
+    sound.create();
   }, [create]);
 
   // Drag the split divider — updates the left pane's width %.
@@ -146,9 +167,11 @@ export default function App() {
   }
 
   // Split the active session with its neighbour (or a new one), or unsplit it.
+  // Sound trails the action so a throwing sound call can't drop the split/unsplit.
   function toggleSplit() {
     if (partnerId) {
       unpairSession(activeId);
+      sound.panelClose(); // collapsing back to a single pane
       return;
     }
     const idx = sessions.findIndex((s) => s.id === activeId);
@@ -156,6 +179,7 @@ export default function App() {
     const partner = next?.id ?? create(active?.cwd, false);
     pairSessions(activeId, partner);
     setPanelOpen(false);
+    sound.split();
   }
   const toggleSplitRef = useRef(toggleSplit);
   toggleSplitRef.current = toggleSplit;
@@ -191,6 +215,7 @@ export default function App() {
   const onOpenPath = useCallback((path: string, line?: number) => {
     setOpenRequest({ path, line, n: ++reqN.current });
     setPanelOpen(true);
+    sound.blip(); // a file was opened into the editor (sound after the open)
   }, []);
 
   // File-browser right-click → "Open folder in terminal": cd the active session there.
@@ -218,6 +243,61 @@ export default function App() {
   useEffect(() => {
     initNotifications();
   }, []);
+
+  // Keep the (context-free) sound engine in sync with the user's preferences.
+  // Lives here rather than in settings.tsx so that editing sound.ts doesn't force
+  // a full page reload (settings.tsx can't Fast-Refresh; App.tsx can).
+  useEffect(() => {
+    sound.setSoundConfig({
+      enabled: settings.sound,
+      volume: settings.soundVolume,
+      uiSounds: settings.uiSounds,
+      keyClicks: settings.keyClicks,
+    });
+  }, [settings.sound, settings.soundVolume, settings.uiSounds, settings.keyClicks]);
+
+  // Keep the audio engine warm: create/resume the context up front and on each
+  // interaction, so the first sound after any idle gap isn't late (a cold or
+  // suspended context adds audible startup lag to that first sound). Skipped
+  // entirely when sound is off — no reason to hold a live AudioContext then.
+  useEffect(() => {
+    if (!settings.sound) return;
+    const warm = () => sound.warm();
+    warm();
+    window.addEventListener("pointerdown", warm);
+    window.addEventListener("keydown", warm);
+    return () => {
+      window.removeEventListener("pointerdown", warm);
+      window.removeEventListener("keydown", warm);
+    };
+  }, [settings.sound]);
+
+  // Drop a file / screenshot onto the window → paste its (shell-quoted) path into
+  // the active terminal, like dropping onto a native terminal (hand an agent an
+  // image by dragging it in). Tauri intercepts the OS drop — native HTML drop
+  // never fires — so we handle its drag-drop event and write to the PTY ourselves.
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    getCurrentWebview()
+      .onDragDropEvent((event) => {
+        if (event.payload.type !== "drop") return;
+        const paths = event.payload.paths;
+        if (!paths.length) return;
+        const data = paths.map(shellQuote).join(" ") + " ";
+        invoke("pty_write", { id: activeIdRef.current, data }).catch(() => {});
+        focusTerminal();
+      })
+      .then((u) => {
+        if (cancelled) u();
+        else unlisten = u;
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [focusTerminal]);
 
   // Keep the file watcher on the active terminal's directory, so the live diff
   // keeps updating after the terminal cd's outside the launch folder.
@@ -321,10 +401,19 @@ export default function App() {
           wantsYou={wantsYou}
           busy={busy}
           expanded={railExpanded}
-          onSelect={setActiveId}
+          onSelect={(id) => {
+            const switching = id !== activeId;
+            setActiveId(id);
+            if (switching) sound.blip();
+          }}
           onCreate={newSession}
           onClose={requestClose}
-          onToggleExpand={() => setRailExpanded((e) => !e)}
+          onToggleExpand={() => {
+            // Schedule the visual first (so a throwing sound can't drop the toggle),
+            // then play — withVisual holds the visual back to land with the sound.
+            sound.withVisual(() => setRailExpanded((e) => !e));
+            railExpanded ? sound.panelClose() : sound.panelOpen();
+          }}
           onRename={rename}
           onOpenSettings={() => setSettingsOpen(true)}
           onCreateIn={(cwd) => create(cwd)}
@@ -352,7 +441,12 @@ export default function App() {
                       }
                     : { display: visible ? "block" : "none" }
                 }
-                onMouseDown={() => split && setActiveId(s.id)}
+                onMouseDown={() => {
+                  if (split && s.id !== activeId) {
+                    setActiveId(s.id);
+                    sound.blip();
+                  }
+                }}
               >
                 {split && visible && (
                   <PaneHeader
@@ -405,8 +499,11 @@ export default function App() {
                 onFocusSurface={onFocusSurface}
                 onOpenInTerminal={openInTerminal}
                 onCollapse={() => {
-                  setPanelOpen(false);
-                  focusTerminal();
+                  sound.withVisual(() => {
+                    setPanelOpen(false);
+                    focusTerminal();
+                  });
+                  sound.panelClose();
                 }}
               />
             </div>
@@ -416,7 +513,10 @@ export default function App() {
             <button
               className="panel-strip-btn expand"
               title="Expand panel"
-              onClick={() => setPanelOpen(true)}
+              onClick={() => {
+                sound.withVisual(() => setPanelOpen(true));
+                sound.panelOpen();
+              }}
               {...noFocusSteal}
             >
               <Chevron size={16} />
@@ -424,7 +524,10 @@ export default function App() {
             <button
               className="panel-strip-btn"
               title="Files"
-              onClick={() => setPanelOpen(true)}
+              onClick={() => {
+                sound.withVisual(() => setPanelOpen(true));
+                sound.panelOpen();
+              }}
               {...noFocusSteal}
             >
               <Folder size={16} />
@@ -433,7 +536,8 @@ export default function App() {
               className="panel-strip-btn"
               title="Editor"
               onClick={() => {
-                setPanelOpen(true);
+                sound.withVisual(() => setPanelOpen(true));
+                sound.panelOpen();
                 onFocusSurface("editor");
               }}
               {...noFocusSteal}
@@ -477,6 +581,7 @@ export default function App() {
             markClosed(confirmClose.id);
             setConfirmClose(null);
             focusTerminal();
+            sound.closeSession();
           }}
         />
       )}
@@ -494,6 +599,7 @@ export default function App() {
             closeOthers(confirmCloseOthers);
             setConfirmCloseOthers(null);
             focusTerminal();
+            sound.closeSession();
           }}
         />
       )}

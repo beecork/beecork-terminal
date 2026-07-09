@@ -151,6 +151,14 @@ export interface Settings {
   scrollSpeed: number;
   /** eased/animated viewport scrolling (xterm smoothScrollDuration > 0) */
   smoothScroll: boolean;
+  /** master toggle for all app sound */
+  sound: boolean;
+  /** 0..1 master sound volume */
+  soundVolume: number;
+  /** subtle clicks on interface actions (new session / split / close) */
+  uiSounds: boolean;
+  /** a soft click when you press Enter to send a line (off by default) */
+  keyClicks: boolean;
 }
 
 export const MIN_FONT = 9;
@@ -170,6 +178,10 @@ const DEFAULTS: Settings = {
   fontFamily: 'Menlo, "SF Mono", Monaco, "Cascadia Code", monospace',
   scrollSpeed: 3,
   smoothScroll: false,
+  sound: true,
+  soundVolume: 0.5,
+  uiSounds: true,
+  keyClicks: true,
 };
 
 const STORAGE_KEY = "beecork.settings";

@@ -43,6 +43,7 @@ pub fn run() {
             fs::delete_path,
             fs::list_dir,
             fs::read_file,
+            fs::file_size,
             fs::write_file,
             git::git_status,
             git::git_file_original,

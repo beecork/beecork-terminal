@@ -12,6 +12,7 @@ import { scrollbarGeometry, viewportYForFraction } from "../lib/scroll";
 import { useDrag } from "../lib/useDrag";
 import { useContextMenu } from "../lib/useContextMenu";
 import { copyText, readText } from "../lib/clipboard";
+import * as sound from "../lib/sound";
 import ContextMenu, { type MenuEntry } from "./ContextMenu";
 import ZoomControl from "./ZoomControl";
 import { Close } from "./icons";
@@ -336,6 +337,7 @@ export default function TerminalPane({
           term.write(
             "\r\n\x1b[90m[process exited — press any key to start a new shell]\x1b[0m\r\n"
           );
+          sound.exit(); // after the banner — a throwing sound must not eat it
         }
       };
       invoke("pty_spawn", {
@@ -360,7 +362,15 @@ export default function TerminalPane({
     };
     restartRef.current = spawn;
 
-    const bellSub = term.onBell(() => cbRef.current.onBell(sessionId));
+    // The bell is the agent's explicit "I'm done / I have a question" — chime for
+    // it even when you're watching this session (the off-screen attention path in
+    // App also fires, but the shared throttle collapses the two into one chime).
+    // Run the attention pipeline FIRST — the bell can't be retried, so a throwing
+    // sound call must never drop the wantsYou flag + OS notification.
+    const bellSub = term.onBell(() => {
+      cbRef.current.onBell(sessionId);
+      sound.attention();
+    });
 
     const titleSub = term.onTitleChange((t) => {
       // Terminal output controls this via OSC escapes — strip control chars
@@ -389,7 +399,17 @@ export default function TerminalPane({
       }
       // Typing your own command dismisses the restored-session Resume offer.
       if (resumeRef.current) cbRef.current.onResumeConsumed(sessionId);
+      // Send to the shell FIRST — terminal input must never be blocked by anything
+      // below it (a throwing sound call once swallowed Enter). Sound is best-effort.
       invoke("pty_write", { id: sessionId, data }).catch(() => {});
+      // A soft "sent" tone on Enter (self-gates on the keyClicks setting).
+      if (data === "\r") {
+        try {
+          sound.send();
+        } catch {
+          /* never let audio break input */
+        }
+      }
     });
     const resizeSub = term.onResize(({ cols, rows }) =>
       invoke("pty_resize", { id: sessionId, cols, rows }).catch(() => {})

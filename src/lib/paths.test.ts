@@ -8,6 +8,7 @@ import {
   splitFileLine,
   parseOsc7,
   changedAncestors,
+  mediaKind,
 } from "./paths";
 
 describe("basename", () => {
@@ -111,5 +112,29 @@ describe("changedAncestors", () => {
   });
   it("returns empty for an empty root", () => {
     expect(changedAncestors(["/repo/a/x.ts"], "").size).toBe(0);
+  });
+});
+
+describe("mediaKind", () => {
+  it("classifies images, video, and audio by extension", () => {
+    expect(mediaKind("a.png")).toBe("image");
+    expect(mediaKind("clip.mp4")).toBe("video");
+    expect(mediaKind("song.flac")).toBe("audio");
+  });
+  it("is case-insensitive on the extension", () => {
+    expect(mediaKind("PHOTO.JPG")).toBe("image");
+    expect(mediaKind("Clip.MP4")).toBe("video");
+  });
+  it("returns null for text/code and unknown extensions", () => {
+    expect(mediaKind("notes.txt")).toBeNull();
+    expect(mediaKind("main.ts")).toBeNull();
+    expect(mediaKind("data.bin")).toBeNull();
+  });
+  it("treats svg as editable text, not an image", () => {
+    expect(mediaKind("icon.svg")).toBeNull();
+  });
+  it("returns null for extensionless paths and dotfiles", () => {
+    expect(mediaKind("README")).toBeNull();
+    expect(mediaKind("/repo/.env")).toBeNull();
   });
 });

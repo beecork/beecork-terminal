@@ -69,6 +69,23 @@ export function parseOsc7(data: string): string | null {
   }
 }
 
+export type MediaKind = "image" | "video" | "audio";
+
+const MEDIA_EXT: Record<string, MediaKind> = {
+  // NB: svg is intentionally excluded — it's hand-edited XML, so it opens in the
+  // text editor (editable + diffable), not the read-only image preview.
+  png: "image", jpg: "image", jpeg: "image", gif: "image", webp: "image",
+  bmp: "image", ico: "image", avif: "image", apng: "image",
+  mp4: "video", webm: "video", mov: "video", m4v: "video", ogv: "video", mkv: "video",
+  mp3: "audio", wav: "audio", ogg: "audio", m4a: "audio", aac: "audio", flac: "audio", opus: "audio",
+};
+
+/** Media type the viewer can render inline (via the asset protocol), or null for text/other. */
+export function mediaKind(path: string): MediaKind | null {
+  const ext = path.split(".").pop()?.toLowerCase() ?? "";
+  return MEDIA_EXT[ext] ?? null;
+}
+
 /**
  * Every ancestor directory (up to and including `root`) of the given changed
  * file paths — used to color changed folders in the tree.

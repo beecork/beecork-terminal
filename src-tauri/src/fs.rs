@@ -147,6 +147,15 @@ pub fn list_dir(path: Option<String>) -> Result<Listing, String> {
     })
 }
 
+/// Byte size of a regular file (follows symlinks). Used by the media viewer to
+/// guard against decoding an enormous image into the webview — the asset protocol
+/// streams the bytes, so `read_file`'s size cap never runs on that path.
+#[tauri::command]
+pub fn file_size(path: String) -> Result<f64, String> {
+    let meta = std::fs::metadata(&path).map_err(|e| e.to_string())?;
+    Ok(meta.len() as f64)
+}
+
 #[tauri::command]
 pub fn read_file(path: String) -> Result<FileData, String> {
     // `metadata` follows symlinks; reject anything that isn't a regular file

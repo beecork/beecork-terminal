@@ -1,4 +1,11 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, convertFileSrc } from "@tauri-apps/api/core";
+
+/**
+ * A webview-loadable URL for a local file, served over Tauri's asset protocol.
+ * Streams the file (so video/audio can seek) instead of shipping bytes over IPC.
+ * Requires `app.security.assetProtocol` to be enabled + in scope (see tauri.conf.json).
+ */
+export const fileSrc = (path: string) => convertFileSrc(path);
 
 export interface Entry {
   name: string;
@@ -60,6 +67,9 @@ export interface FileData {
 
 export const readFile = (path: string) =>
   invoke<FileData>("read_file", { path });
+
+/** Byte size of a file — used to guard image preview against huge decodes. */
+export const fileSize = (path: string) => invoke<number>("file_size", { path });
 
 /** Writes the file; rejects if it changed on disk since `expectedMtime`. Returns the new mtime. */
 export const writeFile = (path: string, content: string, expectedMtime?: number) =>

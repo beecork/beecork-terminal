@@ -6,6 +6,7 @@ import {
   MIN_SCROLL_SPEED,
   MAX_SCROLL_SPEED,
 } from "../lib/settings";
+import * as sound from "../lib/sound";
 
 export default function SettingsModal({ onClose }: { onClose: () => void }) {
   const { settings, themes, update } = useSettings();
@@ -122,6 +123,63 @@ export default function SettingsModal({ onClose }: { onClose: () => void }) {
               className="setting-check"
               checked={settings.smoothScroll}
               onChange={(e) => update({ smoothScroll: e.target.checked })}
+            />
+          </label>
+
+          <div className="setting-section">Sound</div>
+
+          <label className="setting-row setting-row-inline">
+            <span className="setting-label">
+              Sounds — a soft chime when an agent needs you, and gentle UI clicks
+            </span>
+            <input
+              type="checkbox"
+              className="setting-check"
+              checked={settings.sound}
+              onChange={(e) => {
+                update({ sound: e.target.checked });
+                if (e.target.checked) sound.preview(settings.soundVolume);
+              }}
+            />
+          </label>
+
+          <label className={`setting-row${settings.sound ? "" : " setting-disabled"}`}>
+            <span className="setting-label">
+              Sound volume — {Math.round(settings.soundVolume * 100)}%
+            </span>
+            <input
+              type="range"
+              min={0}
+              max={100}
+              disabled={!settings.sound}
+              value={Math.round(settings.soundVolume * 100)}
+              onChange={(e) => {
+                const v = Number(e.target.value) / 100;
+                update({ soundVolume: v });
+                sound.preview(v);
+              }}
+            />
+          </label>
+
+          <label className={`setting-row setting-row-inline${settings.sound ? "" : " setting-disabled"}`}>
+            <span className="setting-label">Interface sounds — sessions, splits, panels, switching</span>
+            <input
+              type="checkbox"
+              className="setting-check"
+              disabled={!settings.sound}
+              checked={settings.uiSounds}
+              onChange={(e) => update({ uiSounds: e.target.checked })}
+            />
+          </label>
+
+          <label className={`setting-row setting-row-inline${settings.sound ? "" : " setting-disabled"}`}>
+            <span className="setting-label">Soft tone when sending a line (Enter)</span>
+            <input
+              type="checkbox"
+              className="setting-check"
+              disabled={!settings.sound}
+              checked={settings.keyClicks}
+              onChange={(e) => update({ keyClicks: e.target.checked })}
             />
           </label>
         </div>

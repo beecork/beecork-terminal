@@ -322,22 +322,24 @@ body {
   justify-content: center;
   width: 26px;
   height: 26px;
-  border: 1px solid var(--border);
+  border: 1px solid color-mix(in srgb, #f38ba8 28%, var(--border));
   border-radius: 7px;
   background: color-mix(in srgb, var(--panel-header) 82%, transparent);
   backdrop-filter: blur(4px);
-  color: var(--muted);
+  /* softly tinted red at rest — reads as "close" without shouting */
+  color: color-mix(in srgb, #f38ba8 62%, var(--muted));
   cursor: pointer;
-  opacity: 0;
-  transition: opacity 0.15s, background 0.12s, color 0.12s;
+  opacity: 0.65;
+  transition: opacity 0.15s, background 0.12s, color 0.12s, border-color 0.12s;
 }
 .terminal-wrap:hover .term-close {
-  opacity: 0.55;
+  opacity: 0.85;
 }
 .terminal-wrap:hover .term-close:hover {
   opacity: 1;
   color: #f38ba8;
   border-color: #f38ba8;
+  background: color-mix(in srgb, #f38ba8 15%, var(--panel-header));
 }
 
 /* Restored-session "Resume <agent>" pill — a visible call to action (not hover-
@@ -378,7 +380,9 @@ body {
 .terminal-host {
   position: absolute;
   inset: 0;
-  padding: 6px 8px;
+  /* top / sides / bottom — a touch more at the bottom so the prompt line isn't
+     jammed against the window edge. */
+  padding: 8px 16px 14px;
   box-sizing: border-box;
   background: var(--term-bg, var(--bg));
 }
@@ -397,7 +401,8 @@ body {
   background: var(--panel);
   border-right: 1px solid var(--border);
   overflow: hidden;
-  transition: width 0.12s ease;
+  /* No width transition: an animated width made the terminal refit ~7×/toggle
+     (once per frame), flashing the WebGL canvas. Instant width = one clean refit. */
 }
 .session-rail.collapsed {
   width: 48px;
@@ -1065,6 +1070,44 @@ body {
   color: var(--muted);
 }
 
+/* ---- media viewer (image / video / audio) ---- */
+.media-body {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: auto;
+  padding: 12px;
+  background: var(--bg);
+}
+.media-image,
+.media-video {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+.media-audio {
+  width: 90%;
+}
+.media-fallback {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted);
+  text-align: center;
+}
+.media-fallback-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--fg);
+}
+.media-fallback-name {
+  font-size: 12px;
+  font-family: var(--font-mono);
+  word-break: break-all;
+  max-width: 320px;
+}
+
 /* ---- split editor area ---- */
 .editor-area {
   flex: 1 1 auto;
@@ -1291,6 +1334,21 @@ body {
   height: 16px;
   accent-color: var(--accent);
   cursor: pointer;
+}
+/* group heading inside the settings body (e.g. "Sound") */
+.setting-section {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding-top: 6px;
+  margin-top: 2px;
+  border-top: 1px solid var(--border);
+}
+/* a setting greyed out because its master toggle is off */
+.setting-disabled {
+  opacity: 0.45;
 }
 .theme-grid {
   display: grid;

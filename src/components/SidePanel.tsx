@@ -20,7 +20,8 @@ import ConfirmModal from "./ConfirmModal";
 // Lazy so the ~750 kB CodeMirror editor stack loads on first file-open, not at
 // app startup (the terminal is the star).
 const FileEditor = lazy(() => import("./FileEditor"));
-import { basename, dirname, joinPath, relativePath, changedAncestors } from "../lib/paths";
+const MediaViewer = lazy(() => import("./MediaViewer"));
+import { basename, dirname, joinPath, relativePath, changedAncestors, mediaKind } from "../lib/paths";
 import { usePersistedState } from "../lib/persist";
 import { useDrag } from "../lib/useDrag";
 import { useContextMenu } from "../lib/useContextMenu";
@@ -306,13 +307,17 @@ export default function SidePanel({
                   <Suspense
                     fallback={<div className="editor-region editor-empty">Loading editor…</div>}
                   >
-                    <FileEditor
-                      key={p}
-                      path={p}
-                      root={root}
-                      line={openRequest?.path === p ? openRequest?.line : undefined}
-                      onFocusSurface={onFocusSurface}
-                    />
+                    {mediaKind(p) ? (
+                      <MediaViewer key={p} path={p} onFocusSurface={onFocusSurface} />
+                    ) : (
+                      <FileEditor
+                        key={p}
+                        path={p}
+                        root={root}
+                        line={openRequest?.path === p ? openRequest?.line : undefined}
+                        onFocusSurface={onFocusSurface}
+                      />
+                    )}
                   </Suspense>
                 ) : (
                   <div className="editor-region editor-empty">Select a file to view or edit</div>
