@@ -91,6 +91,11 @@ export default function TerminalPane({
   // Revive a pane whose shell exited: restartRef re-spawns, exitedRef gates input.
   const restartRef = useRef<(() => void) | null>(null);
   const exitedRef = useRef(false);
+  // Gate the one-time initial spawn. A pane starts its shell only when it first
+  // becomes visible (and after it's fitted), not eagerly on mount — so restored
+  // sessions don't all cold-start at once, and a hidden (display:none) pane never
+  // starts its shell at the wrong 80×24 size. See the `visible` effect below.
+  const spawnedRef = useRef(false);
   // Last cwd this shell reported (via OSC 7) — so a revived shell restarts where
   // the session actually is, not back in its mount-time startCwd.
   const lastCwdRef = useRef<string | null>(null);
@@ -411,8 +416,10 @@ export default function TerminalPane({
       return true;
     });
 
-    spawn();
-
+    // The shell is spawned lazily on first-visible (see the `visible` effect
+    // below), not here — so input/resize handlers are wired up first and the pty
+    // opens at the correct, already-fitted size instead of a hidden pane racing a
+    // cold start at the wrong dimensions.
     const dataSub = term.onData((data) => {
       // A dead pane is not a dead end — any key relaunches its shell.
       if (exitedRef.current) {
@@ -485,6 +492,17 @@ export default function TerminalPane({
         fitRef.current?.fit();
       } catch {
         /* ignore */
+      }
+      // First time this pane is shown, start its shell — now that it's laid out
+      // and fitted, so the pty opens at the real size. Deferring the spawn to
+      // here (rather than on mount) means restored background sessions don't all
+      // cold-start simultaneously and a hidden pane never starts mis-sized —
+      // both of which let a shell-startup query race the prompt and leak the
+      // terminal's reply into the command line. Later show/hide cycles keep the
+      // already-running shell (spawnedRef gates this to once).
+      if (!spawnedRef.current) {
+        spawnedRef.current = true;
+        restartRef.current?.();
       }
     });
     return () => cancelAnimationFrame(raf);
