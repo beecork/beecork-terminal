@@ -89,11 +89,19 @@ manifest with the **existing** signing key.
 ## Cutting a release
 
 ```bash
-# bump version in package.json, src-tauri/tauri.conf.json, src-tauri/Cargo.toml
+# bump the version in ALL FOUR: package.json, src-tauri/tauri.conf.json,
+# src-tauri/Cargo.toml, and src-tauri/Cargo.lock (the [[package]] name =
+# "beecork-terminal" entry — keep the lockfile in sync or the build tree is dirty)
 git commit -am "v0.1.0"
-git tag v0.1.0
+git tag -a v0.1.0 -m "v0.1.0"   # MUST be annotated (-a); see note below
 git push --follow-tags
 ```
+
+> ⚠️ **The tag must be annotated (`-a`).** `git push --follow-tags` pushes *only*
+> annotated tags, so a lightweight `git tag v0.1.0` would push `main` but silently
+> leave the tag behind — and since the build triggers on the **tag** reaching
+> GitHub, nothing would build. If you ever end up with a lightweight tag, push it
+> explicitly instead: `git push origin v0.1.0`.
 
 The tag triggers `release.yml`. ~10–15 min later a **GitHub Release** appears with:
 `.dmg` (arm64 + x64), `.msi` + `.exe` (Windows), `.AppImage` + `.deb` (Linux).
