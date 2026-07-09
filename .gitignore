@@ -28,3 +28,6 @@ dist-ssr
 
 # local audit reports
 audits/
+
+# Claude scheduler runtime locks (ephemeral state — never version-controlled)
+.claude/*.lock
