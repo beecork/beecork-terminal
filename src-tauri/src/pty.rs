@@ -73,6 +73,24 @@ fn fallback_cwd() -> String {
     std::env::var(var).unwrap_or_else(|_| "/".to_string())
 }
 
+/// Does the inherited environment already select a UTF-8 character set? Follows
+/// POSIX precedence — LC_ALL wins, then LC_CTYPE, then LANG — and the first *set*
+/// (non-empty) one decides: a UTF-8 value means we're covered, a non-UTF-8 value
+/// means the user deliberately chose a non-UTF-8 locale and we leave it be. Pure,
+/// so it's unit-tested.
+fn env_selects_utf8(lc_all: Option<&str>, lc_ctype: Option<&str>, lang: Option<&str>) -> bool {
+    for v in [lc_all, lc_ctype, lang] {
+        match v {
+            Some(v) if !v.is_empty() => {
+                let low = v.to_ascii_lowercase();
+                return low.contains("utf-8") || low.contains("utf8");
+            }
+            _ => continue,
+        }
+    }
+    false
+}
+
 /// Remove a session under lock, then kill+reap it with the lock released.
 fn take_and_reap(state: &PtyState, id: &str) {
     let removed = state.sessions.lock().unwrap().remove(id);
@@ -157,6 +175,25 @@ pub fn pty_spawn(
         .unwrap_or(false)
     {
         cmd.env_remove("GIT_ASKPASS");
+    }
+    // Guarantee the shell a UTF-8 locale. A Finder/Dock-launched .app inherits NO
+    // locale (unlike a terminal-launched dev build, which gets the user's LANG),
+    // so the shell falls back to single-byte C mode and mangles every multibyte
+    // character — Georgian, emoji, accents — rendering each as <XXXX> and
+    // desyncing the line editor's cursor math on history recall. Every real
+    // terminal sets this. We only fill a *fallback* when the inherited env doesn't
+    // already select UTF-8, so a user's own locale choice is never overridden.
+    #[cfg(unix)]
+    if !env_selects_utf8(
+        std::env::var("LC_ALL").ok().as_deref(),
+        std::env::var("LC_CTYPE").ok().as_deref(),
+        std::env::var("LANG").ok().as_deref(),
+    ) {
+        // en_US.UTF-8 always exists on macOS; C.UTF-8 is the portable default
+        // elsewhere. Only LC_CTYPE is set — the one category that governs
+        // multibyte handling — so we don't force message language on the user.
+        let utf8 = if cfg!(target_os = "macos") { "en_US.UTF-8" } else { "C.UTF-8" };
+        cmd.env("LC_CTYPE", utf8);
     }
     let dir = cwd.unwrap_or_else(fallback_cwd);
     cmd.cwd(dir);
@@ -423,6 +460,25 @@ mod tests {
 
     fn argv(parts: &[&str]) -> Vec<String> {
         parts.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn utf8_locale_detection() {
+        use super::env_selects_utf8 as u;
+        // Nothing set (Finder-launched app) → needs a fallback.
+        assert!(!u(None, None, None));
+        // A UTF-8 value in any category is enough.
+        assert!(u(None, None, Some("en_US.UTF-8")));
+        assert!(u(None, Some("UTF-8"), None));
+        assert!(u(Some("ka_GE.utf8"), None, None));
+        // Precedence: the first *set* category decides. LC_ALL=C wins over a
+        // UTF-8 LANG, so we must NOT claim UTF-8 (LC_ALL would override it anyway).
+        assert!(!u(Some("C"), None, Some("en_US.UTF-8")));
+        // LC_CTYPE=C beats a UTF-8 LANG for character handling.
+        assert!(!u(None, Some("C"), Some("en_US.UTF-8")));
+        // Empty strings are treated as unset and skipped.
+        assert!(u(Some(""), Some(""), Some("en_US.UTF-8")));
+        assert!(!u(Some(""), None, Some("POSIX")));
     }
 
     // Empirically confirm the running-command / foreground-group signal (which

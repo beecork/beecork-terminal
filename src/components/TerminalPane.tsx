@@ -1,15 +1,13 @@
 import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
-import { Terminal } from "@xterm/xterm";
+import { Terminal, type ITheme } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { SearchAddon } from "@xterm/addon-search";
 import { invoke, Channel } from "@tauri-apps/api/core";
 import { getRoot, revealPath, openUrl } from "../lib/api";
-import { useSettings, zoomFont, SMOOTH_SCROLL_MS, type Surface } from "../lib/settings";
+import { useSettings, zoomFont, SMOOTH_SCROLL_MS, type Theme, type Surface } from "../lib/settings";
 import { decodeBase64, PATH_RE, URL_RE, looksLikePath, splitFileLine, parseOsc7 } from "../lib/paths";
 import { resumeCommand } from "../lib/sessions";
-import { scrollbarGeometry, viewportYForFraction } from "../lib/scroll";
-import { useDrag } from "../lib/useDrag";
 import { useContextMenu } from "../lib/useContextMenu";
 import { copyText, readText } from "../lib/clipboard";
 import * as sound from "../lib/sound";
@@ -21,6 +19,22 @@ import "@xterm/xterm/css/xterm.css";
 type PtyEvent =
   | { event: "output"; data: string }
   | { event: "exit"; data: number };
+
+/** Build xterm's theme from the app theme, including its built-in scrollbar. The
+ *  slider is drawn from the themed `muted`/`accent` colors with alpha (8-digit
+ *  hex) so it's a subtle-but-visible, draggable bar that brightens on hover/drag —
+ *  on every theme, dark or light. */
+function xtermTheme(theme: Theme): ITheme {
+  return {
+    background: theme.terminal.background,
+    foreground: theme.terminal.foreground,
+    cursor: theme.terminal.cursor,
+    selectionBackground: theme.terminal.selectionBackground,
+    scrollbarSliderBackground: theme.ui.muted + "59", // ~35%
+    scrollbarSliderHoverBackground: theme.ui.muted + "b3", // ~70%
+    scrollbarSliderActiveBackground: theme.ui.accent + "cc", // ~80%
+  };
+}
 
 interface Props {
   sessionId: string;
@@ -80,6 +94,12 @@ export default function TerminalPane({
   onResumeConsumed,
 }: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
+  // xterm mounts into this inner element. Its inset from the host edges (see the
+  // .terminal-mount CSS) is the terminal's text padding; the host behind it paints
+  // the matching background edge-to-edge, so the padding shows no seam. FitAddon
+  // measures this box (padding-free) and reserves the right gutter for xterm's own
+  // scrollbar, which renders there.
+  const mountRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const searchRef = useRef<SearchAddon | null>(null);
@@ -111,45 +131,6 @@ export default function TerminalPane({
   const [showSearch, setShowSearch] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const searchInputRef = useRef<HTMLInputElement>(null);
-
-  // Custom draggable scrollbar overlay (the native one auto-hides on macOS).
-  const [bar, setBar] = useState({ visible: false, topPct: 0, heightPct: 100 });
-  const trackRef = useRef<HTMLDivElement>(null);
-  // Captured at mousedown so a drag maps the pointer to an absolute scroll line.
-  const dragRef = useRef<{ trackTop: number; trackH: number; thumbH: number; grab: number } | null>(null);
-
-  const startBarDrag = useDrag((e) => {
-    const term = termRef.current;
-    const d = dragRef.current;
-    if (!term || !d) return;
-    const rel = e.clientY - d.trackTop - d.grab; // thumb-top position within the track (px)
-    const travel = d.trackH - d.thumbH; // available thumb travel (px)
-    const frac = travel > 0 ? rel / travel : 0;
-    term.scrollToLine(viewportYForFraction(frac, term.buffer.active.baseY));
-  }, "default");
-
-  function onThumbMouseDown(e: ReactMouseEvent<HTMLDivElement>) {
-    e.stopPropagation(); // don't also fire the track's jump-to-position handler
-    const track = trackRef.current;
-    if (!termRef.current || !track) return;
-    const trackRect = track.getBoundingClientRect();
-    const thumbRect = e.currentTarget.getBoundingClientRect();
-    dragRef.current = {
-      trackTop: trackRect.top,
-      trackH: trackRect.height,
-      thumbH: thumbRect.height,
-      grab: e.clientY - thumbRect.top,
-    };
-    startBarDrag(e);
-  }
-
-  function onTrackMouseDown(e: ReactMouseEvent<HTMLDivElement>) {
-    const term = termRef.current;
-    const track = trackRef.current;
-    if (!term || !track) return;
-    const rect = track.getBoundingClientRect();
-    term.scrollToLine(viewportYForFraction((e.clientY - rect.top) / rect.height, term.buffer.active.baseY));
-  }
 
   // Right-click menu for the terminal. Selection state is captured at open time.
   const { menu: ctxMenu, openMenu: openCtx, closeMenu: closeCtx } = useContextMenu<{
@@ -230,7 +211,7 @@ export default function TerminalPane({
   }
 
   useEffect(() => {
-    if (!hostRef.current) return;
+    if (!hostRef.current || !mountRef.current) return;
     let disposed = false;
     let cwdHintTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -244,12 +225,7 @@ export default function TerminalPane({
       scrollSensitivity: settings.scrollSpeed,
       fastScrollSensitivity: settings.scrollSpeed * 4,
       smoothScrollDuration: settings.smoothScroll ? SMOOTH_SCROLL_MS : 0,
-      theme: {
-        background: theme.terminal.background,
-        foreground: theme.terminal.foreground,
-        cursor: theme.terminal.cursor,
-        selectionBackground: theme.terminal.selectionBackground,
-      },
+      theme: xtermTheme(theme),
     });
     termRef.current = term;
 
@@ -268,7 +244,7 @@ export default function TerminalPane({
     searchRef.current = search;
     term.loadAddon(search);
 
-    term.open(hostRef.current);
+    term.open(mountRef.current);
     try {
       term.loadAddon(new WebglAddon());
     } catch (e) {
@@ -279,18 +255,6 @@ export default function TerminalPane({
     } catch {
       /* hidden on mount */
     }
-
-    // Custom scrollbar: recompute the thumb from xterm's live scroll state.
-    const recomputeBar = () => {
-      const b = term.buffer.active;
-      setBar(scrollbarGeometry(b.baseY, term.rows, b.viewportY));
-    };
-    let barRaf = 0;
-    const scheduleBar = () => {
-      cancelAnimationFrame(barRaf);
-      barRaf = requestAnimationFrame(recomputeBar);
-    };
-    const scrollSub = term.onScroll(recomputeBar);
 
     // Clickable links in output: http(s) URLs (→ browser) and file:line paths
     // (click → editor, ⌘/Ctrl-click → reveal in Finder).
@@ -352,8 +316,6 @@ export default function TerminalPane({
           // Output = this session is actively working (drives the busy dot even
           // for TUI agents, which the OS foreground check can't see into).
           cbRef.current.onActivity(sessionId);
-          // The scrollback grew — refresh the scrollbar thumb (rAF-throttled).
-          scheduleBar();
           // When output settles (a prompt likely returned), re-check status.
           if (activeRef.current) {
             clearTimeout(cwdHintTimer);
@@ -451,11 +413,10 @@ export default function TerminalPane({
       cancelAnimationFrame(roRaf);
       roRaf = requestAnimationFrame(() => {
         try {
-          fit.fit();
+          fitRef.current?.fit();
         } catch {
           /* container not ready / hidden */
         }
-        recomputeBar();
       });
     });
     ro.observe(hostRef.current);
@@ -464,9 +425,7 @@ export default function TerminalPane({
       disposed = true;
       clearTimeout(cwdHintTimer);
       cancelAnimationFrame(roRaf);
-      cancelAnimationFrame(barRaf);
       ro.disconnect();
-      scrollSub.dispose();
       linkProvider.dispose();
       bellSub.dispose();
       titleSub.dispose();
@@ -536,12 +495,7 @@ export default function TerminalPane({
   useEffect(() => {
     const term = termRef.current;
     if (!term) return;
-    term.options.theme = {
-      background: theme.terminal.background,
-      foreground: theme.terminal.foreground,
-      cursor: theme.terminal.cursor,
-      selectionBackground: theme.terminal.selectionBackground,
-    };
+    term.options.theme = xtermTheme(theme);
     term.options.fontSize = settings.terminalFontSize;
     term.options.fontFamily = settings.fontFamily;
     // Scroll tuning applies live (no remount).
@@ -573,16 +527,9 @@ export default function TerminalPane({
       onFocusCapture={() => onFocusSurface("terminal")}
       onContextMenu={onTermContextMenu}
     >
-      <div className="terminal-host" ref={hostRef} />
-      {bar.visible && (
-        <div className="term-scrollbar" ref={trackRef} onMouseDown={onTrackMouseDown}>
-          <div
-            className="term-scrollbar-thumb"
-            style={{ top: `${bar.topPct}%`, height: `${bar.heightPct}%` }}
-            onMouseDown={onThumbMouseDown}
-          />
-        </div>
-      )}
+      <div className="terminal-host" ref={hostRef}>
+        <div className="terminal-mount" ref={mountRef} />
+      </div>
       {onRequestClose && (
         <button className="term-close" title="Close session" onClick={onRequestClose}>
           <Close size={14} />
