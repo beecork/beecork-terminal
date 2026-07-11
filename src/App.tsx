@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -82,6 +82,7 @@ export default function App() {
     clearResume,
     pairSessions,
     unpairSession,
+    reorder,
   } = useSessions();
 
   // A pair is symmetric and lives on the session (`partner`), so it's remembered.
@@ -106,6 +107,9 @@ export default function App() {
   const split = rightId != null;
   // Sessions on screen right now: both panes in split, else just the focused one.
   const visibleIds = rightId ? [leftId, rightId] : [activeId];
+  // Live session ids, for pruning per-session memory (e.g. the panel's editor
+  // state) when a session closes. Recomputed only when the session set changes.
+  const sessionIds = useMemo(() => sessions.map((s) => s.id), [sessions]);
 
   const activeIdRef = useRef(activeId);
   activeIdRef.current = activeId;
@@ -272,6 +276,25 @@ export default function App() {
     };
   }, [settings.sound]);
 
+  // Keep the terminal focused. Coming back from Finder, a file dialog, or another
+  // app often leaves the webview focused but with nothing selected, so keystrokes
+  // go nowhere and you have to click into the terminal. When the window regains
+  // focus we pull focus back to the active terminal — but only when focus is
+  // genuinely idle: never steal it from an open modal, the editor, a rename field,
+  // or any other real input (those legitimately hold focus until you're done).
+  useEffect(() => {
+    const rescue = () => {
+      if (document.querySelector(".modal-overlay")) return; // a dialog owns focus
+      const el = document.activeElement;
+      // Only rescue when nothing meaningful is focused (body/root). An input,
+      // textarea, contenteditable (the editor), or button keeps its focus.
+      if (el && el !== document.body && el !== document.documentElement) return;
+      focusTerminal();
+    };
+    window.addEventListener("focus", rescue);
+    return () => window.removeEventListener("focus", rescue);
+  }, [focusTerminal]);
+
   // Drop a file / screenshot onto the window → paste its (shell-quoted) path into
   // the active terminal, like dropping onto a native terminal (hand an agent an
   // image by dragging it in). Tauri intercepts the OS drop — native HTML drop
@@ -420,6 +443,7 @@ export default function App() {
           onSplitWith={splitWith}
           onUnsplit={unpairSession}
           onCloseOthers={(id) => setConfirmCloseOthers(id)}
+          onReorder={reorder}
         />
 
         <div className={`terminals${split ? " split" : ""}`} ref={terminalsRef}>
@@ -497,6 +521,7 @@ export default function App() {
                 openRequest={openRequest}
                 root={terminalCwd}
                 sessionId={activeId}
+                liveSessionIds={sessionIds}
                 onFocusSurface={onFocusSurface}
                 onOpenInTerminal={openInTerminal}
                 onCollapse={() => {

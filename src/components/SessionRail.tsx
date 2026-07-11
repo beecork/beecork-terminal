@@ -29,6 +29,8 @@ interface Props {
   onUnsplit: (id: string) => void;
   /** close every session except this one */
   onCloseOthers: (id: string) => void;
+  /** drag-to-reorder: move a session to just before `beforeId` (null = to the end) */
+  onReorder: (id: string, beforeId: string | null) => void;
 }
 
 // The dot tells the truth about the session's state on EVERY row — which one is
@@ -56,9 +58,19 @@ export default function SessionRail({
   onSplitWith,
   onUnsplit,
   onCloseOthers,
+  onReorder,
 }: Props) {
   const [editingId, setEditingId] = useState<string | null>(null);
+  // Drag-to-reorder state: which row is being dragged, and where it would drop
+  // (a session id to insert before, or "end" for after the last one).
+  const [dragId, setDragId] = useState<string | null>(null);
+  const [dropBefore, setDropBefore] = useState<string | "end" | null>(null);
   const { menu, openMenu, closeMenu } = useContextMenu<Session>();
+
+  function endDrag() {
+    setDragId(null);
+    setDropBefore(null);
+  }
 
   function sessionMenu(s: Session): MenuEntry[] {
     const isActive = s.id === activeId;
@@ -113,7 +125,36 @@ export default function SessionRail({
           return (
             <div
               key={s.id}
-              className={`rail-item${isActive ? " active" : ""}${wants ? " needs-you" : ""}`}
+              className={`rail-item${isActive ? " active" : ""}${wants ? " needs-you" : ""}${
+                dragId === s.id ? " dragging" : ""
+              }${dropBefore === s.id ? " drop-before" : ""}`}
+              // Drag to reorder (works collapsed or expanded); disabled while
+              // renaming so text selection in the input still works.
+              draggable={!editing}
+              onDragStart={(e) => {
+                setDragId(s.id);
+                e.dataTransfer.effectAllowed = "move";
+                try {
+                  e.dataTransfer.setData("text/plain", s.id);
+                } catch {
+                  /* some platforms disallow setData; drag still works via state */
+                }
+              }}
+              onDragOver={(e) => {
+                if (dragId === null || dragId === s.id) return;
+                e.preventDefault();
+                const r = e.currentTarget.getBoundingClientRect();
+                const after = e.clientY > r.top + r.height / 2;
+                setDropBefore(after ? sessions[i + 1]?.id ?? "end" : s.id);
+              }}
+              onDrop={(e) => {
+                e.preventDefault();
+                if (dragId && dropBefore !== null) {
+                  onReorder(dragId, dropBefore === "end" ? null : dropBefore);
+                }
+                endDrag();
+              }}
+              onDragEnd={endDrag}
               onClick={() => onSelect(s.id)}
               onDoubleClick={() => expanded && setEditingId(s.id)}
               onContextMenu={(e) => openMenu(e, s)}
@@ -166,8 +207,19 @@ export default function SessionRail({
         })}
 
         <div
-          className="rail-item rail-add-item"
+          className={`rail-item rail-add-item${dropBefore === "end" ? " drop-before" : ""}`}
           onClick={onCreate}
+          onDragOver={(e) => {
+            if (dragId === null) return;
+            e.preventDefault();
+            setDropBefore("end");
+          }}
+          onDrop={(e) => {
+            if (dragId === null) return;
+            e.preventDefault();
+            onReorder(dragId, null);
+            endDrag();
+          }}
           title="New session (⌘T)"
         >
           <span className="rail-add-plus">

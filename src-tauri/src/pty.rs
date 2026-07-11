@@ -237,7 +237,11 @@ pub fn pty_spawn(
     let app = app.clone();
     let thread_id = id;
     thread::spawn(move || {
-        let mut buf = [0u8; 8192];
+        // 64 KiB per read batches whatever output is already available into one
+        // message, so a flood (`yes`, a big `cat`, a chatty agent) becomes far
+        // fewer IPC sends + base64 encodes. It adds no interactive latency: read()
+        // still returns immediately with however few bytes are ready.
+        let mut buf = [0u8; 65536];
         loop {
             match reader.read(&mut buf) {
                 Ok(0) => break,

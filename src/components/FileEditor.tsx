@@ -73,12 +73,17 @@ export default function FileEditor({
     load(true);
   }, [load]);
 
-  // Live-refresh when the agent edits this file — unless the user has unsaved edits.
+  // Live-refresh when the agent edits this file — unless the user has unsaved
+  // edits. Filtered to this file's path so an unrelated change elsewhere doesn't
+  // re-read + re-diff every open editor.
   useEffect(() => {
-    return onFsChanged(() => {
-      if (!dirtyRef.current) load(false);
-    });
-  }, [load]);
+    return onFsChanged(
+      () => {
+        if (!dirtyRef.current) load(false);
+      },
+      { match: (paths) => paths.includes(path) }
+    );
+  }, [load, path]);
 
   // Jump to a requested line (from a clicked terminal path).
   useEffect(() => {

@@ -34,6 +34,8 @@ interface Props {
   root: string | null;
   /** The active session id — the editor remembers open files per session. */
   sessionId: string;
+  /** All live session ids — remembered pane state is pruned when a session closes. */
+  liveSessionIds: string[];
   onFocusSurface: (s: Surface) => void;
   /** right-click → "Open in terminal": cd the active session into a folder */
   onOpenInTerminal: (dir: string) => void;
@@ -57,6 +59,7 @@ export default function SidePanel({
   openRequest,
   root,
   sessionId,
+  liveSessionIds,
   onFocusSurface,
   onOpenInTerminal,
   onCollapse,
@@ -106,6 +109,15 @@ export default function SidePanel({
     setFocused(saved?.focused ?? 0);
     prevSessionRef.current = sessionId;
   }, [sessionId]);
+
+  // Drop remembered pane state for sessions that have closed, so paneMemory
+  // doesn't accumulate an entry per session for the life of the app.
+  useEffect(() => {
+    const live = new Set(liveSessionIds);
+    for (const id of Object.keys(paneMemory.current)) {
+      if (!live.has(id)) delete paneMemory.current[id];
+    }
+  }, [liveSessionIds]);
 
   // Drag the Files/Editor divider (vertical in stacked, horizontal in side-by-side).
   const startTreeDrag = useDrag((e) => {

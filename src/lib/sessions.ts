@@ -224,6 +224,25 @@ export function useSessions() {
     });
   }, []);
 
+  // Drag-to-reorder in the rail: move `id` to just before `beforeId` (or to the
+  // end when `beforeId` is null). The array order IS the display order and the
+  // collapsed number, and it's persisted, so reordering renumbers and survives
+  // relaunch. Returns the same array (no re-render) when already in place.
+  const reorder = useCallback((id: string, beforeId: string | null) => {
+    setSessions((prev) => {
+      if (id === beforeId) return prev;
+      const from = prev.findIndex((s) => s.id === id);
+      if (from < 0) return prev;
+      const inPlace =
+        beforeId === null ? from === prev.length - 1 : prev[from + 1]?.id === beforeId;
+      if (inPlace) return prev;
+      const without = [...prev.slice(0, from), ...prev.slice(from + 1)];
+      const idx = beforeId === null ? without.length : without.findIndex((s) => s.id === beforeId);
+      if (idx < 0) return prev;
+      return [...without.slice(0, idx), prev[from], ...without.slice(idx)];
+    });
+  }, []);
+
   // Dissolve `id`'s pair (clears both sides).
   const unpairSession = useCallback((id: string) => {
     setSessions((prev) => {
@@ -247,5 +266,6 @@ export function useSessions() {
     clearResume,
     pairSessions,
     unpairSession,
+    reorder,
   };
 }

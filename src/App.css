@@ -494,6 +494,21 @@ body {
 .rail-item.needs-you .rail-num {
   color: #fab387;
 }
+/* drag-to-reorder: the row being dragged, and the drop-position indicator line */
+.rail-item.dragging {
+  opacity: 0.4;
+  cursor: grabbing;
+}
+.rail-item.drop-before::before {
+  content: "";
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  top: -2px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--accent);
+}
 .session-rail.collapsed .rail-item {
   justify-content: center;
   padding: 8px 4px;
