@@ -110,6 +110,14 @@ export default function App() {
   // Live session ids, for pruning per-session memory (e.g. the panel's editor
   // state) when a session closes. Recomputed only when the session set changes.
   const sessionIds = useMemo(() => sessions.map((s) => s.id), [sessions]);
+  // Terminal panes render in a STABLE order (by id), independent of the rail's
+  // display order. Layout is driven by CSS (order/display), not DOM order, so this
+  // is invisible — but it means reordering tabs never moves a pane's DOM node,
+  // which would otherwise blank its xterm WebGL canvas until the next repaint.
+  const terminalOrder = useMemo(
+    () => [...sessions].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)),
+    [sessions]
+  );
 
   const activeIdRef = useRef(activeId);
   activeIdRef.current = activeId;
@@ -447,7 +455,7 @@ export default function App() {
         />
 
         <div className={`terminals${split ? " split" : ""}`} ref={terminalsRef}>
-          {sessions.map((s) => {
+          {terminalOrder.map((s) => {
             const isLeftPane = s.id === leftId;
             const isRightPane = split && s.id === rightId;
             const visible = split ? isLeftPane || isRightPane : s.id === activeId;

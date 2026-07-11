@@ -474,6 +474,15 @@ body {
   color: var(--muted);
   white-space: nowrap;
   position: relative;
+  /* Non-selectable so press-dragging a tab to reorder never starts a text
+     selection (the selection would otherwise anchor here and sweep the UI). */
+  user-select: none;
+  -webkit-user-select: none;
+}
+/* …but the inline rename field must stay selectable/editable. */
+.rail-rename {
+  user-select: text;
+  -webkit-user-select: text;
 }
 .rail-item:hover {
   background: var(--hover);
