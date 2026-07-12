@@ -20,6 +20,28 @@ type PtyEvent =
   | { event: "output"; data: string }
   | { event: "exit"; data: number };
 
+/** DEC private modes a child killed mid-run (SIGHUP, crash) leaves stuck ON in
+ *  xterm — it never got to emit its own terminal cleanup. Mouse tracking is the
+ *  harmful one: with 1000/1002/1003 (+ SGR 1006/1015) still enabled, every mouse
+ *  move over the pane emits an `\e[<35;x;yM` report that the next plain shell —
+ *  which never disables mouse mode — simply echoes, producing the growing
+ *  `35;16;4M35;20;9M…` "gibberish". Also drop focus reporting and bracketed
+ *  paste, and restore a visible cursor + default attributes. Alt-screen is left
+ *  separately (only when actually active) so we never wipe the dead process's
+ *  final output. */
+const STUCK_MODE_RESET =
+  "\x1b[?1000l\x1b[?1002l\x1b[?1003l" + // mouse tracking off
+  "\x1b[?1004l" + // focus reporting off
+  "\x1b[?1005l\x1b[?1006l\x1b[?1015l\x1b[?1016l" + // mouse encodings off
+  "\x1b[?2004l" + // bracketed paste off
+  "\x1b[?25h" + // cursor visible
+  "\x1b[0m"; // reset colors/attributes
+
+function resetStuckModes(term: Terminal) {
+  if (term.buffer.active.type === "alternate") term.write("\x1b[?1049l");
+  term.write(STUCK_MODE_RESET);
+}
+
 /** Build xterm's theme from the app theme, including its built-in scrollbar. The
  *  slider is drawn from the themed `muted`/`accent` colors with alpha (8-digit
  *  hex) so it's a subtle-but-visible, draggable bar that brightens on hover/drag —
@@ -323,6 +345,10 @@ export default function TerminalPane({
           }
         } else if (msg.event === "exit") {
           exitedRef.current = true;
+          // Clear any DEC private modes the dying child left stuck on (mouse
+          // tracking especially) BEFORE the banner and the next shell inherit
+          // the pane — otherwise mouse moves echo as `\e[<35;…M` gibberish.
+          resetStuckModes(term);
           term.write(
             "\r\n\x1b[90m[process exited — press any key to start a new shell]\x1b[0m\r\n"
           );

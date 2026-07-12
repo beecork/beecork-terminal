@@ -46,16 +46,17 @@ function ensureCtx(): AudioContext | null {
     // (resetting `ctx` to null) and would otherwise mint a fresh *suspended*
     // context on every save — whose async resume() adds lag to the next sound.
     // Keeping the already-running one on window makes latency stable across edits.
-    if (w.__beecorkAudio) {
+    // But if WebKit has *closed* it (an interrupted audio session that never
+    // recovered — the "sound silently died and stayed dead" case), drop it and
+    // mint a fresh one below instead of handing back a dead context.
+    if (w.__beecorkAudio && w.__beecorkAudio.state !== "closed") {
       ctx = w.__beecorkAudio;
       return ctx;
     }
     const Ctor = window.AudioContext || w.webkitAudioContext;
     if (!Ctor) return null;
-    if (!ctx) {
-      ctx = new Ctor({ latencyHint: "interactive" });
-      w.__beecorkAudio = ctx;
-    }
+    ctx = new Ctor({ latencyHint: "interactive" });
+    w.__beecorkAudio = ctx;
     return ctx;
   } catch {
     return null;
@@ -63,7 +64,7 @@ function ensureCtx(): AudioContext | null {
 }
 function audio(): AudioContext | null {
   const a = ensureCtx();
-  if (a && a.state === "suspended") void a.resume();
+  if (a && a.state !== "running") void a.resume().catch(() => {});
   return a;
 }
 
@@ -71,7 +72,11 @@ function audio(): AudioContext | null {
  *  to call on every user interaction (a no-op once running). */
 export function warm() {
   const a = ensureCtx();
-  if (a && a.state !== "running") void a.resume();
+  // `resume()` clears both plain "suspended" and WebKit's non-standard
+  // "interrupted" (the OS took the audio session while we were backgrounded).
+  // Swallow the rejection WebKit throws when it won't resume without a gesture —
+  // the next real interaction retries via this same path.
+  if (a && a.state !== "running") void a.resume().catch(() => {});
 }
 
 /** Run a visual change *after* the audio output latency, so a sound dispatched

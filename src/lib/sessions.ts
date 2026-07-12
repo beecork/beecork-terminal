@@ -1,6 +1,23 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { basename } from "./paths";
 import { lsGet, lsSet } from "./persist";
+
+/** Only the primary ("main") window owns the persisted session layout. A ⌘N
+ *  window loads the same origin — hence the same localStorage — so if it also
+ *  restored these sessions it would re-open shells under their *same ids*, and
+ *  `pty_spawn`'s same-id takeover would reap (SIGHUP) the main window's live
+ *  shells out from under it. Secondary windows therefore start with their own
+ *  fresh session and don't touch the shared layout. Defaults to `true` off-Tauri
+ *  (tests) so the restore path stays exercised. */
+const IS_MAIN_WINDOW: boolean = (() => {
+  try {
+    const label = getCurrentWindow().label;
+    return !label || label === "main";
+  } catch {
+    return true;
+  }
+})();
 
 export interface Session {
   id: string;
@@ -94,8 +111,10 @@ interface PersistedState {
   nextNum: number;
 }
 
-/** Read the saved session layout (null on first run / disabled / corrupt storage). */
+/** Read the saved session layout (null on first run / disabled / corrupt storage
+ *  / a secondary window, which never adopts the shared layout). */
 function loadSessions(): PersistedState | null {
+  if (!IS_MAIN_WINDOW) return null;
   const raw = lsGet(PERSIST_KEY);
   if (!raw) return null;
   try {
@@ -145,8 +164,11 @@ export function useSessions() {
   }, [sessions, activeId]);
 
   // Persist the layout so a relaunch restores your sessions. Runs only on real
-  // changes (patchSession keeps the poll from churning the list).
+  // changes (patchSession keeps the poll from churning the list). Secondary
+  // windows never write it — their sessions are ephemeral and must not clobber
+  // the main window's saved layout.
   useEffect(() => {
+    if (!IS_MAIN_WINDOW) return;
     lsSet(
       PERSIST_KEY,
       JSON.stringify({

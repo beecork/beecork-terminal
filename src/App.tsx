@@ -278,9 +278,17 @@ export default function App() {
     warm();
     window.addEventListener("pointerdown", warm);
     window.addEventListener("keydown", warm);
+    // WebKit suspends (or "interrupts") the AudioContext whenever the window is
+    // backgrounded; nothing revives it until the next pointer/keydown, so sound
+    // silently stays dead after you tab away and come back. Resume the moment we
+    // regain focus / visibility too — that's exactly when you'd expect it back.
+    window.addEventListener("focus", warm);
+    document.addEventListener("visibilitychange", warm);
     return () => {
       window.removeEventListener("pointerdown", warm);
       window.removeEventListener("keydown", warm);
+      window.removeEventListener("focus", warm);
+      document.removeEventListener("visibilitychange", warm);
     };
   }, [settings.sound]);
 

@@ -130,7 +130,21 @@ pub fn pty_spawn(
     rows: u16,
 ) -> Result<(), String> {
     let owner = window.label().to_string();
-    // Replace any existing session with this id (e.g. a dev remount).
+    // Replacing an existing session with this id is only legitimate when it's our
+    // OWN window remounting (dev HMR, a pane restart) — then reap and re-open it.
+    // A session with this id owned by a DIFFERENT window belongs to a window
+    // that's actively using it: reaping it would SIGHUP its shell and kill
+    // whatever's running (the ⌘N "lost Claude Code" bug). Refuse instead. The
+    // frontend already keeps ids window-local, so this only ever guards a
+    // regression, never normal use.
+    match state.sessions.lock().unwrap().get(&id).map(|h| h.owner.clone()) {
+        Some(existing) if existing != owner => {
+            return Err(format!(
+                "session {id} is already open in another window ({existing})"
+            ));
+        }
+        _ => {}
+    }
     take_and_reap(&state, &id);
 
     let pty_system = native_pty_system();
