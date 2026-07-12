@@ -46,12 +46,21 @@ function ensureCtx(): AudioContext | null {
     // (resetting `ctx` to null) and would otherwise mint a fresh *suspended*
     // context on every save — whose async resume() adds lag to the next sound.
     // Keeping the already-running one on window makes latency stable across edits.
-    // But if WebKit has *closed* it (an interrupted audio session that never
-    // recovered — the "sound silently died and stayed dead" case), drop it and
-    // mint a fresh one below instead of handing back a dead context.
-    if (w.__beecorkAudio && w.__beecorkAudio.state !== "closed") {
-      ctx = w.__beecorkAudio;
+    // But a "closed" context (WebKit tore it down) and the non-standard
+    // "interrupted" one (the OS audio session was taken while backgrounded) are
+    // both unrecoverable for playback — resume() won't make them sound again — so
+    // drop them and mint a fresh context instead of handing back a dead one.
+    const cur = w.__beecorkAudio;
+    if (cur && cur.state !== "closed" && (cur.state as string) !== "interrupted") {
+      ctx = cur;
       return ctx;
+    }
+    if (cur) {
+      try {
+        void cur.close();
+      } catch {
+        /* already gone */
+      }
     }
     const Ctor = window.AudioContext || w.webkitAudioContext;
     if (!Ctor) return null;
@@ -72,11 +81,37 @@ function audio(): AudioContext | null {
  *  to call on every user interaction (a no-op once running). */
 export function warm() {
   const a = ensureCtx();
-  // `resume()` clears both plain "suspended" and WebKit's non-standard
-  // "interrupted" (the OS took the audio session while we were backgrounded).
-  // Swallow the rejection WebKit throws when it won't resume without a gesture —
-  // the next real interaction retries via this same path.
+  // `resume()` clears plain "suspended". Swallow the rejection WebKit throws when
+  // it won't resume without a gesture — the next real interaction retries here.
   if (a && a.state !== "running") void a.resume().catch(() => {});
+}
+
+/** Rebuild the audio engine from scratch. WKWebView frequently leaves the
+ *  AudioContext producing *silence* after the window has been backgrounded or
+ *  occluded: resume() reports state "running" but nothing is audible, and the
+ *  only cure is a brand-new context — which is exactly why opening a fresh window
+ *  brought the sound back. We can't detect the silent-but-"running" zombie from
+ *  script, so on any return to the foreground (and from the Settings "Test"
+ *  button) we discard the old context and create a new one; the next user gesture
+ *  resumes it into a genuinely audible state. Cheap and safe to over-call — it
+ *  only ever holds one live context. */
+export function reviveForForeground() {
+  try {
+    const w = window as unknown as { __beecorkAudio?: AudioContext };
+    const cur = w.__beecorkAudio;
+    if (cur && cur.state !== "closed") {
+      try {
+        void cur.close();
+      } catch {
+        /* ignore */
+      }
+    }
+    w.__beecorkAudio = undefined;
+    ctx = null;
+  } catch {
+    /* ignore */
+  }
+  warm(); // create the fresh context and attempt to resume it
 }
 
 /** Run a visual change *after* the audio output latency, so a sound dispatched

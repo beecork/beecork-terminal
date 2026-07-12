@@ -278,17 +278,30 @@ export default function App() {
     warm();
     window.addEventListener("pointerdown", warm);
     window.addEventListener("keydown", warm);
-    // WebKit suspends (or "interrupts") the AudioContext whenever the window is
-    // backgrounded; nothing revives it until the next pointer/keydown, so sound
-    // silently stays dead after you tab away and come back. Resume the moment we
-    // regain focus / visibility too — that's exactly when you'd expect it back.
     window.addEventListener("focus", warm);
-    document.addEventListener("visibilitychange", warm);
+    // WKWebView doesn't just *suspend* the AudioContext when the window is
+    // backgrounded/occluded — it often leaves it playing *silence* even after a
+    // resume() reports "running", and only a brand-new context recovers (which is
+    // why a fresh window had sound and this one didn't). So on a real hidden→
+    // visible transition, REBUILD the engine rather than trust resume(). A plain
+    // app-switch that never hid us just warms the existing context.
+    let wasHidden = document.visibilityState === "hidden";
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") {
+        wasHidden = true;
+      } else if (wasHidden) {
+        wasHidden = false;
+        sound.reviveForForeground();
+      } else {
+        warm();
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibility);
     return () => {
       window.removeEventListener("pointerdown", warm);
       window.removeEventListener("keydown", warm);
       window.removeEventListener("focus", warm);
-      document.removeEventListener("visibilitychange", warm);
+      document.removeEventListener("visibilitychange", onVisibility);
     };
   }, [settings.sound]);
 
