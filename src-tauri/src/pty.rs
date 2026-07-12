@@ -154,6 +154,17 @@ pub fn pty_spawn(
 
     let program = shell.unwrap_or_else(default_shell);
     let mut cmd = CommandBuilder::new(program);
+    // Spawn a LOGIN shell, exactly like Terminal.app and iTerm2 do. A
+    // Finder/Dock-launched .app starts from launchd's minimal environment; only a
+    // login shell sources the profile files that repair PATH — /etc/zprofile's
+    // path_helper and ~/.zprofile's `eval "$(brew shellenv)"`, which add
+    // /opt/homebrew/bin (or /usr/local/bin on Intel). Without -l the shell is
+    // interactive-but-not-login: it runs ~/.zshrc but NOT ~/.zprofile, so Homebrew
+    // never enters PATH and CLIs that probe for tools (ffmpeg, sox, etc.) report
+    // them "missing" even though they're installed. -l is understood by every
+    // common unix login shell (zsh/bash/sh/fish); Windows shells don't take it.
+    #[cfg(unix)]
+    cmd.arg("-l");
     cmd.env("TERM", "xterm-256color");
     // Present as ourselves, not whatever terminal launched the app. The child
     // inherits our full environment (portable-pty copies std::env::vars_os),
