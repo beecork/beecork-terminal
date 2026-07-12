@@ -3,6 +3,14 @@ import { getRoot, ptyStatus, ptyStatusAll, type PtyStatus } from "./api";
 import { wantsAttention, displayName, type Session } from "./sessions";
 import { notify } from "./notify";
 
+// Output must pause at least this long for a session's turn to read as "finished".
+const QUIET_MS = 1500;
+// …and that just-ended output streak must have lasted at least this long to count
+// as a real turn of work worth a "come look". Below it, the burst was a stray
+// redraw (a spinner tick, a clock/statusline repaint) — nagging on those lit up
+// every quiet background agent in amber at once and drowned the real signal.
+const WORK_MIN_MS = 2500;
+
 function addId(set: Set<string>, id: string): Set<string> {
   if (set.has(id)) return set;
   const n = new Set(set);
@@ -38,6 +46,9 @@ export function useSessionStatus(
   // agent is "running" the whole time it's open, working or waiting).
   const [busy, setBusy] = useState<Set<string>>(() => new Set());
   const idleTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  // When each session's current output streak began — so the quiet-timer can tell
+  // a real turn of work (worth a "needs you") from a one-frame redraw.
+  const busySince = useRef<Record<string, number>>({});
   const prevRunning = useRef<Record<string, string | undefined>>({});
 
   const activeIdRef = useRef(activeId);
@@ -101,13 +112,27 @@ export function useSessionStatus(
   // "come look". Resumed output disproves a quiet-inferred "come look", so clear
   // it here — unless a bell rang (a real "I need you" that waits until you look).
   const onActivity = useCallback((id: string) => {
-    setBusy((prev) => (prev.has(id) ? prev : addId(prev, id)));
+    const now = performance.now();
+    setBusy((prev) => {
+      if (prev.has(id)) return prev;
+      busySince.current[id] = now; // idle → working: a fresh streak begins
+      return addId(prev, id);
+    });
     if (!bellRang.current.has(id)) setWantsYou((prev) => delId(prev, id));
     clearTimeout(idleTimers.current[id]);
     idleTimers.current[id] = setTimeout(() => {
+      const workedMs = now - (busySince.current[id] ?? now);
+      delete busySince.current[id];
       setBusy((prev) => delId(prev, id));
-      if (!visibleIdsRef.current.includes(id)) setWantsYou((prev) => addId(prev, id));
-    }, 1500);
+      // Only nag when a *real* turn of work just ended off-screen. A brief blip
+      // (spinner tick, statusline repaint) isn't a completion, so it must never
+      // flip an idle background agent to blinking amber. Genuine "come look"
+      // signals — a bell, or a foreground command going running→idle — come from
+      // the other two producers and are unaffected by this gate.
+      if (workedMs >= WORK_MIN_MS && !visibleIdsRef.current.includes(id)) {
+        setWantsYou((prev) => addId(prev, id));
+      }
+    }, QUIET_MS);
   }, []);
 
   // The bell is the agent's explicit "I need you" — the precise attention signal.
@@ -131,6 +156,7 @@ export function useSessionStatus(
   // Forget a closed session so nothing leaks or resurrects its id.
   const markClosed = useCallback((id: string) => {
     delete prevRunning.current[id];
+    delete busySince.current[id];
     clearTimeout(idleTimers.current[id]);
     delete idleTimers.current[id];
     bellRang.current.delete(id);

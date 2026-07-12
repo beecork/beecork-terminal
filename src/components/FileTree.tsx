@@ -130,6 +130,14 @@ function TreeNode({
           selected ? " selected" : ""
         }`}
         style={{ paddingLeft: 8 + depth * 14 }}
+        // Selecting a file / expanding a folder is navigation, not "type here" —
+        // it must not pull keyboard focus out of the terminal. Preventing the
+        // mousedown default keeps the terminal cursor put (the click still opens/
+        // expands via onClick); focus moves to the editor only when you click INTO
+        // it. Left button only, so right-click context menus are unaffected.
+        onMouseDown={(e) => {
+          if (e.button === 0) e.preventDefault();
+        }}
         onClick={activate}
         onContextMenu={(e) => onRowContextMenu?.(e, entry)}
         title={entry.name}

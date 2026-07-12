@@ -292,23 +292,39 @@ export default function App() {
     };
   }, [settings.sound]);
 
-  // Keep the terminal focused. Coming back from Finder, a file dialog, or another
-  // app often leaves the webview focused but with nothing selected, so keystrokes
-  // go nowhere and you have to click into the terminal. When the window regains
-  // focus we pull focus back to the active terminal — but only when focus is
-  // genuinely idle: never steal it from an open modal, the editor, a rename field,
-  // or any other real input (those legitimately hold focus until you're done).
+  // Keep the terminal focused — the terminal is "home". Keyboard focus should live
+  // there unless a real input legitimately holds it (the editor, a rename field,
+  // search, a modal). Whenever focus lands on nothing — the window regains OS
+  // focus with nothing selected (back from Finder/another app), an inline rename
+  // commits, a file prompt closes, or you click a non-input surface like a file
+  // row or chrome — pull it back to the active terminal. We never steal focus from
+  // a modal or a genuine input: those keep it until you're done, then this returns
+  // it. This is why selecting a file leaves you typing in the terminal, and why
+  // finishing a rename drops you straight back into it.
   useEffect(() => {
+    let raf = 0;
     const rescue = () => {
       if (document.querySelector(".modal-overlay")) return; // a dialog owns focus
       const el = document.activeElement;
       // Only rescue when nothing meaningful is focused (body/root). An input,
-      // textarea, contenteditable (the editor), or button keeps its focus.
+      // textarea, contenteditable (the editor), a button, or a menu keeps focus.
       if (el && el !== document.body && el !== document.documentElement) return;
       focusTerminal();
     };
+    // focusout fires *before* focus settles on the next target, so defer a frame
+    // and re-check activeElement — reading it during the event sees the element
+    // being left, not the one being entered.
+    const onFocusOut = () => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(rescue);
+    };
     window.addEventListener("focus", rescue);
-    return () => window.removeEventListener("focus", rescue);
+    window.addEventListener("focusout", onFocusOut);
+    return () => {
+      window.removeEventListener("focus", rescue);
+      window.removeEventListener("focusout", onFocusOut);
+      cancelAnimationFrame(raf);
+    };
   }, [focusTerminal]);
 
   // Drop a file / screenshot onto the window → paste its (shell-quoted) path into
