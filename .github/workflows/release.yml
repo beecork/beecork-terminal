@@ -39,8 +39,9 @@ jobs:
             exit 1
           fi
           echo "version OK: $CONF"
-      # `cargo test` compiles the Tauri crate, which needs the WebKitGTK/glib
-      # system libs on Linux (same set the release job installs for its ubuntu leg).
+      # `cargo test` compiles the Tauri crate, which on Linux needs the WebKitGTK/
+      # glib system libs AND libasound2-dev (ALSA headers for rodio/cpal, the native
+      # sound engine) — same set the release job installs for its ubuntu leg.
       - name: Install Linux dependencies
         run: |
           sudo apt-get update
@@ -50,7 +51,8 @@ jobs:
             librsvg2-dev \
             patchelf \
             build-essential \
-            libssl-dev
+            libssl-dev \
+            libasound2-dev
       - name: Install frontend dependencies
         run: npm ci
       - name: Frontend tests
@@ -118,7 +120,8 @@ jobs:
             librsvg2-dev \
             patchelf \
             build-essential \
-            libssl-dev
+            libssl-dev \
+            libasound2-dev
 
       - name: Install frontend dependencies
         run: npm ci
