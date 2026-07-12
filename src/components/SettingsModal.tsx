@@ -1,4 +1,3 @@
-import { useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
   useSettings,
@@ -11,15 +10,6 @@ import * as sound from "../lib/sound";
 
 export default function SettingsModal({ onClose }: { onClose: () => void }) {
   const { settings, themes, update } = useSettings();
-
-  // Live audio-engine state — so a silent engine is visible ("running" but no
-  // sound = WKWebView's zombie context; "suspended"/"interrupted" = not woken).
-  // Poll while the modal is open; the Test button below force-rebuilds and plays.
-  const [audioState, setAudioState] = useState(() => sound.audioInfo().state);
-  useEffect(() => {
-    const t = setInterval(() => setAudioState(sound.audioInfo().state), 700);
-    return () => clearInterval(t);
-  }, []);
 
   async function pickFolder() {
     const chosen = await open({ directory: true, defaultPath: settings.defaultCwd });
@@ -194,22 +184,11 @@ export default function SettingsModal({ onClose }: { onClose: () => void }) {
           </label>
 
           <div className="setting-row setting-row-inline">
-            <span className="setting-label">
-              Audio engine — {audioState}
-              {audioState !== "running" ? " · click Test to wake it" : ""}
-            </span>
+            <span className="setting-label">Play a test chime through the native audio engine</span>
             <button
               className="btn ghost"
-              title="Rebuild the audio engine and play the chime — use this if sound has gone silent"
-              onClick={() => {
-                // Force a fresh context (fixes the WKWebView silent-"running"
-                // zombie), then chime once it's had a tick to resume.
-                sound.reviveForForeground();
-                setTimeout(() => {
-                  sound.preview(settings.soundVolume);
-                  setAudioState(sound.audioInfo().state);
-                }, 70);
-              }}
+              title="Play the chime"
+              onClick={() => sound.preview(settings.soundVolume)}
             >
               Test sound
             </button>

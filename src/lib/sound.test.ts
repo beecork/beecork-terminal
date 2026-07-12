@@ -1,205 +1,71 @@
-import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
+
+// Sound is now a thin policy layer over a native Rust command: it gates + throttles
+// and then calls invoke("play_sound", …). So the meaningful tests are "does the
+// right event ask Rust to play, with the right kind/volume, and does gating +
+// throttling hold" — not audio synthesis (that lives + is tested in sound.rs).
+
+const { invokeMock } = vi.hoisted(() => ({ invokeMock: vi.fn(() => Promise.resolve()) }));
+vi.mock("@tauri-apps/api/core", () => ({ invoke: invokeMock }));
+
 import * as sound from "./sound";
 
-// A minimal Web Audio mock so the (browser-only) engine runs under Node. Every
-// sound is one or more oscillator tones, so "did a sound play?" reduces to "how
-// many oscillators were scheduled?" — that's what `oscCount` tracks.
-class MockParam {
-  value = 0;
-  setValueAtTime() {}
-  linearRampToValueAtTime() {}
-  exponentialRampToValueAtTime() {}
-}
-class MockNode {
-  frequency = new MockParam();
-  gain = new MockParam();
-  type = "";
-  connect(n: unknown) {
-    return n;
-  }
-  start() {}
-  stop() {}
-}
-class MockCtx {
-  static instances: MockCtx[] = [];
-  currentTime = 0;
-  sampleRate = 48000;
-  state = "running";
-  destination = {};
-  oscCount = 0;
-  constructor() {
-    MockCtx.instances.push(this);
-  }
-  resume() {
-    return Promise.resolve();
-  }
-  createOscillator() {
-    this.oscCount++;
-    return new MockNode();
-  }
-  createGain() {
-    return new MockNode();
-  }
-}
-
-let mockNow = 0;
-
-beforeAll(() => {
-  (globalThis as unknown as { window: unknown }).window = { AudioContext: MockCtx };
-  (globalThis as unknown as { performance: unknown }).performance = { now: () => mockNow };
-});
-
-/** Oscillators scheduled so far by the single (cached) context. */
-function osc() {
-  return MockCtx.instances[0]?.oscCount ?? 0;
-}
-
-// Advance well past every throttle window so each test's sounds fire independently.
+// The module throttles per-kind on performance.now(); pin it so each test starts
+// well past any prior throttle window but stays constant *within* a test (so two
+// back-to-back calls collapse, which is exactly the throttle behaviour we assert).
+let now = 0;
 beforeEach(() => {
-  mockNow += 10_000;
+  invokeMock.mockClear();
+  now += 1_000_000;
+  vi.spyOn(performance, "now").mockImplementation(() => now);
+  sound.setSoundConfig({ enabled: true, volume: 0.5, uiSounds: true, keyClicks: true });
 });
 
-const ALL_ON = { enabled: true, volume: 0.5, uiSounds: true, keyClicks: true };
-
-describe("sound gating", () => {
-  it("attention chime is silent when sound is disabled", () => {
-    sound.setSoundConfig({ ...ALL_ON, enabled: false });
-    const before = osc();
+describe("sound policy layer", () => {
+  it("asks the native engine to play, with kind + volume", () => {
     sound.attention();
-    expect(osc()).toBe(before);
+    expect(invokeMock).toHaveBeenCalledWith("play_sound", { kind: "attention", volume: 0.5 });
   });
 
-  it("attention and exit each play two tones when enabled", () => {
-    sound.setSoundConfig(ALL_ON);
-    let before = osc();
-    sound.attention();
-    expect(osc()).toBe(before + 2);
-
-    mockNow += 10_000;
-    before = osc();
-    sound.exit();
-    expect(osc()).toBe(before + 2);
-  });
-
-  it("interface sounds are distinct actions, each under the uiSounds toggle", () => {
-    // Off: none of the interface family makes a sound.
-    sound.setSoundConfig({ ...ALL_ON, uiSounds: false });
-    let before = osc();
-    sound.create();
-    sound.split();
-    sound.closeSession();
-    sound.panelOpen();
-    sound.panelClose();
-    sound.blip();
-    expect(osc()).toBe(before);
-
-    // On: each fires (create/split/close are two-note; panels/blip are one).
-    sound.setSoundConfig(ALL_ON);
-    for (const [fn, tones] of [
-      [sound.create, 2],
-      [sound.split, 2],
-      [sound.closeSession, 2],
-      [sound.panelOpen, 1],
-      [sound.panelClose, 1],
-      [sound.blip, 1],
-    ] as const) {
-      mockNow += 10_000;
-      before = osc();
-      fn();
-      expect(osc()).toBe(before + tones);
-    }
-  });
-
-  it("send tone respects the keyClicks sub-toggle", () => {
-    sound.setSoundConfig({ ...ALL_ON, keyClicks: false });
-    let before = osc();
-    sound.send();
-    expect(osc()).toBe(before); // off
-
-    mockNow += 10_000;
-    sound.setSoundConfig({ ...ALL_ON, keyClicks: true });
-    before = osc();
-    sound.send();
-    expect(osc()).toBe(before + 2); // on
-  });
-
-  it("the master toggle overrides every sub-toggle", () => {
+  it("plays nothing when the master toggle is off", () => {
     sound.setSoundConfig({ enabled: false, volume: 0.5, uiSounds: true, keyClicks: true });
-    const before = osc();
+    sound.attention();
     sound.create();
-    sound.split();
-    sound.panelOpen();
-    sound.blip();
     sound.send();
-    expect(osc()).toBe(before);
+    expect(invokeMock).not.toHaveBeenCalled();
   });
 
-  it("collapses a rapid burst into a single chime (throttle)", () => {
-    sound.setSoundConfig(ALL_ON);
-    const before = osc();
-    sound.attention(); // fires
-    sound.attention(); // same instant → throttled
-    sound.attention(); // throttled
-    expect(osc()).toBe(before + 2); // one chime, not three
-  });
-
-  it("preview plays even when sound is disabled", () => {
-    sound.setSoundConfig({ enabled: false, volume: 0.5, uiSounds: false, keyClicks: false });
-    const before = osc();
-    sound.preview(0.7);
-    expect(osc()).toBe(before + 2);
-  });
-});
-
-describe("withVisual", () => {
-  beforeEach(() => {
-    mockNow += 10_000; // clear throttles between tests
-  });
-
-  it("runs the visual immediately when sound is disabled", () => {
-    sound.setSoundConfig({ ...ALL_ON, enabled: false });
-    let ran = false;
-    sound.withVisual(() => {
-      ran = true;
-    });
-    expect(ran).toBe(true);
-  });
-
-  it("runs the visual immediately when interface sounds are off (nothing to sync to)", () => {
-    sound.setSoundConfig({ ...ALL_ON, uiSounds: false });
-    let ran = false;
-    sound.withVisual(() => {
-      ran = true;
-    });
-    expect(ran).toBe(true);
-  });
-
-  it("defers the visual by the output latency when a UI sound will play", () => {
-    sound.setSoundConfig(ALL_ON);
-    sound.blip(); // ensure the shared context exists (real timers)
-    (MockCtx.instances[0] as unknown as { outputLatency: number }).outputLatency = 0.02; // 20ms
-    vi.useFakeTimers();
-    let ran = false;
-    sound.withVisual(() => {
-      ran = true;
-    });
-    expect(ran).toBe(false); // held back
-    vi.advanceTimersByTime(25);
-    expect(ran).toBe(true);
-    vi.useRealTimers();
-  });
-
-  it("clamps the defer to 40ms on high-latency (Bluetooth) devices", () => {
-    sound.setSoundConfig(ALL_ON);
+  it("gates interface sounds on uiSounds, but not the attention chime", () => {
+    sound.setSoundConfig({ enabled: true, volume: 0.5, uiSounds: false, keyClicks: true });
+    sound.create();
     sound.blip();
-    (MockCtx.instances[0] as unknown as { outputLatency: number }).outputLatency = 0.3; // 300ms
-    vi.useFakeTimers();
-    let ran = false;
-    sound.withVisual(() => {
-      ran = true;
-    });
-    vi.advanceTimersByTime(40); // clamp is 40ms, not 300
-    expect(ran).toBe(true);
-    vi.useRealTimers();
+    expect(invokeMock).not.toHaveBeenCalled();
+    sound.attention(); // meaningful ones ride the master toggle, not uiSounds
+    expect(invokeMock).toHaveBeenCalledWith("play_sound", { kind: "attention", volume: 0.5 });
+  });
+
+  it("gates the Enter tone on keyClicks", () => {
+    sound.setSoundConfig({ enabled: true, volume: 0.5, uiSounds: true, keyClicks: false });
+    sound.send();
+    expect(invokeMock).not.toHaveBeenCalled();
+  });
+
+  it("throttles a burst of the same sound to one play", () => {
+    sound.blip();
+    sound.blip();
+    sound.blip();
+    expect(invokeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("preview plays even when sound is disabled, at the given volume", () => {
+    sound.setSoundConfig({ enabled: false, volume: 0.5, uiSounds: true, keyClicks: true });
+    sound.preview(0.3);
+    expect(invokeMock).toHaveBeenCalledWith("play_sound", { kind: "attention", volume: 0.3 });
+  });
+
+  it("withVisual runs its callback (immediately, no audio-latency delay)", () => {
+    const fn = vi.fn();
+    sound.withVisual(fn);
+    expect(fn).toHaveBeenCalledTimes(1);
   });
 });

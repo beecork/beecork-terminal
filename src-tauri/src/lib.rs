@@ -1,6 +1,7 @@
 mod fs;
 mod git;
 mod pty;
+mod sound;
 mod watcher;
 
 use pty::PtyState;
@@ -13,6 +14,7 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(PtyState::default())
+        .manage(sound::SoundState::new())
         .manage(watcher::WatchControl::default())
         .on_window_event(|window, event| {
             // Closing a window kills the PTY sessions it owns (no orphans).
@@ -35,6 +37,7 @@ pub fn run() {
             pty::pty_resize,
             pty::pty_kill,
             pty::pty_status_all,
+            sound::play_sound,
             fs::get_root,
             fs::home_dir,
             fs::reveal_path,

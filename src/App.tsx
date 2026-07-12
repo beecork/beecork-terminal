@@ -268,42 +268,8 @@ export default function App() {
     });
   }, [settings.sound, settings.soundVolume, settings.uiSounds, settings.keyClicks]);
 
-  // Keep the audio engine warm: create/resume the context up front and on each
-  // interaction, so the first sound after any idle gap isn't late (a cold or
-  // suspended context adds audible startup lag to that first sound). Skipped
-  // entirely when sound is off — no reason to hold a live AudioContext then.
-  useEffect(() => {
-    if (!settings.sound) return;
-    const warm = () => sound.warm();
-    warm();
-    window.addEventListener("pointerdown", warm);
-    window.addEventListener("keydown", warm);
-    window.addEventListener("focus", warm);
-    // WKWebView doesn't just *suspend* the AudioContext when the window is
-    // backgrounded/occluded — it often leaves it playing *silence* even after a
-    // resume() reports "running", and only a brand-new context recovers (which is
-    // why a fresh window had sound and this one didn't). So on a real hidden→
-    // visible transition, REBUILD the engine rather than trust resume(). A plain
-    // app-switch that never hid us just warms the existing context.
-    let wasHidden = document.visibilityState === "hidden";
-    const onVisibility = () => {
-      if (document.visibilityState === "hidden") {
-        wasHidden = true;
-      } else if (wasHidden) {
-        wasHidden = false;
-        sound.reviveForForeground();
-      } else {
-        warm();
-      }
-    };
-    document.addEventListener("visibilitychange", onVisibility);
-    return () => {
-      window.removeEventListener("pointerdown", warm);
-      window.removeEventListener("keydown", warm);
-      window.removeEventListener("focus", warm);
-      document.removeEventListener("visibilitychange", onVisibility);
-    };
-  }, [settings.sound]);
+  // (Sound needs no warm-up anymore — it's played natively by the Rust backend,
+  // which has no webview AudioContext to keep alive or resume. See lib/sound.ts.)
 
   // Keep the terminal focused — the terminal is "home". Keyboard focus should live
   // there unless a real input legitimately holds it (the editor, a rename field,

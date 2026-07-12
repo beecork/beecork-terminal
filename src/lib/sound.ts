@@ -1,17 +1,18 @@
-// Sound design for the app — a small, tasteful audio layer.
+// Sound — a small, tasteful audio layer.
 //
-// Everything is *synthesized* with the Web Audio API rather than loaded from
-// files: there's nothing to bundle, nothing to allow through the CSP, and every
-// tone (pitch, length, timbre, volume) is tunable in one place. The sounds form
-// a small vocabulary so each kind of action has its own voice:
-//   • rising    → something appears / arrives   (new session, panel opens, send)
-//   • falling   → something dismisses / leaves   (close, panel collapses, exit)
-//   • a chime   → an agent wants you             (done, question, bell)
-//   • a blip    → a light in-session interaction (switch session, open a file)
+// The chimes are synthesized and played NATIVELY by the Rust backend (see
+// src-tauri/src/sound.rs), not by the webview. WKWebView suspends — and often
+// zombifies — a page's Web Audio context when the window is backgrounded or
+// occluded: sound silently died over time and only opening a fresh window brought
+// it back. Native playback has none of that, and it sounds through the OS mixer
+// regardless of window focus — exactly what you want for a "come look" chime while
+// you're in another app.
 //
-// Playback is gated by user settings (pushed in via `setSoundConfig`, so callers
-// never need the settings context), and every sound self-throttles so a burst of
-// events can't machine-gun. Kept deliberately soft — a gentle presence.
+// This module is now just the policy layer: it holds the user's settings, gates
+// each sound, self-throttles bursts, and asks Rust to play a named sound. The
+// sound *design* (the tones) lives in sound.rs.
+
+import { invoke } from "@tauri-apps/api/core";
 
 export interface SoundConfig {
   /** master on/off for all sound */
@@ -31,128 +32,22 @@ export function setSoundConfig(next: SoundConfig) {
   config = next;
 }
 
-// One shared AudioContext. `latencyHint: "interactive"` asks the platform for the
-// smallest output buffer (lowest latency). We create it eagerly and keep it warm
-// (see `warm()`), because a suspended context's async `resume()` adds audible lag
-// to the first sound after any idle gap — the main source of "the sound feels late".
-let ctx: AudioContext | null = null;
-function ensureCtx(): AudioContext | null {
-  try {
-    const w = window as unknown as {
-      webkitAudioContext?: typeof AudioContext;
-      __beecorkAudio?: AudioContext;
-    };
-    // Reuse a context stashed on `window`. A hot-reload re-evaluates this module
-    // (resetting `ctx` to null) and would otherwise mint a fresh *suspended*
-    // context on every save — whose async resume() adds lag to the next sound.
-    // Keeping the already-running one on window makes latency stable across edits.
-    // But a "closed" context (WebKit tore it down) and the non-standard
-    // "interrupted" one (the OS audio session was taken while backgrounded) are
-    // both unrecoverable for playback — resume() won't make them sound again — so
-    // drop them and mint a fresh context instead of handing back a dead one.
-    const cur = w.__beecorkAudio;
-    if (cur && cur.state !== "closed" && (cur.state as string) !== "interrupted") {
-      ctx = cur;
-      return ctx;
-    }
-    if (cur) {
-      try {
-        void cur.close();
-      } catch {
-        /* already gone */
-      }
-    }
-    const Ctor = window.AudioContext || w.webkitAudioContext;
-    if (!Ctor) return null;
-    ctx = new Ctor({ latencyHint: "interactive" });
-    w.__beecorkAudio = ctx;
-    return ctx;
-  } catch {
-    return null;
-  }
-}
-function audio(): AudioContext | null {
-  const a = ensureCtx();
-  if (a && a.state !== "running") void a.resume().catch(() => {});
-  return a;
-}
+/** The named sounds the Rust engine knows how to synthesize. */
+type Kind =
+  | "attention"
+  | "exit"
+  | "create"
+  | "split"
+  | "close"
+  | "panelOpen"
+  | "panelClose"
+  | "blip"
+  | "send";
 
-/** Create + resume the context ahead of the first sound so it's never cold. Safe
- *  to call on every user interaction (a no-op once running). */
-export function warm() {
-  const a = ensureCtx();
-  // `resume()` clears plain "suspended". Swallow the rejection WebKit throws when
-  // it won't resume without a gesture — the next real interaction retries here.
-  if (a && a.state !== "running") void a.resume().catch(() => {});
-}
-
-/** Rebuild the audio engine from scratch. WKWebView frequently leaves the
- *  AudioContext producing *silence* after the window has been backgrounded or
- *  occluded: resume() reports state "running" but nothing is audible, and the
- *  only cure is a brand-new context — which is exactly why opening a fresh window
- *  brought the sound back. We can't detect the silent-but-"running" zombie from
- *  script, so on any return to the foreground (and from the Settings "Test"
- *  button) we discard the old context and create a new one; the next user gesture
- *  resumes it into a genuinely audible state. Cheap and safe to over-call — it
- *  only ever holds one live context. */
-export function reviveForForeground() {
-  try {
-    const w = window as unknown as { __beecorkAudio?: AudioContext };
-    const cur = w.__beecorkAudio;
-    if (cur && cur.state !== "closed") {
-      try {
-        void cur.close();
-      } catch {
-        /* ignore */
-      }
-    }
-    w.__beecorkAudio = undefined;
-    ctx = null;
-  } catch {
-    /* ignore */
-  }
-  warm(); // create the fresh context and attempt to resume it
-}
-
-/** Run a visual change *after* the audio output latency, so a sound dispatched
- *  now becomes audible at the same moment the visual lands — closing the small
- *  "visual leads the sound" gap. Falls through instantly when no UI sound will
- *  play (master or interface sounds off) — there'd be nothing to sync to. */
-export function withVisual(fn: () => void) {
-  if (!config.enabled || !config.uiSounds) {
-    fn();
-    return;
-  }
-  // Clamp to a small perceptual budget: a 13–40ms lead aligns the blip with the
-  // visual, but a device's real outputLatency (Bluetooth ≈ 150–300ms) beyond that
-  // is pure input lag, so cap it — responsiveness wins over perfect sync.
-  const ms = Math.min(audioInfo().outputMs, 40);
-  if (ms <= 1) {
-    fn();
-    return;
-  }
-  setTimeout(fn, ms);
-}
-
-/** Live audio-engine diagnostics — the *real* latency figures, for surfacing in
- *  the UI so we work from measurements, not estimates. `total` is the platform's
- *  own estimate of schedule→speaker delay (base processing + output buffer). */
-export function audioInfo(): {
-  state: string;
-  baseMs: number;
-  outputMs: number;
-  totalMs: number;
-} {
-  const a = ctx;
-  if (!a) return { state: "not started", baseMs: 0, outputMs: 0, totalMs: 0 };
-  const base = a.baseLatency ?? 0;
-  const output = (a as unknown as { outputLatency?: number }).outputLatency ?? 0;
-  return {
-    state: a.state,
-    baseMs: Math.round(base * 1000),
-    outputMs: Math.round(output * 1000),
-    totalMs: Math.round((base + output) * 1000),
-  };
+/** Ask the native engine to play a sound. Fire-and-forget and best-effort — a
+ *  failed invoke (e.g. no audio device) must never disturb the UI. */
+function play(kind: Kind, volume: number) {
+  invoke("play_sound", { kind, volume }).catch(() => {});
 }
 
 // Per-kind throttle so rapid events collapse to a single sound.
@@ -164,146 +59,72 @@ function throttled(key: string, ms: number): boolean {
   return false;
 }
 
-/** A single decaying tone (sine "bell" by default), optionally gliding in pitch.
- *  Gains are pre-master. */
-function tone(
-  a: AudioContext,
-  opts: {
-    freq: number;
-    dur: number;
-    gain: number;
-    delay?: number;
-    attack?: number;
-    type?: OscillatorType;
-    glideTo?: number;
-  }
-) {
-  const t0 = a.currentTime + (opts.delay ?? 0);
-  const attack = opts.attack ?? 0.0016;
-  const peak = Math.max(0.0001, opts.gain * config.volume);
-
-  const osc = a.createOscillator();
-  osc.type = opts.type ?? "sine";
-  osc.frequency.setValueAtTime(opts.freq, t0);
-  if (opts.glideTo) osc.frequency.exponentialRampToValueAtTime(opts.glideTo, t0 + opts.dur);
-
-  const g = a.createGain();
-  // Linear attack from true zero → the onset lands *immediately* (an exponential
-  // ramp from ~0 crawls at the bottom and makes the sound feel a few ms late).
-  // Then an exponential decay for a natural tail.
-  g.gain.setValueAtTime(0, t0);
-  g.gain.linearRampToValueAtTime(peak, t0 + attack);
-  g.gain.exponentialRampToValueAtTime(0.0001, t0 + opts.dur);
-
-  osc.connect(g).connect(a.destination);
-  osc.start(t0);
-  osc.stop(t0 + opts.dur + 0.02);
+/** Run a visual change together with its sound. Native audio latency is low and
+ *  not measurable from JS (unlike the old Web Audio path, which pre-delayed the
+ *  visual by the output latency), so this now just runs the change immediately —
+ *  kept as a wrapper so call sites don't change. */
+export function withVisual(fn: () => void) {
+  fn();
 }
 
-// Gate helpers keep the family/throttle logic out of each sound.
-function ui(name: string, ms: number): AudioContext | null {
-  if (!config.enabled || !config.uiSounds) return null;
-  if (throttled(name, ms)) return null;
-  return audio();
-}
-function base(name: string, ms: number): AudioContext | null {
-  if (!config.enabled) return null;
-  if (throttled(name, ms)) return null;
-  return audio();
-}
-
-// ---- attention family (rides the master toggle — these are the meaningful ones) ----
-
-/** The gentle rising two-note chime (E5 → B5). Shared by attention() and the
- *  settings preview so the preview is always identical to the real chime. */
-function attentionChime(a: AudioContext) {
-  tone(a, { freq: 659.25, dur: 0.17, gain: 0.16, attack: 0.003 });
-  tone(a, { freq: 987.77, dur: 0.26, gain: 0.12, delay: 0.11, attack: 0.003 });
-}
+// ---- attention family (rides the master toggle — the meaningful ones) ----
 
 /** An agent wants you — it finished, asked a question, or rang the bell. */
 export function attention() {
-  const a = base("attention", 400);
-  if (!a) return;
-  attentionChime(a);
+  if (!config.enabled || throttled("attention", 400)) return;
+  play("attention", config.volume);
 }
 
-/** A shell process exited or crashed — a soft descending "power down" (G4 → C4). */
+/** A shell process exited or crashed — a soft descending "power down". */
 export function exit() {
-  const a = base("exit", 400);
-  if (!a) return;
-  tone(a, { freq: 392.0, dur: 0.16, gain: 0.12 });
-  tone(a, { freq: 261.63, dur: 0.28, gain: 0.11, delay: 0.09 });
+  if (!config.enabled || throttled("exit", 400)) return;
+  play("exit", config.volume);
 }
 
 // ---- interface family (under the uiSounds sub-toggle) ----
 
-/** New session — a bright ascending "appear" (A4 → E5). */
+function ui(kind: Kind, ms: number) {
+  if (!config.enabled || !config.uiSounds || throttled(kind, ms)) return;
+  play(kind, config.volume);
+}
+
+/** New session — a bright ascending "appear". */
 export function create() {
-  const a = ui("create", 40);
-  if (!a) return;
-  tone(a, { freq: 440.0, dur: 0.07, gain: 0.09, attack: 0.002, type: "triangle" });
-  tone(a, { freq: 659.25, dur: 0.1, gain: 0.08, delay: 0.055, attack: 0.002, type: "triangle" });
+  ui("create", 40);
 }
-
-/** Split — two equal pips, a "divide in two" (C5, C5). */
+/** Split — two equal pips, a "divide in two". */
 export function split() {
-  const a = ui("split", 40);
-  if (!a) return;
-  tone(a, { freq: 523.25, dur: 0.05, gain: 0.08 });
-  tone(a, { freq: 523.25, dur: 0.06, gain: 0.08, delay: 0.075 });
+  ui("split", 40);
 }
-
-/** Close a session — a soft descending "dismiss" (E5 → A4). */
+/** Close a session — a soft descending "dismiss". */
 export function closeSession() {
-  const a = ui("close", 40);
-  if (!a) return;
-  tone(a, { freq: 659.25, dur: 0.07, gain: 0.09, attack: 0.002 });
-  tone(a, { freq: 440.0, dur: 0.11, gain: 0.07, delay: 0.05, attack: 0.002 });
+  ui("close", 40);
 }
-
-/** A panel/drawer opens (file panel, session rail) — a short upward pip. Kept
- *  brief with a hard onset so it lands *with* the click, not after it. */
+/** A panel/drawer opens — a short upward pip. */
 export function panelOpen() {
-  const a = ui("panelOpen", 60);
-  if (!a) return;
-  tone(a, { freq: 587.33, glideTo: 880, dur: 0.05, gain: 0.08, attack: 0.001 });
+  ui("panelOpen", 60);
 }
-
 /** A panel/drawer closes/collapses — a short downward pip. */
 export function panelClose() {
-  const a = ui("panelClose", 60);
-  if (!a) return;
-  tone(a, { freq: 587.33, glideTo: 392, dur: 0.05, gain: 0.08, attack: 0.001 });
+  ui("panelClose", 60);
 }
-
-/** A light in-session interaction — switching sessions, opening a file. A tiny neutral blip. */
+/** A light in-session interaction — switching sessions, opening a file. */
 export function blip() {
-  const a = ui("blip", 70);
-  if (!a) return;
-  tone(a, { freq: 520, dur: 0.035, gain: 0.05, attack: 0.002 });
+  ui("blip", 70);
 }
 
 // ---- typing family (under the keyClicks sub-toggle) ----
 
-/** Sending a line (Enter) — a soft, pleasant rising "sent" (D5 → A5). */
+/** Sending a line (Enter) — a soft, pleasant rising "sent". */
 export function send() {
-  if (!config.enabled || !config.keyClicks) return;
-  if (throttled("send", 45)) return;
-  const a = audio();
-  if (!a) return;
-  tone(a, { freq: 587.33, dur: 0.07, gain: 0.08, attack: 0.002 });
-  tone(a, { freq: 880.0, dur: 0.09, gain: 0.06, delay: 0.045, attack: 0.002 });
+  if (!config.enabled || !config.keyClicks || throttled("send", 45)) return;
+  play("send", config.volume);
 }
 
 /** Play the attention chime at a given volume, bypassing the on/off gate — for
- *  live feedback while the user is adjusting the sound settings. */
+ *  live feedback while adjusting the sound settings, and the Settings "Test"
+ *  button. */
 export function preview(volume: number) {
   if (throttled("preview", 130)) return;
-  const a = audio();
-  if (!a) return;
-  const saved = config.volume;
-  config.volume = volume;
-  attentionChime(a);
-  config.volume = saved;
+  play("attention", volume);
 }
