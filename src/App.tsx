@@ -70,6 +70,7 @@ export default function App() {
 
   const { settings, update } = useSettings();
   const {
+    items,
     sessions,
     activeId,
     setActiveId,
@@ -83,6 +84,9 @@ export default function App() {
     pairSessions,
     unpairSession,
     reorder,
+    addDivider,
+    renameDivider,
+    removeDivider,
   } = useSessions();
 
   // A pair is symmetric and lives on the session (`partner`), so it's remembered.
@@ -152,10 +156,12 @@ export default function App() {
   const activeName = active ? displayName(active) : "Beecork Terminal";
   const cwdName = terminalCwd ? basename(terminalCwd) : "";
 
-  // A new session inherits the focused session's cwd. (Action before sound, so a
-  // throwing sound call can never swallow the action — same rule as the send path.)
+  // A new session inherits the focused session's cwd and opens right below it —
+  // so it lands in the same rail section. (Action before sound, so a throwing
+  // sound call can never swallow the action — same rule as the send path.)
   const newSession = useCallback(() => {
-    create(sessionsRef.current.find((s) => s.id === activeIdRef.current)?.cwd);
+    const cur = activeIdRef.current;
+    create(sessionsRef.current.find((s) => s.id === cur)?.cwd, true, cur);
     sound.create();
   }, [create]);
 
@@ -188,7 +194,7 @@ export default function App() {
     }
     const idx = sessions.findIndex((s) => s.id === activeId);
     const next = sessions[idx + 1] ?? sessions.find((s) => s.id !== activeId);
-    const partner = next?.id ?? create(active?.cwd, false);
+    const partner = next?.id ?? create(active?.cwd, false, activeId);
     pairSessions(activeId, partner);
     setPanelOpen(false);
     sound.split();
@@ -430,7 +436,7 @@ export default function App() {
 
       <div className="workspace">
         <SessionRail
-          sessions={sessions}
+          items={items}
           activeId={activeId}
           wantsYou={wantsYou}
           busy={busy}
@@ -450,11 +456,14 @@ export default function App() {
           }}
           onRename={rename}
           onOpenSettings={() => setSettingsOpen(true)}
-          onCreateIn={(cwd) => create(cwd)}
+          onCreateIn={(cwd, afterId) => create(cwd, true, afterId)}
           onSplitWith={splitWith}
           onUnsplit={unpairSession}
           onCloseOthers={(id) => setConfirmCloseOthers(id)}
           onReorder={reorder}
+          onAddDivider={addDivider}
+          onRenameDivider={renameDivider}
+          onRemoveDivider={removeDivider}
         />
 
         <div className={`terminals${split ? " split" : ""}`} ref={terminalsRef}>

@@ -504,11 +504,13 @@ body {
   color: #fab387;
 }
 /* drag-to-reorder: the row being dragged, and the drop-position indicator line */
-.rail-item.dragging {
+.rail-item.dragging,
+.rail-divider.dragging {
   opacity: 0.4;
   cursor: grabbing;
 }
-.rail-item.drop-before::before {
+.rail-item.drop-before::before,
+.rail-divider.drop-before::before {
   content: "";
   position: absolute;
   left: 4px;
@@ -569,6 +571,51 @@ body {
   50% {
     opacity: 0.3;
   }
+}
+
+/* section divider — a "── name ──" line between rail rows; drag to move it,
+   double-click to name it. Grouping is just row order: sessions between two
+   dividers are a section. */
+.rail-divider {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 8px 4px;
+  cursor: pointer;
+  position: relative;
+  color: var(--muted);
+  white-space: nowrap;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.rail-divider-line {
+  flex: 1 1 auto;
+  min-width: 6px;
+  height: 1px;
+  background: var(--border);
+}
+.rail-divider:hover .rail-divider-line {
+  background: var(--muted);
+}
+.rail-divider-name {
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.session-rail.collapsed .rail-divider {
+  padding: 6px 8px 2px;
+}
+.rail-divider:hover .rail-close {
+  opacity: 0.7;
+}
+.rail-divider:hover .rail-close:hover {
+  opacity: 1;
+  background: var(--hover);
+  color: var(--fg);
 }
 
 /* row buttons (rename / close) */

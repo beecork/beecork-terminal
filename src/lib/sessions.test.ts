@@ -1,5 +1,13 @@
 import { describe, it, expect } from "vitest";
-import { displayName, wantsAttention, resumeCommand, type Session } from "./sessions";
+import {
+  displayName,
+  wantsAttention,
+  resumeCommand,
+  isDivider,
+  moveBefore,
+  type RailItem,
+  type Session,
+} from "./sessions";
 
 describe("displayName", () => {
   const base: Session = { id: "1", name: "Session 1" };
@@ -56,6 +64,45 @@ describe("wantsAttention", () => {
 
   it("does not fire while a command keeps running", () => {
     expect(wantsAttention("claude", "claude", false)).toBe(false);
+  });
+});
+
+describe("isDivider", () => {
+  it("distinguishes dividers from sessions", () => {
+    const items: RailItem[] = [
+      { id: "s1", name: "Session 1" },
+      { kind: "divider", id: "d1", name: "project A" },
+    ];
+    expect(isDivider(items[0])).toBe(false);
+    expect(isDivider(items[1])).toBe(true);
+  });
+});
+
+describe("moveBefore", () => {
+  const list = [{ id: "a" }, { id: "b" }, { id: "c" }];
+  const ids = (l: { id: string }[]) => l.map((x) => x.id).join("");
+
+  it("moves an item before another", () => {
+    expect(ids(moveBefore(list, "c", "a"))).toBe("cab");
+  });
+
+  it("moves an item to the end (beforeId null)", () => {
+    expect(ids(moveBefore(list, "a", null))).toBe("bca");
+  });
+
+  it("moves an item down past a later item", () => {
+    expect(ids(moveBefore(list, "a", "c"))).toBe("bac");
+  });
+
+  it("returns the SAME array when already in place", () => {
+    expect(moveBefore(list, "a", "b")).toBe(list);
+    expect(moveBefore(list, "c", null)).toBe(list);
+    expect(moveBefore(list, "b", "b")).toBe(list);
+  });
+
+  it("returns the SAME array for unknown ids", () => {
+    expect(moveBefore(list, "nope", "a")).toBe(list);
+    expect(moveBefore(list, "a", "nope")).toBe(list);
   });
 });
 
