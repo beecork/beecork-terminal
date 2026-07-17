@@ -24,7 +24,7 @@ export default function FileEditor({
   root?: string | null;
   onFocusSurface: (s: Surface) => void;
 }) {
-  const { theme } = useSettings();
+  const { theme, settings } = useSettings();
   const [content, setContent] = useState("");
   const [original, setOriginal] = useState<string | null>(null);
   const [status, setStatus] = useState<Status>("loading");
@@ -130,8 +130,11 @@ export default function FileEditor({
     }
   }
 
-  const hasDiff = original != null && original !== "" && original !== content;
-  const showDiff = mode === "diff" && original != null && original !== "";
+  // The panel-level toggle (settings.editorDiff) overrides everything: off means
+  // every file shows plain, final content — no diff gutter, no per-file toggle.
+  const hasDiff = settings.editorDiff && original != null && original !== "" && original !== content;
+  const showDiff =
+    settings.editorDiff && mode === "diff" && original != null && original !== "";
 
   const extensions: Extension[] = [
     ...languageFor(path),

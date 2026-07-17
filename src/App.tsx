@@ -132,22 +132,10 @@ export default function App() {
   const { terminalCwd, wantsYou, busy, onCwd, onStatusHint, onActivity, onBell, onSeen, markClosed } =
     useSessionStatus(sessions, activeId, visibleIds, setCwd, setRunning);
 
-  // A soft chime the instant a session newly needs you — agent finished, bell
-  // rang, or a background command ended. `wantsYou` is already gated on the
-  // session being off-screen, so this only ever fires when you're not looking
-  // (exactly when an audible nudge helps). One chime per batch of new attention.
-  const prevWantsRef = useRef<Set<string>>(new Set());
-  useEffect(() => {
-    let fresh = false;
-    for (const id of wantsYou) {
-      if (!prevWantsRef.current.has(id)) {
-        fresh = true;
-        break;
-      }
-    }
-    prevWantsRef.current = wantsYou;
-    if (fresh) sound.attention();
-  }, [wantsYou]);
+  // The attention chime lives inside useSessionStatus (flagWants): it fires the
+  // instant a session newly needs you, and only there is the CAUSE known — a
+  // precise signal (bell, command exit) always chimes, while the quiet-inferred
+  // proxy rate-limits repeats. A set-diff here couldn't tell those apart.
 
   const onFocusSurface = useCallback((s: Surface) => {
     zoomTargetRef.current = s;

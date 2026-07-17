@@ -2,14 +2,27 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { getRoot, ptyStatus, ptyStatusAll, type PtyStatus } from "./api";
 import { wantsAttention, displayName, type Session } from "./sessions";
 import { notify } from "./notify";
+import * as sound from "./sound";
 
-// Output must pause at least this long for a session's turn to read as "finished".
+// Output must pause at least this long for the busy dot to turn off.
 const QUIET_MS = 1500;
-// …and that just-ended output streak must have lasted at least this long to count
+// …but inferring "needs you" from silence takes much longer. An agent stalls
+// output mid-turn all the time — API latency between tool rounds, a silent tool
+// run, its event loop blocked on a big result — easily past QUIET_MS while still
+// working. Flagging at QUIET_MS lit tabs amber and chimed in the MIDDLE of turns
+// (then output resumed, cleared it, and the next stall chimed again). Only a
+// pause this long reads as "finished / waiting for you".
+const ATTN_QUIET_MS = 6000;
+// The just-ended output streak must have lasted at least this long to count
 // as a real turn of work worth a "come look". Below it, the burst was a stray
 // redraw (a spinner tick, a clock/statusline repaint) — nagging on those lit up
 // every quiet background agent in amber at once and drowned the real signal.
 const WORK_MIN_MS = 2500;
+// A quiet-INFERRED "needs you" that got disproven (output resumed) must not
+// chime again right away — at most one inferred chime per session per this
+// window. The amber dot still lights; only the repeat sound is suppressed.
+// Precise signals (bell, command exit) are exempt and always chime.
+const INFER_RECHIME_MS = 60_000;
 
 function addId(set: Set<string>, id: string): Set<string> {
   if (set.has(id)) return set;
@@ -46,10 +59,18 @@ export function useSessionStatus(
   // agent is "running" the whole time it's open, working or waiting).
   const [busy, setBusy] = useState<Set<string>>(() => new Set());
   const idleTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  // Second-stage timers: armed when the busy dot goes off, fire when the silence
+  // has lasted ATTN_QUIET_MS total — only then does a session read as "needs you".
+  const attnTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   // When each session's current output streak began — so the quiet-timer can tell
   // a real turn of work (worth a "needs you") from a one-frame redraw.
   const busySince = useRef<Record<string, number>>({});
+  // Last time each session chimed off a quiet-inferred flag (rate-limits repeats).
+  const inferredChimeAt = useRef<Record<string, number>>({});
   const prevRunning = useRef<Record<string, string | undefined>>({});
+  // Mirror of wantsYou, so flag/clear can decide-and-chime synchronously instead
+  // of inside a setState updater (which must stay side-effect free).
+  const wantsRef = useRef<Set<string>>(new Set());
 
   const activeIdRef = useRef(activeId);
   activeIdRef.current = activeId;
@@ -63,6 +84,28 @@ export function useSessionStatus(
   // Bell-set attention is sticky (only onSeen clears it); attention *inferred*
   // from output going quiet is a proxy that self-clears when output resumes.
   const bellRang = useRef<Set<string>>(new Set());
+
+  const clearWants = useCallback((id: string) => {
+    const next = delId(wantsRef.current, id);
+    if (next === wantsRef.current) return;
+    wantsRef.current = next;
+    setWantsYou(next);
+  }, []);
+
+  // Flag a session as needing you, chiming once at the moment it newly flips.
+  // Precise producers (bell, command exit) always chime; the quiet-inferred
+  // proxy rate-limits its chime so a session that flaps (stall → flag → output
+  // resumes → clear → stall…) can't keep calling you. The dot always lights.
+  const flagWants = useCallback((id: string, inferred: boolean) => {
+    if (wantsRef.current.has(id)) return;
+    const now = performance.now();
+    if (!inferred || now - (inferredChimeAt.current[id] ?? -Infinity) >= INFER_RECHIME_MS) {
+      if (inferred) inferredChimeAt.current[id] = now;
+      sound.attention();
+    }
+    wantsRef.current = addId(wantsRef.current, id);
+    setWantsYou(wantsRef.current);
+  }, []);
 
   const applyCwd = useCallback(
     (id: string, cwd: string) => {
@@ -89,12 +132,12 @@ export function useSessionStatus(
       // session on screen (visible in either split pane) counts as seen, so a pane
       // you can see never nags.
       if (wantsAttention(was, nowRunning, visibleIdsRef.current.includes(id))) {
-        setWantsYou((prev) => addId(prev, id));
+        flagWants(id, false); // a command really exited — precise, always chimes
       }
       prevRunning.current[id] = nowRunning;
       setRunning(id, nowRunning);
     },
-    [applyCwd, setRunning]
+    [applyCwd, setRunning, flagWants]
   );
 
   const onCwd = useCallback((id: string, path: string) => applyCwd(id, path), [applyCwd]);
@@ -107,62 +150,87 @@ export function useSessionStatus(
     [applyStatus]
   );
 
-  // Every output chunk marks the session busy and (re)arms a quiet timer. When it
-  // stays quiet for ~1.5s, an *off-screen* session that was working becomes a
-  // "come look". Resumed output disproves a quiet-inferred "come look", so clear
-  // it here — unless a bell rang (a real "I need you" that waits until you look).
-  const onActivity = useCallback((id: string) => {
-    const now = performance.now();
-    setBusy((prev) => {
-      if (prev.has(id)) return prev;
-      busySince.current[id] = now; // idle → working: a fresh streak begins
-      return addId(prev, id);
-    });
-    if (!bellRang.current.has(id)) setWantsYou((prev) => delId(prev, id));
-    clearTimeout(idleTimers.current[id]);
-    idleTimers.current[id] = setTimeout(() => {
-      const workedMs = now - (busySince.current[id] ?? now);
-      delete busySince.current[id];
-      setBusy((prev) => delId(prev, id));
-      // Only nag when a *real* turn of work just ended off-screen. A brief blip
-      // (spinner tick, statusline repaint) isn't a completion, so it must never
-      // flip an idle background agent to blinking amber. Genuine "come look"
-      // signals — a bell, or a foreground command going running→idle — come from
-      // the other two producers and are unaffected by this gate.
-      if (workedMs >= WORK_MIN_MS && !visibleIdsRef.current.includes(id)) {
-        setWantsYou((prev) => addId(prev, id));
-      }
-    }, QUIET_MS);
-  }, []);
+  // Every output chunk marks the session busy and (re)arms the quiet timers.
+  // Stage one (QUIET_MS): the busy dot turns off. Stage two (ATTN_QUIET_MS
+  // total): if the session is STILL silent and off-screen, the ended streak
+  // becomes a "come look". The long confirmation window is what separates a
+  // finished turn from a mid-turn stall (API latency, a silent tool run), which
+  // used to flag-and-chime while the agent was still working. Resumed output
+  // disproves a quiet-inferred "come look", so clear it here — unless a bell
+  // rang (a real "I need you" that waits until you look).
+  const onActivity = useCallback(
+    (id: string) => {
+      const now = performance.now();
+      setBusy((prev) => {
+        if (prev.has(id)) return prev;
+        busySince.current[id] = now; // idle → working: a fresh streak begins
+        return addId(prev, id);
+      });
+      if (!bellRang.current.has(id)) clearWants(id);
+      clearTimeout(idleTimers.current[id]);
+      clearTimeout(attnTimers.current[id]);
+      delete attnTimers.current[id];
+      idleTimers.current[id] = setTimeout(() => {
+        const workedMs = now - (busySince.current[id] ?? now);
+        delete busySince.current[id];
+        setBusy((prev) => delId(prev, id));
+        // Only nag when a *real* turn of work ended. A brief blip (spinner tick,
+        // statusline repaint) isn't a completion, so it must never flip an idle
+        // background agent to blinking amber. Genuine "come look" signals — a
+        // bell, or a foreground command going running→idle — come from the other
+        // two producers and are unaffected by this gate. Visibility is checked
+        // when the timer FIRES: a pane you can see never nags.
+        if (workedMs >= WORK_MIN_MS) {
+          attnTimers.current[id] = setTimeout(() => {
+            delete attnTimers.current[id];
+            if (!visibleIdsRef.current.includes(id)) flagWants(id, true);
+          }, ATTN_QUIET_MS - QUIET_MS);
+        }
+      }, QUIET_MS);
+    },
+    [clearWants, flagWants]
+  );
 
   // The bell is the agent's explicit "I need you" — the precise attention signal.
   // No nag for a session already on screen; a bell stays sticky until onSeen.
-  const onBell = useCallback((id: string) => {
-    if (visibleIdsRef.current.includes(id)) return;
-    bellRang.current.add(id);
-    setWantsYou((prev) => addId(prev, id));
-    // If you're in another app, ping the OS so you don't miss it.
-    if (!document.hasFocus()) {
-      const s = sessionsRef.current.find((x) => x.id === id);
-      notify(`${s ? displayName(s) : "A session"} needs you`, "Your agent is waiting for you.");
-    }
-  }, []);
+  const onBell = useCallback(
+    (id: string) => {
+      if (visibleIdsRef.current.includes(id)) return;
+      bellRang.current.add(id);
+      flagWants(id, false); // explicit "I need you" — precise, always chimes
+      // If you're in another app, ping the OS so you don't miss it.
+      if (!document.hasFocus()) {
+        const s = sessionsRef.current.find((x) => x.id === id);
+        notify(`${s ? displayName(s) : "A session"} needs you`, "Your agent is waiting for you.");
+      }
+    },
+    [flagWants]
+  );
 
-  const onSeen = useCallback((id: string) => {
-    bellRang.current.delete(id);
-    setWantsYou((prev) => delId(prev, id));
-  }, []);
+  const onSeen = useCallback(
+    (id: string) => {
+      bellRang.current.delete(id);
+      clearWants(id);
+    },
+    [clearWants]
+  );
 
   // Forget a closed session so nothing leaks or resurrects its id.
-  const markClosed = useCallback((id: string) => {
-    delete prevRunning.current[id];
-    delete busySince.current[id];
-    clearTimeout(idleTimers.current[id]);
-    delete idleTimers.current[id];
-    bellRang.current.delete(id);
-    setWantsYou((prev) => delId(prev, id));
-    setBusy((prev) => delId(prev, id));
-  }, []);
+  const markClosed = useCallback(
+    (id: string) => {
+      delete prevRunning.current[id];
+      delete busySince.current[id];
+      delete inferredChimeAt.current[id];
+      clearTimeout(idleTimers.current[id]);
+      delete idleTimers.current[id];
+      clearTimeout(attnTimers.current[id]);
+      delete attnTimers.current[id];
+      bellRang.current.delete(id);
+      clearWants(id);
+      setBusy((prev) => delId(prev, id));
+    },
+    [clearWants]
+  );
 
   useEffect(() => {
     getRoot().then(setTerminalCwd).catch(() => {});

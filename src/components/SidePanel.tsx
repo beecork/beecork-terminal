@@ -26,7 +26,7 @@ import { usePersistedState } from "../lib/persist";
 import { useDrag } from "../lib/useDrag";
 import { useContextMenu } from "../lib/useContextMenu";
 import { copyText } from "../lib/clipboard";
-import { Folder, Refresh, LayoutRows, LayoutColumns, Chevron } from "./icons";
+import { Folder, Refresh, LayoutRows, LayoutColumns, Chevron, Diff } from "./icons";
 
 interface Props {
   openRequest: OpenRequest | null;
@@ -223,15 +223,20 @@ export default function SidePanel({
     });
   }
 
+  // Empty when tree diffs are toggled off — the tree renders with no change
+  // markers at all (dots, colored names, count pill).
   const statusByPath = useMemo(() => {
     const m = new Map<string, ChangeStatus>();
-    for (const s of statuses) m.set(s.path, s.status);
+    if (settings.treeDiff) for (const s of statuses) m.set(s.path, s.status);
     return m;
-  }, [statuses]);
+  }, [statuses, settings.treeDiff]);
 
   const changedDirs = useMemo(
-    () => changedAncestors(statuses.map((s) => s.path), root ?? ""),
-    [statuses, root]
+    () =>
+      settings.treeDiff
+        ? changedAncestors(statuses.map((s) => s.path), root ?? "")
+        : new Set<string>(),
+    [statuses, root, settings.treeDiff]
   );
 
   const rootName = root ? basename(root) : "";
@@ -245,7 +250,9 @@ export default function SidePanel({
             <Folder size={16} />
           </span>
           <span className="chip-name">{rootName || "Files"}</span>
-          {statuses.length > 0 && <span className="count-pill">{statuses.length}</span>}
+          {settings.treeDiff && statuses.length > 0 && (
+            <span className="count-pill">{statuses.length}</span>
+          )}
         </div>
         <div className="panel-actions">
           <div className="seg" title="Panel layout">
@@ -288,6 +295,19 @@ export default function SidePanel({
         <div className="tree-region" style={{ flexBasis: `${treeSize}%` }}>
           <div className="seclabel">
             <span>Files</span>
+            <div className="seclabel-actions">
+              <button
+                className={`icon-btn sm${settings.treeDiff ? " on" : ""}`}
+                title={
+                  settings.treeDiff
+                    ? "Hide change markers in the file tree"
+                    : "Show change markers in the file tree"
+                }
+                onClick={() => update((s) => ({ treeDiff: !s.treeDiff }))}
+              >
+                <Diff size={15} />
+              </button>
+            </div>
           </div>
           <div className="tree-scroll">
             {root ? (
@@ -318,6 +338,17 @@ export default function SidePanel({
                 onDec={() => zoomFont(update, "editor", -1)}
                 onInc={() => zoomFont(update, "editor", 1)}
               />
+              <button
+                className={`icon-btn sm${settings.editorDiff ? " on" : ""}`}
+                title={
+                  settings.editorDiff
+                    ? "Hide diffs in the editor (show files as they are)"
+                    : "Show diffs vs the last commit in the editor"
+                }
+                onClick={() => update((s) => ({ editorDiff: !s.editorDiff }))}
+              >
+                <Diff size={15} />
+              </button>
               <button
                 className={`icon-btn sm${split ? " on" : ""}`}
                 title={split ? "Unsplit editor" : "Split editor"}

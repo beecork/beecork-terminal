@@ -95,6 +95,16 @@ export function File({ size, ...p }: P) {
   );
 }
 
+/** plus over minus — git diff / change markers */
+export function Diff({ size, ...p }: P) {
+  return (
+    <svg {...svg(size, { ...p, strokeWidth: 1.8 })}>
+      <path d="M12 3.5v7M8.5 7h7" />
+      <path d="M8.5 18h7" />
+    </svg>
+  );
+}
+
 /** square split by a horizontal line — stacked / rows */
 export function LayoutRows({ size, ...p }: P) {
   return (

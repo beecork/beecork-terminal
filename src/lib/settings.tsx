@@ -159,6 +159,10 @@ export interface Settings {
   uiSounds: boolean;
   /** a soft click when you press Enter to send a line (off by default) */
   keyClicks: boolean;
+  /** show uncommitted-change markers (dots / colored names) in the file tree */
+  treeDiff: boolean;
+  /** show line diffs vs HEAD in the editor (auto-diff + per-file Diff/Edit toggle) */
+  editorDiff: boolean;
 }
 
 export const MIN_FONT = 9;
@@ -182,6 +186,8 @@ const DEFAULTS: Settings = {
   soundVolume: 0.5,
   uiSounds: true,
   keyClicks: true,
+  treeDiff: true,
+  editorDiff: true,
 };
 
 const STORAGE_KEY = "beecork.settings";
