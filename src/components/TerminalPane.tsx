@@ -268,7 +268,14 @@ export default function TerminalPane({
 
     term.open(mountRef.current);
     try {
-      term.loadAddon(new WebglAddon());
+      const webgl = new WebglAddon();
+      // WebView2 (Windows) recycles its GPU process on driver updates, sleep/wake,
+      // or memory pressure, firing `webglcontextlost`. Without handling it the
+      // addon keeps drawing into a dead context — a blank/frozen terminal — and
+      // repeated GPU-process crashes can bring the whole webview down. Disposing on
+      // context loss falls xterm back to its DOM renderer, which keeps working.
+      webgl.onContextLoss(() => webgl.dispose());
+      term.loadAddon(webgl);
     } catch (e) {
       console.warn("WebGL renderer unavailable, using default", e);
     }

@@ -165,25 +165,72 @@ impl Default for SoundState {
     }
 }
 
-/// The audio thread. Opens a FRESH output stream per sound so it always targets
-/// the current default device — the native counterpart of "a new window fixed
-/// it": unplugging headphones or switching outputs can't leave us wedged on a
-/// dead device, because we never hold a long-lived stream. Sounds are short and
-/// throttled upstream, so serial playback is imperceptible.
+/// The audio thread. Stream lifetime is deliberately platform-split:
+///
+///   • macOS / Linux — open a FRESH output stream per sound so it always targets
+///     the current default device: unplugging headphones or switching outputs
+///     can't leave us wedged on a dead device, because we never hold a long-lived
+///     stream. CoreAudio/ALSA make this open/close cheap, and sounds are short and
+///     throttled upstream, so serial playback is imperceptible.
+///
+///   • Windows — hold ONE stream for the app's lifetime and reuse it. Recreating a
+///     WASAPI client per sound (a chime fires on every Enter) churns the device
+///     open/close dozens of times a minute; that leaks device handles and trips
+///     known cpal/WASAPI COM faults, which crash the whole process after a few
+///     minutes of use. We open lazily on the first sound and only rebuild the
+///     stream if playback errors — the device going away is the one case the
+///     per-sound recreation used to cover, and rebuilding on error still covers it.
 fn audio_loop(rx: Receiver<SoundCmd>) {
     use rodio::{buffer::SamplesBuffer, OutputStream, Sink};
+
+    // Persistent output stream (Windows only). `OutputStream` is not Send, but it
+    // lives entirely on this one audio thread, so that's fine.
+    #[cfg(windows)]
+    let mut held: Option<(OutputStream, rodio::OutputStreamHandle)> = None;
+
     while let Ok(cmd) = rx.recv() {
         let samples = render(&spec(&cmd.kind), cmd.volume);
         if samples.is_empty() {
             continue;
         }
-        // Recreate the device stream each time; on any error just drop the sound
-        // (no audio device, device busy) rather than propagate — sound is never
-        // allowed to break anything.
-        if let Ok((_stream, handle)) = OutputStream::try_default() {
-            if let Ok(sink) = Sink::try_new(&handle) {
-                sink.append(SamplesBuffer::new(1, SAMPLE_RATE, samples));
-                sink.sleep_until_end(); // keeps _stream alive until the sound ends
+
+        #[cfg(windows)]
+        {
+            // Open the device stream once, on demand. If it can't open (no audio
+            // device) drop the sound — sound is never allowed to break anything.
+            if held.is_none() {
+                held = OutputStream::try_default().ok();
+            }
+            // `held` is borrowed for the whole `if let` block (the `_stream`
+            // binding keeps it alive), so we can't drop it from inside — record the
+            // loss and reset after the borrow ends.
+            let mut device_lost = false;
+            if let Some((_stream, handle)) = held.as_ref() {
+                match Sink::try_new(handle) {
+                    Ok(sink) => {
+                        sink.append(SamplesBuffer::new(1, SAMPLE_RATE, samples));
+                        sink.sleep_until_end();
+                    }
+                    Err(_) => device_lost = true,
+                }
+            }
+            // The device likely went away (unplugged / output switched): drop the
+            // held stream so the NEXT sound reopens against the current default.
+            if device_lost {
+                held = None;
+            }
+        }
+
+        #[cfg(not(windows))]
+        {
+            // Recreate the device stream each time; on any error just drop the sound
+            // (no audio device, device busy) rather than propagate — sound is never
+            // allowed to break anything.
+            if let Ok((_stream, handle)) = OutputStream::try_default() {
+                if let Ok(sink) = Sink::try_new(&handle) {
+                    sink.append(SamplesBuffer::new(1, SAMPLE_RATE, samples));
+                    sink.sleep_until_end(); // keeps _stream alive until the sound ends
+                }
             }
         }
     }
