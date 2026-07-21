@@ -28,6 +28,44 @@ export function joinPath(dir: string, name: string): string {
   return dir.replace(/\/+$/, "") + "/" + name.replace(/^\/+/, "");
 }
 
+/** Split an absolute path into breadcrumb segments, each carrying the absolute
+ *  path up to and including it. Cross-platform: understands POSIX (`/a/b`) and
+ *  Windows (`C:\a\b`) separators, because the backend hands us native paths —
+ *  backslashes on Windows. The first crumb is the filesystem / drive root. Pure,
+ *  so it's unit-tested. */
+export function breadcrumbs(path: string): { name: string; path: string }[] {
+  if (!path) return [];
+  const winDrive = /^[A-Za-z]:/.exec(path);
+  // Windows-style when it starts with a drive (C:) or uses backslashes and isn't
+  // a POSIX absolute path.
+  if (winDrive || (path.includes("\\") && !path.startsWith("/"))) {
+    const drive = winDrive ? winDrive[0] : "";
+    const rest = path.slice(drive.length).replace(/^[\\/]+/, "");
+    const out = [{ name: drive || "\\", path: drive + "\\" }];
+    let acc = drive;
+    for (const seg of rest.split(/[\\/]+/).filter(Boolean)) {
+      acc += "\\" + seg;
+      out.push({ name: seg, path: acc });
+    }
+    return out;
+  }
+  const out = [{ name: "/", path: "/" }];
+  let acc = "";
+  for (const seg of path.split("/").filter(Boolean)) {
+    acc += "/" + seg;
+    out.push({ name: seg, path: acc });
+  }
+  return out;
+}
+
+/** The parent directory of an absolute path, cross-platform (POSIX + Windows).
+ *  Returns the path unchanged when it is already a filesystem / drive root, so
+ *  callers can detect "can't go up" via `parentDir(p) === p`. */
+export function parentDir(path: string): string {
+  const cr = breadcrumbs(path);
+  return cr.length >= 2 ? cr[cr.length - 2].path : cr[0]?.path ?? path;
+}
+
 /** Path relative to `root` ("/r/a/b" under "/r" → "a/b"); returns it unchanged if outside root. */
 export function relativePath(full: string, root: string): string {
   if (!root) return full;

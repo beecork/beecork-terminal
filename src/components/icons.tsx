@@ -78,6 +78,33 @@ export function Chevron({ open, size, ...p }: P & { open?: boolean }) {
   );
 }
 
+export function ArrowLeft({ size, ...p }: P) {
+  return (
+    <svg {...svg(size, { ...p, strokeWidth: 1.8 })}>
+      <path d="M19 12H5" />
+      <path d="M12 5l-7 7 7 7" />
+    </svg>
+  );
+}
+
+export function ArrowRight({ size, ...p }: P) {
+  return (
+    <svg {...svg(size, { ...p, strokeWidth: 1.8 })}>
+      <path d="M5 12h14" />
+      <path d="M12 5l7 7-7 7" />
+    </svg>
+  );
+}
+
+export function ArrowUp({ size, ...p }: P) {
+  return (
+    <svg {...svg(size, { ...p, strokeWidth: 1.8 })}>
+      <path d="M12 19V5" />
+      <path d="M5 12l7-7 7 7" />
+    </svg>
+  );
+}
+
 export function Folder({ size, ...p }: P) {
   return (
     <svg {...svg(size, { ...p, strokeWidth: 1.5 })}>

@@ -1,12 +1,15 @@
 import { useEffect, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { listDir, type ChangeStatus, type Entry } from "../lib/api";
 import { onFsChanged } from "../lib/events";
+import { parentDir } from "../lib/paths";
 import { Chevron, Folder, File } from "./icons";
 
 interface Props {
   rootPath: string;
   selectedPath: string | null;
   onOpenFile: (path: string) => void;
+  /** cd the terminal into a folder (double-click a folder, or the ".." row) */
+  onEnterDir: (path: string) => void;
   statusByPath: Map<string, ChangeStatus>;
   changedDirs: Set<string>;
   onRowContextMenu?: (e: ReactMouseEvent, entry: Entry) => void;
@@ -16,6 +19,7 @@ export default function FileTree({
   rootPath,
   selectedPath,
   onOpenFile,
+  onEnterDir,
   statusByPath,
   changedDirs,
   onRowContextMenu,
@@ -46,8 +50,30 @@ export default function FileTree({
   if (error) return <div className="tree-error">{error}</div>;
   if (!entries) return <div className="tree-loading">Loading…</div>;
 
+  // ".." goes up one level (cd ..), unless we're already at a filesystem/drive
+  // root (parentDir returns the path unchanged there).
+  const up = parentDir(rootPath);
+  const canGoUp = up !== rootPath;
+
   return (
     <div className="file-tree">
+      {canGoUp && (
+        <div
+          className="tree-row is-dir up-row"
+          style={{ paddingLeft: 8 }}
+          onMouseDown={(e) => {
+            if (e.button === 0) e.preventDefault();
+          }}
+          onClick={() => onEnterDir(up)}
+          title="Up one level"
+        >
+          <span className="tree-chev" />
+          <span className="tree-ic">
+            <Folder size={15} />
+          </span>
+          <span className="tree-name">..</span>
+        </div>
+      )}
       {entries.map((e) => (
         <TreeNode
           key={e.path}
@@ -55,6 +81,7 @@ export default function FileTree({
           depth={0}
           selectedPath={selectedPath}
           onOpenFile={onOpenFile}
+          onEnterDir={onEnterDir}
           statusByPath={statusByPath}
           changedDirs={changedDirs}
           onRowContextMenu={onRowContextMenu}
@@ -69,6 +96,7 @@ interface NodeProps {
   depth: number;
   selectedPath: string | null;
   onOpenFile: (path: string) => void;
+  onEnterDir: (path: string) => void;
   statusByPath: Map<string, ChangeStatus>;
   changedDirs: Set<string>;
   onRowContextMenu?: (e: ReactMouseEvent, entry: Entry) => void;
@@ -79,6 +107,7 @@ function TreeNode({
   depth,
   selectedPath,
   onOpenFile,
+  onEnterDir,
   statusByPath,
   changedDirs,
   onRowContextMenu,
@@ -139,6 +168,10 @@ function TreeNode({
           if (e.button === 0) e.preventDefault();
         }}
         onClick={activate}
+        // Double-click a folder to cd the terminal into it (single-click still
+        // just expands it inline). The tree then re-roots to the entered folder,
+        // so the expand toggles from the click pair are moot.
+        onDoubleClick={entry.is_dir ? () => onEnterDir(entry.path) : undefined}
         onContextMenu={(e) => onRowContextMenu?.(e, entry)}
         title={entry.name}
       >
@@ -165,6 +198,7 @@ function TreeNode({
               depth={depth + 1}
               selectedPath={selectedPath}
               onOpenFile={onOpenFile}
+              onEnterDir={onEnterDir}
               statusByPath={statusByPath}
               changedDirs={changedDirs}
               onRowContextMenu={onRowContextMenu}

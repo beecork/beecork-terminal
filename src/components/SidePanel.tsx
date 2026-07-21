@@ -21,12 +21,12 @@ import ConfirmModal from "./ConfirmModal";
 // app startup (the terminal is the star).
 const FileEditor = lazy(() => import("./FileEditor"));
 const MediaViewer = lazy(() => import("./MediaViewer"));
-import { basename, dirname, joinPath, relativePath, changedAncestors, mediaKind } from "../lib/paths";
+import { basename, dirname, joinPath, relativePath, breadcrumbs, changedAncestors, mediaKind } from "../lib/paths";
 import { usePersistedState } from "../lib/persist";
 import { useDrag } from "../lib/useDrag";
 import { useContextMenu } from "../lib/useContextMenu";
 import { copyText } from "../lib/clipboard";
-import { Folder, Refresh, LayoutRows, LayoutColumns, Chevron, Diff } from "./icons";
+import { Folder, Refresh, LayoutRows, LayoutColumns, Chevron, Diff, ArrowLeft, ArrowRight } from "./icons";
 
 interface Props {
   openRequest: OpenRequest | null;
@@ -93,6 +93,17 @@ export default function SidePanel({
   focusedRef.current = focused;
   const bodyRef = useRef<HTMLDivElement>(null);
 
+  // --- folder navigation history (Back / Forward), per session ---------------
+  // The browser's "current folder" IS the active terminal's cwd (`root`). Every
+  // move — breadcrumb, "..", double-click, Back/Forward, or a manual `cd` typed
+  // in the terminal — flows through `root`, so we record history by watching
+  // `root` change. Keyed by session id (a ref map, like paneMemory) so each tab
+  // keeps its own trail. `navTargetRef` marks the cwd WE are steering to via
+  // Back/Forward, so the `cd` it triggers isn't recorded as a brand-new step.
+  const histRef = useRef<Record<string, { stack: string[]; index: number }>>({});
+  const navTargetRef = useRef<string | null>(null);
+  const [, bumpHist] = useState(0);
+
   // Remember open files per terminal session (tab): when the active session
   // changes, save the outgoing session's editor state and restore the incoming
   // one (a fresh empty editor if it has none).
@@ -117,6 +128,9 @@ export default function SidePanel({
     for (const id of Object.keys(paneMemory.current)) {
       if (!live.has(id)) delete paneMemory.current[id];
     }
+    for (const id of Object.keys(histRef.current)) {
+      if (!live.has(id)) delete histRef.current[id];
+    }
   }, [liveSessionIds]);
 
   // Drag the Files/Editor divider (vertical in stacked, horizontal in side-by-side).
@@ -140,6 +154,39 @@ export default function SidePanel({
     refresh();
     return onFsChanged(refresh);
   }, [refresh]);
+
+  // Record each new working directory this session visits, unless the change was
+  // our own Back/Forward. A genuine move truncates any forward tail, like a
+  // browser. (A tab switch changes `root` too, but the incoming session's cwd
+  // already sits at the top of its own stack, so it records nothing.)
+  useEffect(() => {
+    if (!root) return;
+    if (navTargetRef.current === root) {
+      navTargetRef.current = null;
+      return;
+    }
+    const h = histRef.current[sessionId] ?? { stack: [], index: -1 };
+    if (h.stack[h.index] === root) return;
+    const stack = [...h.stack.slice(0, h.index + 1), root];
+    histRef.current[sessionId] = { stack, index: stack.length - 1 };
+    bumpHist((v) => v + 1);
+  }, [root, sessionId]);
+
+  const hist = histRef.current[sessionId] ?? { stack: [], index: -1 };
+  const canBack = hist.index > 0;
+  const canForward = hist.index >= 0 && hist.index < hist.stack.length - 1;
+
+  const goHistory = (delta: -1 | 1) => {
+    const h = histRef.current[sessionId];
+    if (!h) return;
+    const next = h.index + delta;
+    if (next < 0 || next >= h.stack.length) return;
+    const target = h.stack[next];
+    histRef.current[sessionId] = { stack: h.stack, index: next };
+    navTargetRef.current = target; // don't let the resulting cd re-record
+    bumpHist((v) => v + 1);
+    onOpenInTerminal(target);
+  };
 
   const openInFocused = useCallback((path: string) => {
     setPanes((prev) => {
@@ -239,7 +286,10 @@ export default function SidePanel({
     [statuses, root, settings.treeDiff]
   );
 
-  const rootName = root ? basename(root) : "";
+  // Last crumb, not basename(): basename splits on "/" only, so it would show a
+  // whole Windows path (C:\…\proj) instead of just "proj".
+  const crumbs = root ? breadcrumbs(root) : [];
+  const rootName = crumbs.length ? crumbs[crumbs.length - 1].name : "";
   const split = panes.length > 1;
 
   return (
@@ -294,6 +344,24 @@ export default function SidePanel({
       <div className={`panel-body ${panelLayout}`} ref={bodyRef}>
         <div className="tree-region" style={{ flexBasis: `${treeSize}%` }}>
           <div className="seclabel">
+            <div className="nav-btns">
+              <button
+                className="icon-btn sm"
+                title="Back"
+                disabled={!canBack}
+                onClick={() => goHistory(-1)}
+              >
+                <ArrowLeft size={14} />
+              </button>
+              <button
+                className="icon-btn sm"
+                title="Forward"
+                disabled={!canForward}
+                onClick={() => goHistory(1)}
+              >
+                <ArrowRight size={14} />
+              </button>
+            </div>
             <span>Files</span>
             <div className="seclabel-actions">
               <button
@@ -309,6 +377,24 @@ export default function SidePanel({
               </button>
             </div>
           </div>
+          {crumbs.length > 0 && (
+            <div className="crumbs" title={root ?? ""}>
+              {crumbs.map((c, i) => (
+                <span key={c.path} className="crumb-wrap">
+                  <button
+                    className="crumb"
+                    // The last crumb is the folder you're already in.
+                    disabled={i === crumbs.length - 1}
+                    title={`Go to ${c.path}`}
+                    onClick={() => onOpenInTerminal(c.path)}
+                  >
+                    {c.name}
+                  </button>
+                  {i < crumbs.length - 1 && <span className="crumb-sep">›</span>}
+                </span>
+              ))}
+            </div>
+          )}
           <div className="tree-scroll">
             {root ? (
               <FileTree
@@ -316,6 +402,7 @@ export default function SidePanel({
                 rootPath={root}
                 selectedPath={panes[focused] ?? null}
                 onOpenFile={openInFocused}
+                onEnterDir={onOpenInTerminal}
                 statusByPath={statusByPath}
                 changedDirs={changedDirs}
                 onRowContextMenu={openMenu}

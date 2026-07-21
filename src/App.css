@@ -177,6 +177,14 @@ body {
   width: 24px;
   height: 24px;
 }
+.icon-btn:disabled {
+  opacity: 0.32;
+  cursor: default;
+}
+.icon-btn:disabled:hover {
+  background: transparent;
+  color: var(--muted);
+}
 
 .seg {
   display: inline-flex;
@@ -259,6 +267,67 @@ body {
   display: flex;
   align-items: center;
   gap: 6px;
+}
+/* Back/Forward group sits at the far left of the Files section label; the "Files"
+   text takes the auto margin so the diff toggle stays pinned right. */
+.seclabel .nav-btns {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+}
+.seclabel > span {
+  margin-right: auto;
+}
+
+/* Breadcrumb path bar — one clickable crumb per folder in the current cwd,
+   horizontally scrollable when the path is deep. Each crumb cd's the terminal. */
+.crumbs {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  padding: 3px 8px;
+  overflow-x: auto;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.06);
+  flex: 0 0 auto;
+  scrollbar-width: none;
+}
+.crumbs::-webkit-scrollbar {
+  height: 0;
+}
+.crumb-wrap {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+}
+.crumb {
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 2px 5px;
+  border-radius: 5px;
+}
+.crumb:hover:not(:disabled) {
+  background: var(--hover);
+  color: var(--fg);
+}
+.crumb:disabled {
+  color: var(--fg);
+  font-weight: 600;
+  cursor: default;
+}
+.crumb-sep {
+  color: var(--muted);
+  opacity: 0.55;
+  font-size: 11px;
+  padding: 0 1px;
 }
 
 /* zoom control (terminal float + editor bar) */
@@ -1071,6 +1140,11 @@ body {
   flex: 1 1 auto;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+/* The ".." (up one level) row — same shape as a folder row, just quieter. */
+.tree-row.up-row .tree-name {
+  color: var(--muted);
+  letter-spacing: 0.12em;
 }
 .tree-dot {
   width: 7px;

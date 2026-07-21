@@ -4,6 +4,8 @@ import {
   dirname,
   joinPath,
   relativePath,
+  breadcrumbs,
+  parentDir,
   looksLikePath,
   splitFileLine,
   parseOsc7,
@@ -12,6 +14,53 @@ import {
   URL_RE,
   isLocalUrl,
 } from "./paths";
+
+describe("breadcrumbs", () => {
+  it("splits a POSIX path, root first", () => {
+    expect(breadcrumbs("/Users/me/project")).toEqual([
+      { name: "/", path: "/" },
+      { name: "Users", path: "/Users" },
+      { name: "me", path: "/Users/me" },
+      { name: "project", path: "/Users/me/project" },
+    ]);
+  });
+  it("splits a Windows path with backslashes, drive first", () => {
+    expect(breadcrumbs("C:\\Users\\me\\project")).toEqual([
+      { name: "C:", path: "C:\\" },
+      { name: "Users", path: "C:\\Users" },
+      { name: "me", path: "C:\\Users\\me" },
+      { name: "project", path: "C:\\Users\\me\\project" },
+    ]);
+  });
+  it("tolerates a trailing separator", () => {
+    const posix = breadcrumbs("/a/b/");
+    expect(posix[posix.length - 1]).toEqual({ name: "b", path: "/a/b" });
+    const win = breadcrumbs("C:\\a\\");
+    expect(win[win.length - 1]).toEqual({ name: "a", path: "C:\\a" });
+  });
+  it("handles the roots themselves", () => {
+    expect(breadcrumbs("/")).toEqual([{ name: "/", path: "/" }]);
+    expect(breadcrumbs("C:\\")).toEqual([{ name: "C:", path: "C:\\" }]);
+  });
+  it("returns nothing for an empty path", () => {
+    expect(breadcrumbs("")).toEqual([]);
+  });
+});
+
+describe("parentDir", () => {
+  it("goes up one level, POSIX", () => {
+    expect(parentDir("/Users/me/project")).toBe("/Users/me");
+    expect(parentDir("/Users")).toBe("/");
+  });
+  it("goes up one level, Windows", () => {
+    expect(parentDir("C:\\Users\\me")).toBe("C:\\Users");
+    expect(parentDir("C:\\Users")).toBe("C:\\");
+  });
+  it("stays put at a root (so callers can detect 'can't go up')", () => {
+    expect(parentDir("/")).toBe("/");
+    expect(parentDir("C:\\")).toBe("C:\\");
+  });
+});
 
 describe("basename", () => {
   it("returns the last segment", () => {

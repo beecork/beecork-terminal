@@ -1,6 +1,6 @@
 [package]
 name = "beecork-terminal"
-version = "0.1.21"
+version = "0.1.22"
 description = "A desktop cockpit for CLI coding agents — terminal, live diff, and file browser."
 authors = ["Beecork"]
 edition = "2021"

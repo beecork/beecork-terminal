@@ -31,8 +31,18 @@ export interface OpenRequest {
   n: number;
 }
 
-/** Single-quote a path for a POSIX shell (bash/zsh/fish/sh) — safe for `cd`. */
+/** WebView2 (Windows) reports "Windows NT" in its UA; WKWebView/WebKitGTK don't. */
+const IS_WINDOWS = /Windows/i.test(navigator.userAgent);
+
+/** Quote a path so a shell reads it as one argument — for `cd` and for handing
+ *  dropped file paths to the shell. Platform-aware: on Windows we DOUBLE-quote,
+ *  because `cmd.exe` (the default shell) takes POSIX single quotes literally and
+ *  errors, whereas a double-quoted path is accepted by BOTH cmd.exe and
+ *  PowerShell — and a Windows filename legally cannot contain a `"`, so there's
+ *  nothing to escape. On macOS/Linux we single-quote (safe against `$`, backticks,
+ *  etc.), escaping any embedded single quote the POSIX way. */
 function shellQuote(p: string): string {
+  if (IS_WINDOWS) return `"${p}"`;
   return `'${p.replace(/'/g, "'\\''")}'`;
 }
 
