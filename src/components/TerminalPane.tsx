@@ -90,6 +90,8 @@ interface Props {
   onRequestClose?: () => void;
   /** on a restored session, the agent to offer resuming (e.g. "claude") */
   resumeAgent?: string;
+  /** that agent's specific conversation id, so Resume reopens this tab's own chat */
+  resumeSessionId?: string;
   /** called when the resume offer is used or dismissed (they started typing) */
   onResumeConsumed: (id: string) => void;
 }
@@ -113,6 +115,7 @@ export default function TerminalPane({
   onCloseSession,
   onRequestClose,
   resumeAgent,
+  resumeSessionId,
   onResumeConsumed,
 }: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
@@ -571,9 +574,12 @@ export default function TerminalPane({
       {resumeAgent && visible && (
         <button
           className="term-resume"
-          title={`Run "${resumeCommand(resumeAgent)}" to pick this agent back up`}
+          title={`Run "${resumeCommand(resumeAgent, resumeSessionId)}" to pick this agent back up`}
           onClick={() => {
-            invoke("pty_write", { id: sessionId, data: resumeCommand(resumeAgent) + "\r" }).catch(() => {});
+            invoke("pty_write", {
+              id: sessionId,
+              data: resumeCommand(resumeAgent, resumeSessionId) + "\r",
+            }).catch(() => {});
             onResumeConsumed(sessionId);
             termRef.current?.focus();
           }}

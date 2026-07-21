@@ -50,7 +50,8 @@ export function useSessionStatus(
   activeId: string,
   visibleIds: string[],
   setCwd: (id: string, cwd: string) => void,
-  setRunning: (id: string, running: string | undefined) => void
+  setRunning: (id: string, running: string | undefined) => void,
+  setAgentId: (id: string, agentId: string | undefined) => void
 ) {
   const [terminalCwd, setTerminalCwd] = useState<string | null>(null);
   const [wantsYou, setWantsYou] = useState<Set<string>>(() => new Set());
@@ -136,8 +137,14 @@ export function useSessionStatus(
       }
       prevRunning.current[id] = nowRunning;
       setRunning(id, nowRunning);
+      // Pin the running agent's conversation id. When the agent exits (running →
+      // idle) clear it too; while it runs but a single poll fails to resolve the
+      // id (Claude closes its transcript between writes), keep the last known one
+      // rather than flapping it to nothing.
+      const agentId = st.agent_session ?? undefined;
+      if (agentId || !nowRunning) setAgentId(id, agentId);
     },
-    [applyCwd, setRunning, flagWants]
+    [applyCwd, setRunning, setAgentId, flagWants]
   );
 
   const onCwd = useCallback((id: string, path: string) => applyCwd(id, path), [applyCwd]);

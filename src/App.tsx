@@ -90,6 +90,7 @@ export default function App() {
     setDynamic,
     setCwd,
     setRunning,
+    setAgentId,
     clearResume,
     pairSessions,
     unpairSession,
@@ -140,7 +141,7 @@ export default function App() {
 
   // cwd / running-command / attention-dot state machine + polling.
   const { terminalCwd, wantsYou, busy, onCwd, onStatusHint, onActivity, onBell, onSeen, markClosed } =
-    useSessionStatus(sessions, activeId, visibleIds, setCwd, setRunning);
+    useSessionStatus(sessions, activeId, visibleIds, setCwd, setRunning, setAgentId);
 
   // The attention chime lives inside useSessionStatus (flagWants): it fires the
   // instant a session newly needs you, and only there is the CAUSE known — a
@@ -519,6 +520,7 @@ export default function App() {
                   onCloseSession={() => requestClose(s.id)}
                   onRequestClose={!split && isFocused ? () => requestClose(s.id) : undefined}
                   resumeAgent={s.resumeAgent}
+                  resumeSessionId={s.resumeSessionId}
                   onResumeConsumed={clearResume}
                 />
               </div>

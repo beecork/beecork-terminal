@@ -45,6 +45,9 @@ export interface PtyStatus {
   cwd: string | null;
   /** the command running at the prompt, e.g. "claude" (null when idle) */
   running: string | null;
+  /** the running agent's conversation id, so resume reopens *this* tab's own
+   *  chat rather than the last one used (null when unknown/not an agent) */
+  agent_session: string | null;
 }
 
 /** Live status for many sessions in one call (a single process refresh serves all). */
@@ -53,7 +56,7 @@ export const ptyStatusAll = (ids: string[]) =>
 
 /** A single session's live status — a thin convenience over the batched command. */
 export const ptyStatus = (id: string): Promise<PtyStatus> =>
-  ptyStatusAll([id]).then((m) => m[id] ?? { cwd: null, running: null });
+  ptyStatusAll([id]).then((m) => m[id] ?? { cwd: null, running: null, agent_session: null });
 
 /** Re-root the file watcher to follow the active terminal's working directory. */
 export const setWatchRoot = (root: string) =>

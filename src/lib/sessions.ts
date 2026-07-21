@@ -35,8 +35,13 @@ export interface Session {
   startCwd?: string;
   /** the session this one is paired with in split view (symmetric + remembered) */
   partner?: string;
+  /** live conversation id of the running agent (from the status poll) — persisted
+   *  so a relaunch can resume THIS chat, not whichever agent ran last */
+  agentId?: string;
   /** on a restored session, the agent that was running — we offer to resume it */
   resumeAgent?: string;
+  /** on a restored session, that agent's specific conversation id to resume */
+  resumeSessionId?: string;
 }
 
 /** A named section divider in the rail — a `── name ──` line between sessions. */
@@ -56,8 +61,20 @@ export function isDivider(item: RailItem): item is Divider {
   return "kind" in item && (item as Divider).kind === "divider";
 }
 
-/** The shell command that resumes a given agent's last conversation. */
-export function resumeCommand(agent: string): string {
+/**
+ * The shell command that resumes an agent. With a specific `sessionId` we resume
+ * THAT conversation (`claude --resume <id>`) so each tab reopens its own chat;
+ * without one we fall back to "continue the latest", the best we can do when the
+ * id was never captured.
+ */
+export function resumeCommand(agent: string, sessionId?: string): string {
+  if (sessionId) {
+    const map: Record<string, string> = {
+      claude: `claude --resume ${sessionId}`,
+      codex: `codex resume ${sessionId}`,
+    };
+    return map[agent] ?? `${agent} --resume ${sessionId}`;
+  }
   const map: Record<string, string> = {
     claude: "claude --continue",
     codex: "codex resume",
@@ -144,6 +161,8 @@ interface PersistedSession {
   partner?: string;
   /** the agent detected running when we saved — used later to offer "Resume". */
   agent?: string;
+  /** that agent's conversation id when we saved — so Resume reopens this chat. */
+  agentSession?: string;
 }
 interface PersistedDivider {
   kind: "divider";
@@ -202,6 +221,7 @@ export function useSessions() {
           startCwd: s.cwd,
           partner: s.partner,
           resumeAgent: s.agent,
+          resumeSessionId: s.agentSession,
         };
       });
       const first = items.find((i) => !isDivider(i)) as Session;
@@ -247,6 +267,7 @@ export function useSessions() {
                 cwd: i.cwd,
                 partner: i.partner,
                 agent: i.running ?? i.resumeAgent,
+                agentSession: i.agentId ?? i.resumeSessionId,
               }
         ),
         activeId,
@@ -298,10 +319,18 @@ export function useSessions() {
     setItems((prev) => patchSession(prev, id, "running", running));
   }, []);
 
+  // The running agent's conversation id (from the status poll), persisted so a
+  // relaunch resumes this tab's own chat.
+  const setAgentId = useCallback((id: string, agentId: string | undefined) => {
+    setItems((prev) => patchSession(prev, id, "agentId", agentId));
+  }, []);
+
   // Dismiss a restored session's "Resume" offer (they resumed it, or started
-  // typing their own thing).
+  // typing their own thing) — clears both the agent and its saved conversation id.
   const clearResume = useCallback((id: string) => {
-    setItems((prev) => patchSession(prev, id, "resumeAgent", undefined));
+    setItems((prev) =>
+      patchSession(patchSession(prev, id, "resumeAgent", undefined), id, "resumeSessionId", undefined)
+    );
   }, []);
 
   // Pair two sessions for split view. Symmetric and degree-≤1: each session has
@@ -379,6 +408,7 @@ export function useSessions() {
     setDynamic,
     setCwd,
     setRunning,
+    setAgentId,
     clearResume,
     pairSessions,
     unpairSession,

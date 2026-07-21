@@ -107,12 +107,19 @@ describe("moveBefore", () => {
 });
 
 describe("resumeCommand", () => {
-  it("knows how to resume Claude Code and Codex", () => {
+  it("knows how to resume Claude Code and Codex (latest conversation)", () => {
     expect(resumeCommand("claude")).toBe("claude --continue");
     expect(resumeCommand("codex")).toBe("codex resume");
   });
 
   it("falls back to <agent> --continue for anything else", () => {
     expect(resumeCommand("aider")).toBe("aider --continue");
+  });
+
+  it("resumes a SPECIFIC conversation when given its id (per-tab resume)", () => {
+    const id = "21c89373-22e7-4064-8ef4-543836557a64";
+    expect(resumeCommand("claude", id)).toBe(`claude --resume ${id}`);
+    expect(resumeCommand("codex", id)).toBe(`codex resume ${id}`);
+    expect(resumeCommand("aider", id)).toBe(`aider --resume ${id}`);
   });
 });
