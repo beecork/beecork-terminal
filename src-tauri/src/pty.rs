@@ -175,6 +175,18 @@ pub fn pty_spawn(
     cmd.env("TERM_PROGRAM", "Beecork");
     cmd.env("TERM_PROGRAM_VERSION", env!("CARGO_PKG_VERSION"));
     cmd.env("COLORTERM", "truecolor");
+    // On Windows, force Claude Code's *classic* renderer instead of its fullscreen
+    // (alternate-screen) one. Claude Code's fullscreen renderer draws into the
+    // alt-screen buffer — which has no scrollback — and scrolls itself via mouse
+    // events, but on Windows/ConPTY that mouse-wheel path is broken: the wheel
+    // scrolls nothing (same failure in Windows Terminal and VS Code — see
+    // anthropics/claude-code#51393). The classic renderer keeps the conversation in
+    // the terminal's normal scrollback, which we scroll correctly. This variable is
+    // Claude-Code-specific and inert for every other program, so it doesn't
+    // compromise our agent-agnostic stance; macOS/Linux are left alone, where
+    // fullscreen rendering works fine.
+    #[cfg(windows)]
+    cmd.env("CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN", "1");
     // Scrub the identity markers of whatever host terminal launched us, so tools
     // that feature-detect a terminal (iTerm2 integration, Windows Terminal, VS
     // Code) don't mistake our pty for that host and emit foreign escapes.
