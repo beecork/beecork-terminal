@@ -236,9 +236,12 @@ export default function App() {
   }, []);
 
   // File-browser right-click → "Open folder in terminal": cd the active session there.
+  // Submit with \r (carriage return) — that's the byte the Enter key sends, and the
+  // only one Windows ConPTY (cmd.exe/PowerShell) accepts as "run this line". A \n
+  // works on macOS/Linux but on Windows just leaves the command typed-but-unrun.
   const openInTerminal = useCallback(
     (dir: string) => {
-      invoke("pty_write", { id: activeIdRef.current, data: `cd ${shellQuote(dir)}\n` }).catch(
+      invoke("pty_write", { id: activeIdRef.current, data: `cd ${shellQuote(dir)}\r` }).catch(
         () => {}
       );
       focusTerminal();
@@ -599,7 +602,8 @@ export default function App() {
           onChoose={(path) => {
             update({ defaultCwd: path });
             // Move the already-spawned first shell there right away (fresh prompt).
-            invoke("pty_write", { id: activeId, data: `cd ${shellQuote(path)}\n` }).catch(() => {});
+            // \r, not \n — the Enter byte every shell (incl. Windows ConPTY) submits on.
+            invoke("pty_write", { id: activeId, data: `cd ${shellQuote(path)}\r` }).catch(() => {});
             focusTerminal();
           }}
         />

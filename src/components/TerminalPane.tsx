@@ -16,6 +16,9 @@ import ZoomControl from "./ZoomControl";
 import { Close } from "./icons";
 import "@xterm/xterm/css/xterm.css";
 
+/** WebView2 (Windows) reports "Windows NT" in its UA; WKWebView/WebKitGTK don't. */
+const IS_WINDOWS = /Windows/i.test(navigator.userAgent);
+
 type PtyEvent =
   | { event: "output"; data: string }
   | { event: "exit"; data: number };
@@ -270,17 +273,24 @@ export default function TerminalPane({
     term.loadAddon(search);
 
     term.open(mountRef.current);
-    try {
-      const webgl = new WebglAddon();
-      // WebView2 (Windows) recycles its GPU process on driver updates, sleep/wake,
-      // or memory pressure, firing `webglcontextlost`. Without handling it the
-      // addon keeps drawing into a dead context — a blank/frozen terminal — and
-      // repeated GPU-process crashes can bring the whole webview down. Disposing on
-      // context loss falls xterm back to its DOM renderer, which keeps working.
-      webgl.onContextLoss(() => webgl.dispose());
-      term.loadAddon(webgl);
-    } catch (e) {
-      console.warn("WebGL renderer unavailable, using default", e);
+    // Skip the WebGL renderer on Windows entirely — use xterm's built-in DOM
+    // renderer there. WebView2's GPU-backed WebGL ghosts cells on in-place
+    // redraws (a typed char stays "stuck" in an agent's input box after it's
+    // cleared, worst inside Claude Code's ConPTY classic renderer), and it's the
+    // same fragile path that recycles its GPU process (webglcontextlost, v0.1.20).
+    // The DOM renderer is correct and plenty fast for a terminal. macOS/Linux
+    // keep WebGL, where WebKit/WebKitGTK render it cleanly.
+    if (!IS_WINDOWS) {
+      try {
+        const webgl = new WebglAddon();
+        // Belt-and-suspenders on the platforms that DO use WebGL: if the GPU
+        // context is ever lost, drop the addon so xterm falls back to DOM
+        // rather than drawing into a dead context (a blank/frozen terminal).
+        webgl.onContextLoss(() => webgl.dispose());
+        term.loadAddon(webgl);
+      } catch (e) {
+        console.warn("WebGL renderer unavailable, using default", e);
+      }
     }
     try {
       fit.fit();

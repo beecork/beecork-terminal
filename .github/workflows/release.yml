@@ -75,16 +75,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # TEMPORARY (v0.1.24): Windows-only release. The 0.1.24 fixes are
+        # Windows-only in effect (the file-browser cd \r fix is a no-op on
+        # macOS/Linux; the WebGL-renderer skip is IS_WINDOWS-gated), so we do NOT
+        # re-release the other platforms. Publishing only the Windows leg yields a
+        # latest.json with just the windows-x86_64 entry — mac/Linux updaters find
+        # no matching platform and silently no-op (UpdateBanner swallows it), so
+        # those users stay on 0.1.23 undisturbed. The full 4-platform matrix is
+        # restored in the commit right after this tag, for 0.1.25+.
         include:
-          - platform: macos-latest # Apple Silicon
-            target: aarch64-apple-darwin
-            args: "--target aarch64-apple-darwin"
-          - platform: macos-latest # Intel
-            target: x86_64-apple-darwin
-            args: "--target x86_64-apple-darwin"
-          - platform: ubuntu-22.04
-            target: ""
-            args: ""
           - platform: windows-latest
             target: ""
             args: ""
