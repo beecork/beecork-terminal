@@ -103,6 +103,35 @@ git push --follow-tags
 > GitHub, nothing would build. If you ever end up with a lightweight tag, push it
 > explicitly instead: `git push origin v0.1.0`.
 
+> ⚠️ **Pushing the tag currently does NOT start a build — you must dispatch it.**
+> Observed on v0.1.25 (2026-08-06): the tag reached GitHub (`refs/tags/v0.1.25`
+> confirmed on the remote), the workflow was `active`, Actions was enabled, and the
+> `on: push: tags: v*` trigger was byte-identical to the last release that worked —
+> and no run was created at all. Twice, on two separate pushes of the tag.
+>
+> **So after pushing the tag, always run:**
+> ```bash
+> gh workflow run release.yml --ref v0.1.25   # the TAG, not main
+> gh run watch $(gh api "repos/beecork/beecork-terminal/actions/runs?per_page=1" --jq '.workflow_runs[0].id')
+> ```
+> `--ref <tag>` matters: the version-consistency check only runs on a tag ref, and
+> `tauri-action` reads the version from the checked-out tree.
+>
+> **Then confirm the release actually published** — don't assume a green run means
+> a shipped release:
+> ```bash
+> gh release view v0.1.25 --json assets --jq '.assets[].name'
+> ```
+> This is not paranoia: **v0.1.24 built and then failed to publish**, so no release
+> for it exists and nobody ever received it. Its Windows job died on
+> `Resource not accessible by integration` from the create-a-release API. Note that
+> the org enforces `default_workflow_permissions: read` and repos cannot override it
+> (`PUT .../actions/permissions/workflow` returns 409, "Write permissions for
+> workflows are disabled by the organization") — yet a **dispatched** run publishes
+> fine, so the trigger event, not the org setting, is what differs. If a release job
+> ever fails this way again, re-run it via `workflow run` rather than chasing the
+> permission.
+
 The tag triggers `release.yml`. ~10–15 min later a **GitHub Release** appears with:
 `.dmg` (arm64 + x64), `.msi` + `.exe` (Windows), `.AppImage` + `.deb` (Linux).
 
