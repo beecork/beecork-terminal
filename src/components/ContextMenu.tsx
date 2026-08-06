@@ -1,10 +1,8 @@
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 export interface MenuItem {
   label: string;
   onSelect: () => void;
-  /** optional leading icon */
-  icon?: ReactNode;
   /** right-aligned shortcut hint, e.g. "⌘F" */
   hint?: string;
   danger?: boolean;
@@ -81,7 +79,6 @@ export default function ContextMenu({ x, y, items, onClose }: Props) {
               it.onSelect();
             }}
           >
-            {it.icon != null && <span className="ctx-ic">{it.icon}</span>}
             <span className="ctx-label">{it.label}</span>
             {it.hint && <span className="ctx-hint">{it.hint}</span>}
           </button>

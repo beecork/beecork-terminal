@@ -23,6 +23,8 @@ const FileEditor = lazy(() => import("./FileEditor"));
 const MediaViewer = lazy(() => import("./MediaViewer"));
 import { basename, dirname, joinPath, relativePath, breadcrumbs, changedAncestors, mediaKind } from "../lib/paths";
 import { usePersistedState } from "../lib/persist";
+import { useEditorPanes } from "../lib/useEditorPanes";
+import { useFolderHistory } from "../lib/useFolderHistory";
 import { useDrag } from "../lib/useDrag";
 import { useContextMenu } from "../lib/useContextMenu";
 import { copyText } from "../lib/clipboard";
@@ -71,8 +73,20 @@ export default function SidePanel({
   const [statuses, setStatuses] = useState<FileStatus[]>([]);
   const [treeKey, setTreeKey] = useState(0);
 
-  const [panes, setPanes] = useState<(string | null)[]>([null]);
-  const [focused, setFocused] = useState(0);
+  // Open files (remembered per session) and the Back/Forward folder trail are
+  // self-contained state machines — they live in their own hooks rather than
+  // in the middle of this view.
+  const { panes, focused, setFocused, openInFocused, toggleSplit, split } = useEditorPanes(
+    sessionId,
+    liveSessionIds
+  );
+  const { canBack, canForward, back, forward } = useFolderHistory(
+    sessionId,
+    root,
+    liveSessionIds,
+    onOpenInTerminal
+  );
+
   const [panelLayout, setPanelLayout] = usePersistedState<PanelLayout>(
     "beecork.panelLayout",
     "stacked",
@@ -89,60 +103,21 @@ export default function SidePanel({
     },
     (v) => String(Math.round(v))
   );
-  const focusedRef = useRef(focused);
-  focusedRef.current = focused;
   const bodyRef = useRef<HTMLDivElement>(null);
 
-  // --- folder navigation history (Back / Forward), per session ---------------
-  // The browser's "current folder" IS the active terminal's cwd (`root`). Every
-  // move — breadcrumb, "..", double-click, Back/Forward, or a manual `cd` typed
-  // in the terminal — flows through `root`, so we record history by watching
-  // `root` change. Keyed by session id (a ref map, like paneMemory) so each tab
-  // keeps its own trail. `navTargetRef` marks the cwd WE are steering to via
-  // Back/Forward, so the `cd` it triggers isn't recorded as a brand-new step.
-  const histRef = useRef<Record<string, { stack: string[]; index: number }>>({});
-  const navTargetRef = useRef<string | null>(null);
-  const [, bumpHist] = useState(0);
-
-  // Remember open files per terminal session (tab): when the active session
-  // changes, save the outgoing session's editor state and restore the incoming
-  // one (a fresh empty editor if it has none).
-  const paneStateRef = useRef({ panes, focused });
-  paneStateRef.current = { panes, focused };
-  const paneMemory = useRef<Record<string, { panes: (string | null)[]; focused: number }>>({});
-  const prevSessionRef = useRef(sessionId);
-  useEffect(() => {
-    const prev = prevSessionRef.current;
-    if (prev === sessionId) return;
-    paneMemory.current[prev] = paneStateRef.current; // save outgoing (latest)
-    const saved = paneMemory.current[sessionId];
-    setPanes(saved?.panes ?? [null]);
-    setFocused(saved?.focused ?? 0);
-    prevSessionRef.current = sessionId;
-  }, [sessionId]);
-
-  // Drop remembered pane state for sessions that have closed, so paneMemory
-  // doesn't accumulate an entry per session for the life of the app.
-  useEffect(() => {
-    const live = new Set(liveSessionIds);
-    for (const id of Object.keys(paneMemory.current)) {
-      if (!live.has(id)) delete paneMemory.current[id];
-    }
-    for (const id of Object.keys(histRef.current)) {
-      if (!live.has(id)) delete histRef.current[id];
-    }
-  }, [liveSessionIds]);
-
   // Drag the Files/Editor divider (vertical in stacked, horizontal in side-by-side).
-  const startTreeDrag = useDrag((e) => {
-    if (!bodyRef.current) return;
-    const r = bodyRef.current.getBoundingClientRect();
-    const pct =
-      panelLayout === "stacked"
-        ? ((e.clientY - r.top) / r.height) * 100
-        : ((e.clientX - r.left) / r.width) * 100;
-    setTreeSize(Math.min(80, Math.max(12, pct)));
-  }, panelLayout === "stacked" ? "row-resize" : "col-resize");
+  const startTreeDrag = useDrag({
+    cursor: panelLayout === "stacked" ? "row-resize" : "col-resize",
+    onMove: (e) => {
+      if (!bodyRef.current) return;
+      const r = bodyRef.current.getBoundingClientRect();
+      const pct =
+        panelLayout === "stacked"
+          ? ((e.clientY - r.top) / r.height) * 100
+          : ((e.clientX - r.left) / r.width) * 100;
+      setTreeSize(Math.min(80, Math.max(12, pct)));
+    },
+  });
 
   const refresh = useCallback(() => {
     gitStatus(root ?? undefined)
@@ -155,46 +130,6 @@ export default function SidePanel({
     return onFsChanged(refresh);
   }, [refresh]);
 
-  // Record each new working directory this session visits, unless the change was
-  // our own Back/Forward. A genuine move truncates any forward tail, like a
-  // browser. (A tab switch changes `root` too, but the incoming session's cwd
-  // already sits at the top of its own stack, so it records nothing.)
-  useEffect(() => {
-    if (!root) return;
-    if (navTargetRef.current === root) {
-      navTargetRef.current = null;
-      return;
-    }
-    const h = histRef.current[sessionId] ?? { stack: [], index: -1 };
-    if (h.stack[h.index] === root) return;
-    const stack = [...h.stack.slice(0, h.index + 1), root];
-    histRef.current[sessionId] = { stack, index: stack.length - 1 };
-    bumpHist((v) => v + 1);
-  }, [root, sessionId]);
-
-  const hist = histRef.current[sessionId] ?? { stack: [], index: -1 };
-  const canBack = hist.index > 0;
-  const canForward = hist.index >= 0 && hist.index < hist.stack.length - 1;
-
-  const goHistory = (delta: -1 | 1) => {
-    const h = histRef.current[sessionId];
-    if (!h) return;
-    const next = h.index + delta;
-    if (next < 0 || next >= h.stack.length) return;
-    const target = h.stack[next];
-    histRef.current[sessionId] = { stack: h.stack, index: next };
-    navTargetRef.current = target; // don't let the resulting cd re-record
-    bumpHist((v) => v + 1);
-    onOpenInTerminal(target);
-  };
-
-  const openInFocused = useCallback((path: string) => {
-    setPanes((prev) => {
-      const next = [...prev];
-      next[focusedRef.current] = path;
-      return next;
-    });
-  }, []);
 
   // --- file-tree right-click menu -------------------------------------------
   function promptCreate(dir: string, isDir: boolean) {
@@ -258,18 +193,6 @@ export default function SidePanel({
     if (openRequest?.path) openInFocused(openRequest.path);
   }, [openRequest?.n, openInFocused]);
 
-  function toggleSplit() {
-    setPanes((prev) => {
-      if (prev.length === 1) {
-        setFocused(1);
-        return [prev[0], null];
-      }
-      const keep = prev[focused];
-      setFocused(0);
-      return [keep];
-    });
-  }
-
   // Empty when tree diffs are toggled off — the tree renders with no change
   // markers at all (dots, colored names, count pill).
   const statusByPath = useMemo(() => {
@@ -286,11 +209,8 @@ export default function SidePanel({
     [statuses, root, settings.treeDiff]
   );
 
-  // Last crumb, not basename(): basename splits on "/" only, so it would show a
-  // whole Windows path (C:\…\proj) instead of just "proj".
   const crumbs = root ? breadcrumbs(root) : [];
-  const rootName = crumbs.length ? crumbs[crumbs.length - 1].name : "";
-  const split = panes.length > 1;
+  const rootName = root ? basename(root) : "";
 
   return (
     <div className="side-panel-inner">
@@ -349,7 +269,7 @@ export default function SidePanel({
                 className="icon-btn sm"
                 title="Back"
                 disabled={!canBack}
-                onClick={() => goHistory(-1)}
+                onClick={back}
               >
                 <ArrowLeft size={14} />
               </button>
@@ -357,7 +277,7 @@ export default function SidePanel({
                 className="icon-btn sm"
                 title="Forward"
                 disabled={!canForward}
-                onClick={() => goHistory(1)}
+                onClick={forward}
               >
                 <ArrowRight size={14} />
               </button>

@@ -1,5 +1,11 @@
 // Git-backed change detection for the live diff view: which files changed
 // (for coloring the tree) and the HEAD version of a file (for the line diff).
+//
+// Both commands are `#[tauri::command(async)]` on purpose. A plain
+// `#[tauri::command]` executes INLINE on the IPC/main thread, and everything
+// here shells out to `git` — `git_status` runs on every debounced filesystem
+// change while an agent edits, and `git_file_original` runs twice per file
+// opened. Off the main thread, a slow repo stalls the diff, not the window.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -95,7 +101,7 @@ pub fn parse_status(text: &str, base: &Path) -> Vec<FileStatus> {
     result
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn git_status(root: Option<String>) -> Result<Vec<FileStatus>, String> {
     let start = root.map(PathBuf::from).unwrap_or_else(project_root);
     let dir = repo_root(&start);
@@ -119,7 +125,7 @@ pub fn git_status(root: Option<String>) -> Result<Vec<FileStatus>, String> {
 /// The committed (HEAD) contents of a file, for use as the diff baseline.
 /// Returns an empty string for new/untracked files, or when the baseline is
 /// too large to diff usefully.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn git_file_original(path: String, root: Option<String>) -> Result<String, String> {
     let start = root.map(PathBuf::from).unwrap_or_else(project_root);
     let dir = repo_root(&start);

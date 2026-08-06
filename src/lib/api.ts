@@ -14,7 +14,6 @@ export interface Entry {
 }
 
 export interface Listing {
-  path: string;
   entries: Entry[];
 }
 
@@ -50,13 +49,31 @@ export interface PtyStatus {
   agent_session: string | null;
 }
 
-/** Live status for many sessions in one call (a single process refresh serves all). */
-export const ptyStatusAll = (ids: string[]) =>
-  invoke<Record<string, PtyStatus>>("pty_status_all", { ids });
+/**
+ * Live status for many sessions in one call (a single process refresh serves all).
+ * `withAgents` also pins each running agent's conversation id — a transcript
+ * directory scan per agent, so ask for it on a slow cadence, not every tick.
+ */
+export const ptyStatusAll = (ids: string[], withAgents = false) =>
+  invoke<Record<string, PtyStatus>>("pty_status_all", { ids, withAgents });
 
 /** A single session's live status — a thin convenience over the batched command. */
-export const ptyStatus = (id: string): Promise<PtyStatus> =>
-  ptyStatusAll([id]).then((m) => m[id] ?? { cwd: null, running: null, agent_session: null });
+export const ptyStatus = (id: string, withAgents = false): Promise<PtyStatus> =>
+  ptyStatusAll([id], withAgents).then(
+    (m) => m[id] ?? { cwd: null, running: null, agent_session: null }
+  );
+
+/**
+ * `cd` a session into a folder. The path is quoted in Rust, for the shell that
+ * session actually runs — the webview can only guess the platform from a user
+ * agent, and "Windows" isn't one shell but two (cmd.exe and PowerShell quote
+ * incompatibly). Submits with Enter.
+ */
+export const ptyCd = (id: string, dir: string) => invoke<void>("pty_cd", { id, dir });
+
+/** Type shell-quoted paths at a session's prompt (drag-and-drop), without submitting. */
+export const ptyInsertPaths = (id: string, paths: string[]) =>
+  invoke<void>("pty_insert_paths", { id, paths });
 
 /** Re-root the file watcher to follow the active terminal's working directory. */
 export const setWatchRoot = (root: string) =>

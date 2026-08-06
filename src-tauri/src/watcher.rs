@@ -45,22 +45,14 @@ fn is_ignored(p: &Path) -> bool {
     })
 }
 
-/// The user's home directory, if the environment exposes it. A GUI (Finder)
-/// launch still gets HOME even when it gets no shell cwd, so this is reliable
-/// enough to keep us from watching all of `~`.
-fn home_path() -> Option<PathBuf> {
-    std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .map(PathBuf::from)
-}
-
 /// Refuse filesystem-wide roots. A Finder-launched app has cwd `/`, so without
 /// this guard `watch_root` would walk (nearly) the entire disk on startup —
 /// pinning a core forever. We wait for the UI to send a real project folder via
 /// `set_watch_root` instead. Rejects `/`, the home dir, and any ancestor of home
-/// (e.g. `/Users`).
+/// (e.g. `/Users`). A GUI launch still gets HOME even when it gets no shell cwd,
+/// so `fs::home()` is reliable enough to keep us out of all of `~`.
 fn too_broad_to_watch(p: &Path) -> bool {
-    is_broad_root(p, home_path().as_deref())
+    is_broad_root(p, crate::fs::home().as_deref())
 }
 
 /// Pure core of [`too_broad_to_watch`], split out so it is unit-testable without

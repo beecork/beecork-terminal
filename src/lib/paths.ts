@@ -9,23 +9,59 @@ export function decodeBase64(b64: string): Uint8Array {
   return arr;
 }
 
-/** Last path segment, tolerant of trailing slashes ("/a/b/" → "b", "/" → "/"). */
+// Every path helper below is separator-agnostic: the backend hands us NATIVE
+// paths, which means backslashes on Windows. A POSIX-only `split("/")` there
+// doesn't just look wrong — it silently returns the whole path as a "basename",
+// an empty `dirname` (so a new file lands at the drive root), and never matches
+// a directory ancestor (so changed folders never colour). Treat `/` and `\` as
+// equivalent separators everywhere, and emit the one the input already uses.
+
+/** A drive-rooted Windows path prefix, e.g. the `C:` of `C:\Users`. */
+const DRIVE_RE = /^[A-Za-z]:/;
+/** One or more trailing separators, of either flavour. */
+const TRAILING_SEP_RE = /[\\/]+$/;
+
+/** Index of the last separator of either flavour, or -1. */
+function lastSep(p: string): number {
+  return Math.max(p.lastIndexOf("/"), p.lastIndexOf("\\"));
+}
+
+/** Does this path use Windows conventions (a drive letter, or backslashes and
+ *  no POSIX-absolute lead)? Decides which separator we *emit* when joining. */
+function isWindowsStyle(p: string): boolean {
+  return DRIVE_RE.test(p) || (p.includes("\\") && !p.startsWith("/"));
+}
+
+/** Absolute on either platform: POSIX `/a`, Windows `C:\a`, or a UNC `\\host`. */
+export function isAbsolute(p: string): boolean {
+  return p.startsWith("/") || /^[A-Za-z]:[\\/]/.test(p) || p.startsWith("\\\\");
+}
+
+/** Last path segment, tolerant of trailing separators ("/a/b/" → "b", "/" → "/",
+ *  "C:\a\b" → "b", "C:\" → "C:"). */
 export function basename(p: string): string {
-  const parts = p.split("/").filter(Boolean);
-  return parts[parts.length - 1] ?? p;
+  const trimmed = p.replace(TRAILING_SEP_RE, "");
+  if (trimmed === "") return p === "" ? "" : "/"; // "/" (or "///") is its own name
+  const idx = lastSep(trimmed);
+  return idx < 0 ? trimmed : trimmed.slice(idx + 1);
 }
 
-/** Parent directory ("/a/b/c" → "/a/b", "/a" → "/", "a" → ""). */
+/** Parent directory ("/a/b/c" → "/a/b", "/a" → "/", "a" → "", "C:\a" → "C:\"). */
 export function dirname(p: string): string {
-  const trimmed = p.replace(/\/+$/, "");
-  const idx = trimmed.lastIndexOf("/");
+  const trimmed = p.replace(TRAILING_SEP_RE, "");
+  const idx = lastSep(trimmed);
   if (idx < 0) return "";
-  return idx === 0 ? "/" : trimmed.slice(0, idx);
+  if (idx === 0) return "/"; // "/a" → the POSIX root
+  const head = trimmed.slice(0, idx);
+  // "C:\a" → "C:\", not the bare drive "C:" (which means "cwd on C:").
+  return DRIVE_RE.test(head) && head.length === 2 ? head + "\\" : head;
 }
 
-/** Join a directory and a name with exactly one separator. */
+/** Join a directory and a name with exactly one separator, matching the
+ *  directory's own flavour so a Windows path stays a Windows path. */
 export function joinPath(dir: string, name: string): string {
-  return dir.replace(/\/+$/, "") + "/" + name.replace(/^\/+/, "");
+  const sep = isWindowsStyle(dir) ? "\\" : "/";
+  return dir.replace(TRAILING_SEP_RE, "") + sep + name.replace(/^[\\/]+/, "");
 }
 
 /** Split an absolute path into breadcrumb segments, each carrying the absolute
@@ -66,17 +102,32 @@ export function parentDir(path: string): string {
   return cr.length >= 2 ? cr[cr.length - 2].path : cr[0]?.path ?? path;
 }
 
-/** Path relative to `root` ("/r/a/b" under "/r" → "a/b"); returns it unchanged if outside root. */
-export function relativePath(full: string, root: string): string {
-  if (!root) return full;
-  const r = root.replace(/\/+$/, "");
-  if (full === r) return basename(full);
-  return full.startsWith(r + "/") ? full.slice(r.length + 1) : full;
+/** Is `path` an entry sitting DIRECTLY inside `dir` (not deeper)? Used to decide
+ *  whether a filesystem event can change a directory's listing at all. */
+export function isDirectChild(path: string, dir: string): boolean {
+  if (!dir) return false;
+  const d = dir.replace(TRAILING_SEP_RE, "") || dir;
+  return dirname(path) === d;
 }
 
-/** Matches file-ish tokens (optionally with :line[:col]) in terminal output. */
+/** Path relative to `root` ("/r/a/b" under "/r" → "a/b"); returns it unchanged if
+ *  outside root. The separator check is what keeps "/repoX/a" from reading as
+ *  being inside "/repo". */
+export function relativePath(full: string, root: string): string {
+  if (!root) return full;
+  const r = root.replace(TRAILING_SEP_RE, "");
+  if (full === r || full === root) return basename(full);
+  if (!full.startsWith(r)) return full;
+  const rest = full.slice(r.length);
+  return /^[\\/]/.test(rest) ? rest.replace(/^[\\/]+/, "") : full;
+}
+
+/** Matches file-ish tokens (optionally with :line[:col]) in terminal output,
+ *  POSIX or Windows — an optional drive prefix, then segments separated by
+ *  either slash. The drive's own colon can't be mistaken for the `:line`
+ *  suffix, since that suffix is only recognised at the very end of the token. */
 export const PATH_RE =
-  /(?:[\w.@~-]+\/)*[\w.@~-]+\.[A-Za-z]{1,10}(?::\d+(?::\d+)?)?/g;
+  /(?:[A-Za-z]:[\\/])?(?:[\w.@~-]+[\\/])*[\w.@~-]+\.[A-Za-z]{1,10}(?::\d+(?::\d+)?)?/g;
 
 /** Matches http(s) URLs (incl. localhost) in terminal output, up to whitespace/
  *  quotes/brackets. The final char excludes trailing sentence punctuation so
@@ -94,7 +145,7 @@ const CODE_EXT =
 /** True when a matched token looks like a path worth making clickable. */
 export function looksLikePath(token: string): boolean {
   const noPos = token.replace(/:\d+(?::\d+)?$/, "");
-  return token.includes("/") || CODE_EXT.test(noPos);
+  return token.includes("/") || token.includes("\\") || CODE_EXT.test(noPos);
 }
 
 /** Split a "file:line[:col]" token into its file and 1-based line (col ignored). */
@@ -136,21 +187,21 @@ export function mediaKind(path: string): MediaKind | null {
 
 /**
  * Every ancestor directory (up to and including `root`) of the given changed
- * file paths — used to color changed folders in the tree.
+ * file paths — used to color changed folders in the tree. Walks up with the
+ * cross-platform `parentDir`, so it works on Windows paths too.
  */
 export function changedAncestors(paths: string[], root: string): Set<string> {
   const set = new Set<string>();
   if (!root) return set;
+  const r = root.replace(TRAILING_SEP_RE, "") || root;
   for (const full of paths) {
-    let p = full;
-    const slash = p.lastIndexOf("/");
-    p = slash > 0 ? p.slice(0, slash) : p;
-    while (p.length >= root.length) {
+    let p = dirname(full);
+    while (p && p.length >= r.length) {
       set.add(p);
-      if (p === root) break;
-      const idx = p.lastIndexOf("/");
-      if (idx <= 0) break;
-      p = p.slice(0, idx);
+      if (p === r) break;
+      const up = parentDir(p);
+      if (up === p) break; // reached a filesystem / drive root
+      p = up;
     }
   }
   return set;

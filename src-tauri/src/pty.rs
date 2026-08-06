@@ -15,6 +15,12 @@ use serde::Serialize;
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Manager};
 
+// Shared with the rest of the app rather than re-derived here. `home_or_root` is
+// where a shell opens when no cwd is supplied and none is configured: a bundled
+// `.app` launches with cwd `/` (the drive root — a useless place to land), so we
+// fall back to the user's home directory instead.
+use crate::fs::{basename, home_or_root as fallback_cwd};
+
 /// Distinguishes handles that reused the same session id, so a dying reader
 /// thread only reaps the session it actually owns (not a fresh respawn).
 static SEQ: AtomicU64 = AtomicU64::new(1);
@@ -44,7 +50,49 @@ struct PtyHandle {
     child: Box<dyn portable_pty::Child + Send + Sync>,
     /// The window label that owns this session, for window-close teardown.
     owner: String,
+    /// The program this session's shell actually is, so we can quote paths the
+    /// way IT parses them (see `quote_for_shell`).
+    shell: String,
     token: u64,
+}
+
+/// Shell families that disagree about quoting.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum ShellKind {
+    Posix,
+    Cmd,
+    PowerShell,
+}
+
+/// Classify a shell by the basename of its program path.
+fn shell_kind(program: &str) -> ShellKind {
+    let base = basename(program).to_ascii_lowercase();
+    let stem = base.strip_suffix(".exe").unwrap_or(&base);
+    match stem {
+        "cmd" | "command" => ShellKind::Cmd,
+        "powershell" | "pwsh" => ShellKind::PowerShell,
+        _ => ShellKind::Posix,
+    }
+}
+
+/// Quote a path so `program`'s shell reads it as exactly ONE argument.
+///
+/// This lives in Rust because only Rust knows which shell the session actually
+/// spawned; the webview can only guess from a user-agent string, and "Windows"
+/// is not one answer but two. cmd.exe takes POSIX single quotes literally, so
+/// `cd 'C:\x'` fails outright. PowerShell accepts double quotes but *expands*
+/// them, so `$`, a backtick, or `[]` in a filename would be interpolated —
+/// single quotes are literal there, escaping `'` by doubling it. POSIX shells
+/// are literal inside single quotes too, with the usual `'\''` dance. Pure, so
+/// it is unit-tested.
+fn quote_for_shell(program: &str, path: &str) -> String {
+    match shell_kind(program) {
+        // A Windows filename legally cannot contain `"`, so there is nothing to
+        // escape — and cmd has no other usable literal quote.
+        ShellKind::Cmd => format!("\"{}\"", path.replace('"', "")),
+        ShellKind::PowerShell => format!("'{}'", path.replace('\'', "''")),
+        ShellKind::Posix => format!("'{}'", path.replace('\'', "'\\''")),
+    }
 }
 
 fn size(cols: u16, rows: u16) -> PtySize {
@@ -63,14 +111,6 @@ fn default_shell() -> String {
     } else {
         std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into())
     }
-}
-
-/// Where a shell opens when no cwd is supplied and none is configured. A bundled
-/// `.app` launches with cwd `/` (the drive root — a useless place to land), so we
-/// fall back to the user's home directory instead. Only `/` if HOME is unset.
-fn fallback_cwd() -> String {
-    let var = if cfg!(target_os = "windows") { "USERPROFILE" } else { "HOME" };
-    std::env::var(var).unwrap_or_else(|_| "/".to_string())
 }
 
 /// Does the inherited environment already select a UTF-8 character set? Follows
@@ -153,7 +193,7 @@ pub fn pty_spawn(
         .map_err(|e| e.to_string())?;
 
     let program = shell.unwrap_or_else(default_shell);
-    let mut cmd = CommandBuilder::new(program);
+    let mut cmd = CommandBuilder::new(program.clone());
     // Spawn a LOGIN shell, exactly like Terminal.app and iTerm2 do. A
     // Finder/Dock-launched .app starts from launchd's minimal environment; only a
     // login shell sources the profile files that repair PATH — /etc/zprofile's
@@ -265,6 +305,7 @@ pub fn pty_spawn(
             input,
             child,
             owner,
+            shell: program,
             token,
         },
     );
@@ -310,19 +351,53 @@ pub fn pty_spawn(
     Ok(())
 }
 
+/// The session's input channel plus the shell it's running, taken under one lock.
+/// `None` when there's no such session (a closed pane racing a late write).
+fn session_input(state: &PtyState, id: &str) -> Option<(Sender<Vec<u8>>, String)> {
+    let guard = state.sessions.lock().unwrap();
+    guard.get(id).map(|h| (h.input.clone(), h.shell.clone()))
+}
+
 #[tauri::command]
 pub fn pty_write(state: tauri::State<PtyState>, id: String, data: String) -> Result<(), String> {
     // Enqueue to the session's writer thread and return immediately — never block
     // the IPC/main thread on a pty whose child isn't draining stdin. The channel
     // is unbounded, so the send can't block; FIFO order preserves keystrokes.
-    let tx = {
-        let guard = state.sessions.lock().unwrap();
-        match guard.get(&id) {
-            Some(h) => h.input.clone(),
-            None => return Ok(()),
-        }
-    };
-    let _ = tx.send(data.into_bytes());
+    if let Some((tx, _)) = session_input(&state, &id) {
+        let _ = tx.send(data.into_bytes());
+    }
+    Ok(())
+}
+
+/// `cd` a session into `dir`, quoted for the shell that session actually runs.
+///
+/// Submitted with `\r`, not `\n`: that's the byte the Enter key sends, and the
+/// only one Windows ConPTY (cmd.exe / PowerShell) accepts as "run this line". A
+/// `\n` works on macOS/Linux but on Windows leaves the command typed-but-unrun.
+#[tauri::command]
+pub fn pty_cd(state: tauri::State<PtyState>, id: String, dir: String) -> Result<(), String> {
+    if let Some((tx, shell)) = session_input(&state, &id) {
+        let line = format!("cd {}\r", quote_for_shell(&shell, &dir));
+        let _ = tx.send(line.into_bytes());
+    }
+    Ok(())
+}
+
+/// Type one or more shell-quoted paths at the session's prompt, with a trailing
+/// space — what dropping files onto a native terminal does. Never submits.
+#[tauri::command]
+pub fn pty_insert_paths(
+    state: tauri::State<PtyState>,
+    id: String,
+    paths: Vec<String>,
+) -> Result<(), String> {
+    if paths.is_empty() {
+        return Ok(());
+    }
+    if let Some((tx, shell)) = session_input(&state, &id) {
+        let quoted: Vec<String> = paths.iter().map(|p| quote_for_shell(&shell, p)).collect();
+        let _ = tx.send(format!("{} ", quoted.join(" ")).into_bytes());
+    }
     Ok(())
 }
 
@@ -363,10 +438,21 @@ pub struct PtyStatus {
 /// Live status for many sessions at once. ONE narrow process refresh serves the
 /// whole batch, so the 2s poll costs a single cheap syscall burst rather than a
 /// full process-table scan per session.
-#[tauri::command]
+///
+/// `with_agents` also resolves each running agent's conversation id. That costs a
+/// transcript-directory scan per agent (and sometimes an `lsof`), and the id only
+/// has to be current by the time the app is quit — so the UI asks for it on a
+/// slow cadence instead of on every tick. Absent = don't.
+///
+/// `command(async)` matters here: a plain `#[tauri::command]` runs INLINE on the
+/// IPC/main thread, and this one does a process-table refresh (plus, for a
+/// running agent, a transcript-directory scan) every two seconds forever. On the
+/// main thread that is a periodic UI hitch; off it, it costs nothing visible.
+#[tauri::command(async)]
 pub fn pty_status_all(
-    state: tauri::State<PtyState>,
+    state: tauri::State<'_, PtyState>,
     ids: Vec<String>,
+    with_agents: Option<bool>,
 ) -> HashMap<String, PtyStatus> {
     let targets: Vec<(String, u32, Option<u32>)> = {
         let g = state.sessions.lock().unwrap();
@@ -374,7 +460,7 @@ pub fn pty_status_all(
             .filter_map(|id| session_pids(g.get(&id)?).map(|(s, f)| (id, s, f)))
             .collect()
     };
-    statuses_for(targets)
+    statuses_for(targets, with_agents.unwrap_or(false))
 }
 
 const RUNTIMES: &[&str] = &[
@@ -407,7 +493,12 @@ fn session_pids(h: &PtyHandle) -> Option<(u32, Option<u32>)> {
 
 /// Resolve cwd + running-command for a batch of (id, shell_pid, fg_pid) targets
 /// with a SINGLE narrow sysinfo refresh (only the pids we care about).
-fn statuses_for(targets: Vec<(String, u32, Option<u32>)>) -> HashMap<String, PtyStatus> {
+/// `with_agents` additionally pins each running agent's conversation id — the
+/// only genuinely expensive part of this call, so callers opt in.
+fn statuses_for(
+    targets: Vec<(String, u32, Option<u32>)>,
+    with_agents: bool,
+) -> HashMap<String, PtyStatus> {
     use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
     let mut pids: Vec<Pid> = Vec::with_capacity(targets.len() * 2);
     for (_, shell, fg) in &targets {
@@ -450,6 +541,17 @@ fn statuses_for(targets: Vec<(String, u32, Option<u32>)>) -> HashMap<String, Pty
         })
         .collect();
 
+    // Everything above is one cheap syscall burst. Everything below reads the
+    // filesystem, so skip it entirely unless the caller asked for agent ids.
+    if !with_agents {
+        return rows
+            .into_iter()
+            .map(|r| {
+                (r.id, PtyStatus { cwd: r.cwd, running: r.running, agent_session: None })
+            })
+            .collect();
+    }
+
     // Phase 2: which cwds hold *two or more* Claude tabs? Only there can the cheap
     // newest-transcript-in-folder guess pick the wrong chat, so only there do we
     // pay for the slow lsof disambiguation. The common one-Claude-per-folder case
@@ -473,7 +575,7 @@ fn statuses_for(targets: Vec<(String, u32, Option<u32>)>) -> HashMap<String, Pty
                             .as_deref()
                             .and_then(|c| claude_cwd_counts.get(c))
                             .is_some_and(|&n| n > 1);
-                    resolve_agent_session(agent, r.cwd.as_deref(), r.fg_cmd, collides)
+                    crate::agents::resolve_agent_session(agent, r.cwd.as_deref(), r.fg_cmd, collides)
                 }
                 _ => None,
             };
@@ -482,142 +584,12 @@ fn statuses_for(targets: Vec<(String, u32, Option<u32>)>) -> HashMap<String, Pty
         .collect()
 }
 
-/// The user's home directory (for locating agent transcript stores). Prefers the
-/// unix `HOME`, falls back to Windows `USERPROFILE`.
-fn agent_home() -> Option<std::path::PathBuf> {
-    std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .map(std::path::PathBuf::from)
-}
-
-/// Claude Code names a project's transcript folder by its cwd with every non
-/// -alphanumeric byte turned into `-` (no collapsing: `/Users/x/.foo` →
-/// `-Users-x--foo`). Mirror that exactly so we can find the folder for a cwd.
-fn claude_slug(cwd: &str) -> String {
-    cwd.chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-        .collect()
-}
-
-/// `~/.claude/projects/<slug>/` for a cwd, iff it exists.
-fn claude_project_dir(cwd: &str) -> Option<std::path::PathBuf> {
-    let dir = agent_home()?.join(".claude").join("projects").join(claude_slug(cwd));
-    dir.is_dir().then_some(dir)
-}
-
-/// A 36-char `8-4-4-4-12` hex UUID? (validates the id we hand to `--resume`).
-fn uuid_shaped(s: &str) -> bool {
-    let b = s.as_bytes();
-    b.len() == 36
-        && b.iter().enumerate().all(|(i, &c)| {
-            if matches!(i, 8 | 13 | 18 | 23) {
-                c == b'-'
-            } else {
-                c.is_ascii_hexdigit()
-            }
-        })
-}
-
-/// Pull the conversation UUID out of a transcript file *stem*. Claude's stem IS
-/// the uuid; Codex's is `rollout-<iso-ts>-<uuid>` — either way the uuid is the
-/// trailing 36 chars. `None` when the tail isn't uuid-shaped.
-fn uuid_from_stem(stem: &str) -> Option<String> {
-    stem.get(stem.len().checked_sub(36)?..)
-        .filter(|tail| uuid_shaped(tail))
-        .map(str::to_string)
-}
-
-/// Newest (by mtime) `*.jsonl` transcript in `dir`, as its conversation uuid.
-/// This is the cheap "which chat is this folder's live one" signal.
-fn newest_transcript_uuid(dir: &std::path::Path) -> Option<String> {
-    let mut best: Option<(std::time::SystemTime, String)> = None;
-    for entry in std::fs::read_dir(dir).ok()?.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
-            continue;
-        }
-        let Some(uuid) = path.file_stem().and_then(|s| s.to_str()).and_then(uuid_from_stem)
-        else {
-            continue;
-        };
-        let Ok(mtime) = entry.metadata().and_then(|m| m.modified()) else {
-            continue;
-        };
-        if best.as_ref().is_none_or(|(t, _)| mtime > *t) {
-            best = Some((mtime, uuid));
-        }
-    }
-    best.map(|(_, uuid)| uuid)
-}
-
-/// Exact conversation id for a running agent by asking the OS which transcript
-/// file the process currently holds open (`lsof`). Precise even with two agents
-/// in one folder — but only when the agent is mid-write (Claude opens/closes its
-/// transcript per append, so this frequently returns None and the caller falls
-/// back). Unix-only; Windows has no lsof.
-#[cfg(unix)]
-fn lsof_transcript_uuid(pid: u32) -> Option<String> {
-    let out = std::process::Command::new("lsof")
-        .args(["-p", &pid.to_string(), "-Fn"])
-        .output()
-        .ok()?;
-    // lsof exits non-zero when *some* fds can't be read; its stdout is still valid.
-    for line in String::from_utf8_lossy(&out.stdout).lines() {
-        let Some(path) = line.strip_prefix('n') else { continue };
-        let is_transcript = path.ends_with(".jsonl")
-            && (path.contains("/.claude/projects/") || path.contains("/.codex/sessions/"));
-        if !is_transcript {
-            continue;
-        }
-        let stem = std::path::Path::new(path).file_stem().and_then(|s| s.to_str());
-        if let Some(uuid) = stem.and_then(uuid_from_stem) {
-            return Some(uuid);
-        }
-    }
-    None
-}
-
-#[cfg(not(unix))]
-fn lsof_transcript_uuid(_pid: u32) -> Option<String> {
-    None
-}
-
-/// The conversation id to resume for a running agent, best-effort.
-///
-/// Claude: newest transcript in its per-cwd folder (cheap); when two Claude tabs
-/// share a folder (`disambiguate`), try the exact open-file lookup first. Codex:
-/// its sessions aren't foldered by cwd, so there's no cheap fallback — we can
-/// only pin the exact chat while codex still holds its rollout open. `None` → the
-/// frontend keeps the generic `--continue` / `codex resume`.
-fn resolve_agent_session(
-    agent: &str,
-    cwd: Option<&str>,
-    fg_cmd: Option<u32>,
-    disambiguate: bool,
-) -> Option<String> {
-    match agent {
-        "claude" => {
-            if disambiguate {
-                if let Some(uuid) = fg_cmd.and_then(lsof_transcript_uuid) {
-                    return Some(uuid);
-                }
-            }
-            newest_transcript_uuid(&claude_project_dir(cwd?)?)
-        }
-        "codex" => fg_cmd.and_then(lsof_transcript_uuid),
-        _ => None,
-    }
-}
 
 /// Pretty label for a foreground process (reads its argv/name, then classifies).
 fn command_label(p: &sysinfo::Process) -> Option<String> {
     let argv: Vec<String> = p.cmd().iter().map(|c| c.to_string_lossy().into_owned()).collect();
     let name = p.name().to_string_lossy().into_owned();
     classify_command(&name, &argv)
-}
-
-fn basename(p: &str) -> &str {
-    p.rsplit(['/', '\\']).next().unwrap_or(p)
 }
 
 fn script_stem(s: &str) -> &str {
@@ -667,8 +639,18 @@ mod tests {
     fn resolves_own_status() {
         // Verifies the narrow process query works (cwd of our own process).
         let id = "self".to_string();
-        let map = super::statuses_for(vec![(id.clone(), std::process::id(), None)]);
+        let map = super::statuses_for(vec![(id.clone(), std::process::id(), None)], false);
         assert!(map.get(&id).unwrap().cwd.as_deref().is_some_and(|c| !c.is_empty()));
+    }
+
+    // The cheap path must still answer cwd/running — only the filesystem-walking
+    // agent-id lookup is skipped when the caller doesn't ask for it.
+    #[test]
+    fn skipping_agents_still_reports_cwd() {
+        let id = "self".to_string();
+        let cheap = super::statuses_for(vec![(id.clone(), std::process::id(), None)], false);
+        assert!(cheap.get(&id).unwrap().agent_session.is_none());
+        assert!(cheap.get(&id).unwrap().cwd.is_some());
     }
 
     fn argv(parts: &[&str]) -> Vec<String> {
@@ -779,39 +761,33 @@ mod tests {
     }
 
     #[test]
-    fn claude_slug_matches_claude_encoding() {
-        // Every non-alphanumeric byte becomes '-', with no collapsing — so a
-        // leading '/' and a '/.' both survive as literal dashes.
-        assert_eq!(
-            super::claude_slug("/Users/apple/Coding/Beecork/beecrok-terminal"),
-            "-Users-apple-Coding-Beecork-beecrok-terminal"
-        );
-        assert_eq!(super::claude_slug("/Users/apple/.beecork-general"), "-Users-apple--beecork-general");
+    fn shell_kind_reads_the_program_basename() {
+        use super::{shell_kind, ShellKind};
+        assert_eq!(shell_kind("/bin/zsh"), ShellKind::Posix);
+        assert_eq!(shell_kind("/usr/local/bin/fish"), ShellKind::Posix);
+        assert_eq!(shell_kind("C:\\Windows\\System32\\cmd.exe"), ShellKind::Cmd);
+        assert_eq!(shell_kind("CMD.EXE"), ShellKind::Cmd);
+        assert_eq!(shell_kind("powershell.exe"), ShellKind::PowerShell);
+        assert_eq!(shell_kind("/opt/microsoft/powershell/7/pwsh"), ShellKind::PowerShell);
+        // Unknown shells get the POSIX treatment — the safe default off Windows.
+        assert_eq!(shell_kind("/bin/nu"), ShellKind::Posix);
     }
 
     #[test]
-    fn uuid_shaped_validates_form() {
-        assert!(super::uuid_shaped("21c89373-22e7-4064-8ef4-543836557a64"));
-        assert!(super::uuid_shaped("019f5c24-8fb9-7362-8187-28ffcef7688c"));
-        assert!(!super::uuid_shaped("not-a-uuid"));
-        assert!(!super::uuid_shaped("21c89373_22e7_4064_8ef4_543836557a64")); // wrong separators
-        assert!(!super::uuid_shaped("21c89373-22e7-4064-8ef4-543836557a6")); // too short
-        assert!(!super::uuid_shaped("g1c89373-22e7-4064-8ef4-543836557a64")); // non-hex
+    fn quoting_matches_each_shell() {
+        use super::quote_for_shell as q;
+        // POSIX: literal single quotes, with the classic '\'' escape.
+        assert_eq!(q("/bin/zsh", "/Users/me/my proj"), "'/Users/me/my proj'");
+        assert_eq!(q("/bin/zsh", "/tmp/it's"), r"'/tmp/it'\''s'");
+        // A POSIX single-quoted string expands nothing — the whole point.
+        assert_eq!(q("/bin/bash", "/tmp/$HOME`x`"), "'/tmp/$HOME`x`'");
+        // cmd.exe: double quotes. POSIX single quotes would be taken LITERALLY
+        // here, which is why the old one-size-fits-all quoting broke `cd`.
+        assert_eq!(q("cmd.exe", "C:\\Users\\me\\my proj"), "\"C:\\Users\\me\\my proj\"");
+        // PowerShell: single quotes (literal), doubling any embedded quote — a
+        // double-quoted string there would interpolate $ and backticks.
+        assert_eq!(q("powershell.exe", "C:\\a\\$env b"), "'C:\\a\\$env b'");
+        assert_eq!(q("pwsh", "C:\\it's"), "'C:\\it''s'");
     }
 
-    #[test]
-    fn uuid_from_stem_handles_both_agents() {
-        // Claude: the stem *is* the uuid.
-        assert_eq!(
-            super::uuid_from_stem("21c89373-22e7-4064-8ef4-543836557a64").as_deref(),
-            Some("21c89373-22e7-4064-8ef4-543836557a64")
-        );
-        // Codex: `rollout-<iso-ts>-<uuid>` → the trailing 36 chars.
-        assert_eq!(
-            super::uuid_from_stem("rollout-2026-07-13T19-42-07-019f5c24-8fb9-7362-8187-28ffcef7688c")
-                .as_deref(),
-            Some("019f5c24-8fb9-7362-8187-28ffcef7688c")
-        );
-        assert_eq!(super::uuid_from_stem("session-notes"), None);
-    }
 }

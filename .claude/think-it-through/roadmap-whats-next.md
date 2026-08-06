@@ -167,5 +167,11 @@ less-confident users ask for it.
   (a saved cwd since deleted currently shows the retryable spawn-error; could fall back to
   root). Feature #1 is otherwise done.
 
-**Feature #1 status: DONE (uncommitted).** Next: change-review v1 = the Undo button — gets a
-short plan before the repo-writing revert code lands.
+**Feature #1 status: DONE** — shipped in v0.1.5, and extended in v0.1.23 so each tab resumes
+its OWN conversation (`claude --resume <id>`) rather than whichever chat ran last.
+
+**Next: nothing is committed.** The change-review decision above stands — DROPPED — so this
+line no longer contradicts it. If it is ever revisited, the entry point is the per-file **Undo
+(revert to HEAD)** button on its own, without the review-gate; that was judged ~80% of the value
+for ~20% of the work, and it is the only item here that would change what the product *is*
+rather than how well it works. Tier 3 (attention protocol) remains optional polish.

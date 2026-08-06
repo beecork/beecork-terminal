@@ -8,6 +8,13 @@ const host = process.env.TAURI_DEV_HOST;
 export default defineConfig(async () => ({
   plugins: [react()],
 
+  // Most tests are pure functions and need no DOM, so the default environment
+  // stays `node` (fast). The few that render a component opt in per file with
+  // `// @vitest-environment jsdom`.
+  test: {
+    environment: "node",
+  },
+
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
   // 1. prevent Vite from obscuring rust errors

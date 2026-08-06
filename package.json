@@ -1,11 +1,12 @@
 {
   "name": "beecork-terminal",
   "private": true,
-  "version": "0.1.24",
+  "version": "0.1.25",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "lint": "eslint .",
     "preview": "vite preview",
     "test": "vitest run",
     "tauri": "tauri"
@@ -34,11 +35,18 @@
     "react-dom": "^19.1.0"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.5",
     "@tauri-apps/cli": "^2",
+    "@testing-library/react": "^16.3.2",
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
     "@vitejs/plugin-react": "^4.6.0",
+    "eslint": "^9.39.5",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^17.9.0",
+    "jsdom": "^30.0.1",
     "typescript": "~5.8.3",
+    "typescript-eslint": "^8.66.0",
     "vite": "^7.0.4",
     "vitest": "^4.1.9"
   }

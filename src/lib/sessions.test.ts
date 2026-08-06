@@ -7,6 +7,7 @@ import {
   moveBefore,
   type RailItem,
   type Session,
+  splitLayout,
 } from "./sessions";
 
 describe("displayName", () => {
@@ -121,5 +122,55 @@ describe("resumeCommand", () => {
     expect(resumeCommand("claude", id)).toBe(`claude --resume ${id}`);
     expect(resumeCommand("codex", id)).toBe(`codex resume ${id}`);
     expect(resumeCommand("aider", id)).toBe(`aider --resume ${id}`);
+  });
+});
+
+describe("splitLayout", () => {
+  const S = (id: string, partner?: string): Session => ({ id, name: id, partner });
+
+  it("is not split when the focused session has no partner", () => {
+    const sessions = [S("a"), S("b")];
+    expect(splitLayout(sessions, "a")).toEqual({
+      leftId: "a",
+      rightId: null,
+      visibleIds: ["a"],
+    });
+  });
+
+  it("orders panes by rail position, not by which one is focused", () => {
+    const sessions = [S("a", "b"), S("b", "a")];
+    // Focus either side — "a" comes first in the rail, so it stays on the left.
+    expect(splitLayout(sessions, "a")).toEqual({
+      leftId: "a",
+      rightId: "b",
+      visibleIds: ["a", "b"],
+    });
+    expect(splitLayout(sessions, "b")).toEqual({
+      leftId: "a",
+      rightId: "b",
+      visibleIds: ["a", "b"],
+    });
+  });
+
+  it("ignores a partner that has since closed", () => {
+    const sessions = [S("a", "gone")];
+    expect(splitLayout(sessions, "a")).toEqual({
+      leftId: "a",
+      rightId: null,
+      visibleIds: ["a"],
+    });
+  });
+
+  it("ignores a session paired with itself", () => {
+    const sessions = [S("a", "a")];
+    expect(splitLayout(sessions, "a").rightId).toBeNull();
+  });
+
+  it("treats an unknown focused id as unsplit", () => {
+    expect(splitLayout([S("a")], "nope")).toEqual({
+      leftId: "nope",
+      rightId: null,
+      visibleIds: ["nope"],
+    });
   });
 });

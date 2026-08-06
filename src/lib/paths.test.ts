@@ -11,6 +11,9 @@ import {
   parseOsc7,
   changedAncestors,
   mediaKind,
+  isAbsolute,
+  isDirectChild,
+  PATH_RE,
   URL_RE,
   isLocalUrl,
 } from "./paths";
@@ -72,6 +75,13 @@ describe("basename", () => {
   it("returns '/' for root", () => {
     expect(basename("/")).toBe("/");
   });
+  // Regression: this used to return the WHOLE path on Windows, so the title bar
+  // and every session name showed "C:\Users\me\proj" instead of "proj".
+  it("returns the last segment of a Windows path", () => {
+    expect(basename("C:\\Users\\me\\proj")).toBe("proj");
+    expect(basename("C:\\a\\b\\")).toBe("b");
+    expect(basename("C:\\")).toBe("C:");
+  });
 });
 
 describe("dirname", () => {
@@ -87,6 +97,12 @@ describe("dirname", () => {
   it("returns '' for a bare name", () => {
     expect(dirname("a")).toBe("");
   });
+  // Regression: this returned "" on Windows, so "New file…" / "Rename…" built
+  // "/name" and wrote to the drive root instead of the containing folder.
+  it("returns the parent of a Windows path", () => {
+    expect(dirname("C:\\Users\\me\\main.rs")).toBe("C:\\Users\\me");
+    expect(dirname("C:\\a")).toBe("C:\\");
+  });
 });
 
 describe("joinPath", () => {
@@ -95,6 +111,13 @@ describe("joinPath", () => {
   });
   it("collapses redundant separators", () => {
     expect(joinPath("/a/b/", "/c.txt")).toBe("/a/b/c.txt");
+  });
+  it("keeps a Windows path a Windows path", () => {
+    expect(joinPath("C:\\a\\b", "c.txt")).toBe("C:\\a\\b\\c.txt");
+    expect(joinPath("C:\\", "c.txt")).toBe("C:\\c.txt");
+  });
+  it("round-trips dirname → joinPath on Windows (the new-file path)", () => {
+    expect(joinPath(dirname("C:\\p\\src\\main.rs"), "new.rs")).toBe("C:\\p\\src\\new.rs");
   });
 });
 
@@ -111,6 +134,29 @@ describe("relativePath", () => {
   it("returns the full path when outside the root", () => {
     expect(relativePath("/other/x", "/r")).toBe("/other/x");
   });
+  it("strips a Windows root prefix", () => {
+    expect(relativePath("C:\\r\\a\\b", "C:\\r")).toBe("a\\b");
+    expect(relativePath("C:\\r", "C:\\r")).toBe("r");
+  });
+  // A sibling whose name merely *starts with* the root name is not inside it.
+  it("does not treat a name-prefix sibling as inside the root", () => {
+    expect(relativePath("/repoX/a", "/repo")).toBe("/repoX/a");
+    expect(relativePath("C:\\repoX\\a", "C:\\repo")).toBe("C:\\repoX\\a");
+  });
+});
+
+describe("isAbsolute", () => {
+  it("accepts POSIX, Windows drive, and UNC paths", () => {
+    expect(isAbsolute("/a/b")).toBe(true);
+    expect(isAbsolute("C:\\a")).toBe(true);
+    expect(isAbsolute("C:/a")).toBe(true);
+    expect(isAbsolute("\\\\server\\share")).toBe(true);
+  });
+  it("rejects relative paths", () => {
+    expect(isAbsolute("src/App.tsx")).toBe(false);
+    expect(isAbsolute("src\\App.tsx")).toBe(false);
+    expect(isAbsolute("./a")).toBe(false);
+  });
 });
 
 describe("looksLikePath", () => {
@@ -125,6 +171,27 @@ describe("looksLikePath", () => {
   });
   it("rejects a plain word with no path/extension", () => {
     expect(looksLikePath("hello")).toBe(false);
+  });
+});
+
+describe("PATH_RE", () => {
+  const find = (text: string): string[] => {
+    PATH_RE.lastIndex = 0;
+    return text.match(PATH_RE) ?? [];
+  };
+  it("finds POSIX paths with an optional :line:col", () => {
+    expect(find("see src/App.tsx:42 for details")).toEqual(["src/App.tsx:42"]);
+    expect(find("edited lib/paths.ts")).toEqual(["lib/paths.ts"]);
+  });
+  it("finds Windows paths, drive and all", () => {
+    expect(find("wrote C:\\Users\\me\\proj\\src\\main.rs")).toEqual([
+      "C:\\Users\\me\\proj\\src\\main.rs",
+    ]);
+    expect(find("at src\\main.rs:12:5")).toEqual(["src\\main.rs:12:5"]);
+  });
+  it("keeps the drive colon out of the :line suffix", () => {
+    expect(splitFileLine("C:\\a\\b.ts:12")).toEqual({ file: "C:\\a\\b.ts", line: 12 });
+    expect(splitFileLine("C:\\a\\b.ts")).toEqual({ file: "C:\\a\\b.ts" });
   });
 });
 
@@ -163,6 +230,12 @@ describe("changedAncestors", () => {
   });
   it("returns empty for an empty root", () => {
     expect(changedAncestors(["/repo/a/x.ts"], "").size).toBe(0);
+  });
+  // Regression: on Windows this used to return the changed FILE's own path and
+  // no directories at all, so no folder in the tree ever coloured.
+  it("adds every ancestor up to root on Windows", () => {
+    const s = changedAncestors(["C:\\repo\\a\\b\\x.ts"], "C:\\repo");
+    expect([...s].sort()).toEqual(["C:\\repo", "C:\\repo\\a", "C:\\repo\\a\\b"]);
   });
 });
 
@@ -220,5 +293,27 @@ describe("isLocalUrl", () => {
   it("is false for external hosts", () => {
     expect(isLocalUrl("https://example.com")).toBe(false);
     expect(isLocalUrl("http://localhost.evil.com")).toBe(false);
+  });
+});
+
+describe("isDirectChild", () => {
+  it("is true only for an entry directly inside the directory", () => {
+    expect(isDirectChild("/repo/a.ts", "/repo")).toBe(true);
+    expect(isDirectChild("/repo/sub/a.ts", "/repo")).toBe(false);
+    expect(isDirectChild("/repo/sub/a.ts", "/repo/sub")).toBe(true);
+  });
+  it("tolerates a trailing separator on the directory", () => {
+    expect(isDirectChild("/repo/a.ts", "/repo/")).toBe(true);
+  });
+  it("works at the filesystem root", () => {
+    expect(isDirectChild("/a", "/")).toBe(true);
+    expect(isDirectChild("/a/b", "/")).toBe(false);
+  });
+  it("works on Windows paths", () => {
+    expect(isDirectChild("C:\\repo\\a.ts", "C:\\repo")).toBe(true);
+    expect(isDirectChild("C:\\repo\\sub\\a.ts", "C:\\repo")).toBe(false);
+  });
+  it("is false for an empty directory", () => {
+    expect(isDirectChild("/repo/a.ts", "")).toBe(false);
   });
 });

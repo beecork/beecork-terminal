@@ -1,8 +1,18 @@
 import { useEffect, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { listDir, type ChangeStatus, type Entry } from "../lib/api";
 import { onFsChanged } from "../lib/events";
-import { parentDir } from "../lib/paths";
+import { isDirectChild, parentDir } from "../lib/paths";
 import { Chevron, Folder, File } from "./icons";
+
+/**
+ * Only a change to a DIRECT child can alter a directory's listing — an edit two
+ * levels down doesn't add or remove a row here. Without this filter every
+ * expanded node re-listed on every filesystem event anywhere in the project, so
+ * one agent save cost an IPC round-trip per open folder. (A re-root sends an
+ * empty payload, which `onFsChanged` treats as "everything changed" regardless.)
+ */
+const listingAffectedBy = (dir: string) => (paths: string[]) =>
+  paths.some((p) => p === dir || isDirectChild(p, dir));
 
 interface Props {
   rootPath: string;
@@ -40,11 +50,14 @@ export default function FileTree({
   // Re-list the root when files change (agent creates/deletes files). React
   // reconciles by path key, so expanded subfolders keep their state.
   useEffect(() => {
-    return onFsChanged(() => {
-      listDir(rootPath)
-        .then((l) => setEntries(l.entries))
-        .catch(() => {});
-    });
+    return onFsChanged(
+      () => {
+        listDir(rootPath)
+          .then((l) => setEntries(l.entries))
+          .catch(() => {});
+      },
+      { match: listingAffectedBy(rootPath) }
+    );
   }, [rootPath]);
 
   if (error) return <div className="tree-error">{error}</div>;
@@ -120,11 +133,14 @@ function TreeNode({
   // deleted files appear live (expansion of surviving children is preserved).
   useEffect(() => {
     if (!open) return;
-    return onFsChanged(() => {
-      listDir(entry.path)
-        .then((l) => setChildren(l.entries))
-        .catch(() => {});
-    });
+    return onFsChanged(
+      () => {
+        listDir(entry.path)
+          .then((l) => setChildren(l.entries))
+          .catch(() => {});
+      },
+      { match: listingAffectedBy(entry.path) }
+    );
   }, [open, entry.path]);
 
   async function activate() {

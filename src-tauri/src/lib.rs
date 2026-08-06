@@ -1,3 +1,4 @@
+mod agents;
 mod fs;
 mod git;
 mod pty;
@@ -34,6 +35,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             pty::pty_spawn,
             pty::pty_write,
+            pty::pty_cd,
+            pty::pty_insert_paths,
             pty::pty_resize,
             pty::pty_kill,
             pty::pty_status_all,

@@ -40,9 +40,9 @@ export function usePersistedState<T>(
   });
   useEffect(() => {
     lsSet(key, serialize(value));
-    // serialize is a pure formatter; intentionally not a dep (avoids a write on
-    // every render when callers pass it inline).
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // `serialize` is deliberately NOT a dependency: it's a pure formatter, and
+    // callers pass it inline, so depending on it would write to storage on
+    // every render.
   }, [key, value]);
   return [value, setValue];
 }

@@ -57,6 +57,11 @@ jobs:
         run: npm ci
       - name: Frontend tests
         run: npm test
+      # Blocking on ERRORS only. The config keeps the React-hooks rules and
+      # switches off what `tsc` already covers; the handful of remaining
+      # warnings are deliberate deps decisions documented at each site.
+      - name: Lint frontend
+        run: npm run lint
       - name: Rust tests
         run: cd src-tauri && cargo test
       - name: Audit npm dependencies

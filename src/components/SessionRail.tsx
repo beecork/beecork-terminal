@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { displayName, isDivider, type Divider, type RailItem, type Session } from "../lib/sessions";
 import { Plus, Close, Pencil, Chevron, Gear } from "./icons";
 import { noFocusSteal } from "../lib/keepFocus";
 import { useContextMenu } from "../lib/useContextMenu";
+import { useDrag } from "../lib/useDrag";
 import { copyText } from "../lib/clipboard";
 import ContextMenu, { type MenuEntry } from "./ContextMenu";
 import RenameInput from "./RenameInput";
@@ -74,29 +75,23 @@ export default function SessionRail({
 
   const sessionCount = items.reduce((n, i) => n + (isDivider(i) ? 0 : 1), 0);
 
-  // Drag-to-reorder — POINTER-based, not the HTML5 drag API. This is a Tauri
-  // webview with OS-level drag-drop enabled (so you can drop files from Finder
-  // into the terminal), and that interception stops in-page dragover/drop events
-  // from ever firing. `dragId` is the row being dragged (a session or a divider);
-  // `dropBefore` is where it would land (an item id to insert before, or "end" =
-  // after the last one).
+  // Drag-to-reorder, on the shared `useDrag` primitive (see its doc comment for
+  // why this is mouse- rather than HTML5-drag-based). A rail row is also a click
+  // target, so it takes a movement threshold: below it, a press stays a click.
+  // `dragId` is the row being dragged (a session or a divider); `dropBefore` is
+  // where it would land (an item id to insert before, or "end" = after the last).
   const listRef = useRef<HTMLDivElement>(null);
-  const dragRef = useRef<{ id: string; startY: number; moved: boolean } | null>(null);
+  const pressedId = useRef<string | null>(null);
   const dropRef = useRef<string | "end" | null>(null);
   const lastDragEnd = useRef(0);
   const [dragId, setDragId] = useState<string | null>(null);
   const [dropBefore, setDropBefore] = useState<string | "end" | null>(null);
 
-  useEffect(() => {
-    function onMove(e: MouseEvent) {
-      const d = dragRef.current;
-      if (!d) return;
-      if (!d.moved) {
-        if (Math.abs(e.clientY - d.startY) < 5) return; // small moves stay clicks
-        d.moved = true;
-        setDragId(d.id);
-        document.body.style.cursor = "grabbing";
-      }
+  const startRowDrag = useDrag({
+    threshold: 5, // small moves stay clicks
+    cursor: "grabbing",
+    onStart: () => setDragId(pressedId.current),
+    onMove: (e) => {
       // Drop before the first row whose middle is below the cursor, else at the end.
       let before: string | "end" = "end";
       const rows = listRef.current?.querySelectorAll<HTMLElement>("[data-item-id]");
@@ -111,26 +106,29 @@ export default function SessionRail({
       }
       dropRef.current = before;
       setDropBefore(before);
-    }
-    function onUp() {
-      const d = dragRef.current;
-      dragRef.current = null;
-      if (!d || !d.moved) return;
-      document.body.style.cursor = "";
+    },
+    onEnd: () => {
+      const id = pressedId.current;
       const before = dropRef.current;
+      pressedId.current = null;
       dropRef.current = null;
-      lastDragEnd.current = performance.now(); // swallow the click that follows
+      // Swallow the click that follows a drag. (The purity rule reads this
+      // arrow as render-scope because the options object is built during
+      // render — but onEnd only ever runs from a mouseup handler.)
+      // eslint-disable-next-line react-hooks/purity
+      lastDragEnd.current = performance.now();
       setDragId(null);
       setDropBefore(null);
-      if (before !== null) onReorder(d.id, before === "end" ? null : before);
-    }
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
-    return () => {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
-    };
-  }, [onReorder]);
+      if (id && before !== null) onReorder(id, before === "end" ? null : before);
+    },
+  });
+
+  /** Press a rail row: remember which one, and let useDrag decide if it's a drag. */
+  function onRowMouseDown(e: ReactMouseEvent, id: string, editing: boolean) {
+    if (editing) return; // a rename field keeps normal text selection
+    pressedId.current = id;
+    startRowDrag(e);
+  }
 
   // Create a divider and drop straight into naming it.
   function addDivider(beforeId: string | null) {
@@ -214,10 +212,7 @@ export default function SessionRail({
                 className={`rail-divider${dragId === item.id ? " dragging" : ""}${
                   dropBefore === item.id ? " drop-before" : ""
                 }`}
-                onMouseDown={(e) => {
-                  if (editing || e.button !== 0) return;
-                  dragRef.current = { id: item.id, startY: e.clientY, moved: false };
-                }}
+                onMouseDown={(e) => onRowMouseDown(e, item.id, editing)}
                 onDoubleClick={() => expanded && setEditingId(item.id)}
                 onContextMenu={(e) => openMenu(e, item)}
                 title={item.name || "Divider — double-click to name"}
@@ -283,10 +278,7 @@ export default function SessionRail({
               }${dropBefore === s.id ? " drop-before" : ""}`}
               // Press-and-drag to reorder (pointer-based; see the effect above).
               // Disabled while renaming so the input keeps normal selection.
-              onMouseDown={(e) => {
-                if (editing || e.button !== 0) return;
-                dragRef.current = { id: s.id, startY: e.clientY, moved: false };
-              }}
+              onMouseDown={(e) => onRowMouseDown(e, s.id, editing)}
               onClick={() => {
                 // Swallow the click that ends a drag; a real click still selects.
                 if (performance.now() - lastDragEnd.current < 250) return;

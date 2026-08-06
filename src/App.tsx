@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { invoke } from "@tauri-apps/api/core";
 import TerminalPane from "./components/TerminalPane";
 import SidePanel from "./components/SidePanel";
 import SettingsModal from "./components/SettingsModal";
@@ -10,13 +9,14 @@ import FirstRunModal from "./components/FirstRunModal";
 import SessionRail from "./components/SessionRail";
 import UpdateBanner from "./components/UpdateBanner";
 import ConfirmModal from "./components/ConfirmModal";
+import ErrorBoundary from "./components/ErrorBoundary";
 import RenameInput from "./components/RenameInput";
 import PaneHeader from "./components/PaneHeader";
 import { Folder, Chevron, Pencil, Split } from "./components/icons";
-import { useSessions, displayName, type Session } from "./lib/sessions";
+import { useSessions, displayName, splitLayout, type Session } from "./lib/sessions";
 import { useSessionStatus } from "./lib/useSessionStatus";
 import { basename } from "./lib/paths";
-import { setWatchRoot } from "./lib/api";
+import { ptyCd, ptyInsertPaths, setWatchRoot } from "./lib/api";
 import { usePersistedState } from "./lib/persist";
 import { useDrag } from "./lib/useDrag";
 import { initNotifications } from "./lib/notify";
@@ -29,21 +29,6 @@ export interface OpenRequest {
   path: string;
   line?: number;
   n: number;
-}
-
-/** WebView2 (Windows) reports "Windows NT" in its UA; WKWebView/WebKitGTK don't. */
-const IS_WINDOWS = /Windows/i.test(navigator.userAgent);
-
-/** Quote a path so a shell reads it as one argument — for `cd` and for handing
- *  dropped file paths to the shell. Platform-aware: on Windows we DOUBLE-quote,
- *  because `cmd.exe` (the default shell) takes POSIX single quotes literally and
- *  errors, whereas a double-quoted path is accepted by BOTH cmd.exe and
- *  PowerShell — and a Windows filename legally cannot contain a `"`, so there's
- *  nothing to escape. On macOS/Linux we single-quote (safe against `$`, backticks,
- *  etc.), escaping any embedded single quote the POSIX way. */
-function shellQuote(p: string): string {
-  if (IS_WINDOWS) return `"${p}"`;
-  return `'${p.replace(/'/g, "'\\''")}'`;
 }
 
 export default function App() {
@@ -100,28 +85,15 @@ export default function App() {
     removeDivider,
   } = useSessions();
 
-  // A pair is symmetric and lives on the session (`partner`), so it's remembered.
-  // `activeId` is the focused session; its partner (if any) is shown beside it.
-  // Left/right order is stable (by rail position), so focus can move between the
-  // panes without the layout jumping. Everything derives from these two.
   // First run (or a user who never set one): ask for a default startup folder.
   const needsDefaultFolder = settings.defaultCwd === undefined;
 
   const active = sessions.find((s) => s.id === activeId);
-  const partnerId =
-    active?.partner && active.partner !== activeId && sessions.some((s) => s.id === active.partner)
-      ? active.partner
-      : null;
-  let leftId = activeId;
-  let rightId: string | null = null;
-  if (partnerId) {
-    const ai = sessions.findIndex((s) => s.id === activeId);
-    const pi = sessions.findIndex((s) => s.id === partnerId);
-    [leftId, rightId] = ai <= pi ? [activeId, partnerId] : [partnerId, activeId];
-  }
+  // Which sessions are on screen and where — derived, not stored (see
+  // `splitLayout`, which is unit-tested).
+  const { leftId, rightId, visibleIds } = splitLayout(sessions, activeId);
+  const partnerId = rightId ? (leftId === activeId ? rightId : leftId) : null;
   const split = rightId != null;
-  // Sessions on screen right now: both panes in split, else just the focused one.
-  const visibleIds = rightId ? [leftId, rightId] : [activeId];
   // Live session ids, for pruning per-session memory (e.g. the panel's editor
   // state) when a session closes. Recomputed only when the session set changes.
   const sessionIds = useMemo(() => sessions.map((s) => s.id), [sessions]);
@@ -141,7 +113,15 @@ export default function App() {
 
   // cwd / running-command / attention-dot state machine + polling.
   const { terminalCwd, wantsYou, busy, onCwd, onStatusHint, onActivity, onBell, onSeen, markClosed } =
-    useSessionStatus(sessions, activeId, visibleIds, setCwd, setRunning, setAgentId);
+    useSessionStatus(
+      sessions,
+      activeId,
+      visibleIds,
+      setCwd,
+      setRunning,
+      setAgentId,
+      settings.defaultCwd
+    );
 
   // The attention chime lives inside useSessionStatus (flagWants): it fires the
   // instant a session newly needs you, and only there is the CAUSE known — a
@@ -165,13 +145,16 @@ export default function App() {
   }, [create]);
 
   // Drag the split divider — updates the left pane's width %.
-  const startSplitDrag = useDrag((e) => {
-    const el = terminalsRef.current;
-    if (!el) return;
-    const r = el.getBoundingClientRect();
-    const pct = ((e.clientX - r.left) / r.width) * 100;
-    setSplitPct(Math.min(80, Math.max(20, pct)));
-  }, "col-resize");
+  const startSplitDrag = useDrag({
+    cursor: "col-resize",
+    onMove: (e) => {
+      const el = terminalsRef.current;
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      const pct = ((e.clientX - r.left) / r.width) * 100;
+      setSplitPct(Math.min(80, Math.max(20, pct)));
+    },
+  });
 
   // Replace one pane's session with `id`, keeping the other pane and re-pairing.
   // Focus moves to `id` only if you edited the pane you were focused on.
@@ -235,15 +218,12 @@ export default function App() {
     sound.blip(); // a file was opened into the editor (sound after the open)
   }, []);
 
-  // File-browser right-click → "Open folder in terminal": cd the active session there.
-  // Submit with \r (carriage return) — that's the byte the Enter key sends, and the
-  // only one Windows ConPTY (cmd.exe/PowerShell) accepts as "run this line". A \n
-  // works on macOS/Linux but on Windows just leaves the command typed-but-unrun.
+  // File-browser right-click → "Open folder in terminal": cd the active session
+  // there. Quoting and the Enter byte are the backend's job — it knows which
+  // shell this session actually runs (see api.ptyCd).
   const openInTerminal = useCallback(
     (dir: string) => {
-      invoke("pty_write", { id: activeIdRef.current, data: `cd ${shellQuote(dir)}\r` }).catch(
-        () => {}
-      );
+      ptyCd(activeIdRef.current, dir).catch(() => {});
       focusTerminal();
     },
     [focusTerminal]
@@ -326,8 +306,7 @@ export default function App() {
         if (event.payload.type !== "drop") return;
         const paths = event.payload.paths;
         if (!paths.length) return;
-        const data = paths.map(shellQuote).join(" ") + " ";
-        invoke("pty_write", { id: activeIdRef.current, data }).catch(() => {});
+        ptyInsertPaths(activeIdRef.current, paths).catch(() => {});
         focusTerminal();
       })
       .then((u) => {
@@ -386,10 +365,13 @@ export default function App() {
     getCurrentWindow().setTitle(`${activeName} — Beecork`).catch(() => {});
   }, [activeName]);
 
-  const startPanelDrag = useDrag((e) => {
-    const w = window.innerWidth - e.clientX;
-    setPanelWidth(Math.min(Math.max(w, 240), window.innerWidth - 360));
-  }, "col-resize");
+  const startPanelDrag = useDrag({
+    cursor: "col-resize",
+    onMove: (e) => {
+      const w = window.innerWidth - e.clientX;
+      setPanelWidth(Math.min(Math.max(w, 240), window.innerWidth - 360));
+    },
+  });
 
   return (
     <div className="app-root">
@@ -454,7 +436,8 @@ export default function App() {
             // Schedule the visual first (so a throwing sound can't drop the toggle),
             // then play — withVisual holds the visual back to land with the sound.
             sound.withVisual(() => setRailExpanded((e) => !e));
-            railExpanded ? sound.panelClose() : sound.panelOpen();
+            if (railExpanded) sound.panelClose();
+            else sound.panelOpen();
           }}
           onRename={rename}
           onOpenSettings={() => setSettingsOpen(true)}
@@ -540,6 +523,10 @@ export default function App() {
               <span className="divider-grip" />
             </div>
             <div className="side-panel" style={{ width: panelWidth }}>
+              {/* The panel renders arbitrary file content through CodeMirror —
+                  the likeliest thing in the app to throw. Boundary it so a bad
+                  file can never take the terminal down with it. */}
+              <ErrorBoundary what="The file panel" inline>
               <SidePanel
                 openRequest={openRequest}
                 root={terminalCwd}
@@ -555,6 +542,7 @@ export default function App() {
                   sound.panelClose();
                 }}
               />
+              </ErrorBoundary>
             </div>
           </>
         ) : (
@@ -602,8 +590,7 @@ export default function App() {
           onChoose={(path) => {
             update({ defaultCwd: path });
             // Move the already-spawned first shell there right away (fresh prompt).
-            // \r, not \n — the Enter byte every shell (incl. Windows ConPTY) submits on.
-            invoke("pty_write", { id: activeId, data: `cd ${shellQuote(path)}\r` }).catch(() => {});
+            ptyCd(activeId, path).catch(() => {});
             focusTerminal();
           }}
         />

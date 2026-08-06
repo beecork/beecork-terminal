@@ -101,6 +101,40 @@ export function wantsAttention(
   return !isActive && !!was && !now;
 }
 
+/** Which sessions the split view shows, and in which pane. */
+export interface SplitLayout {
+  /** the session in the left pane (always the focused one, or its partner) */
+  leftId: string;
+  /** the right pane's session, or null when not split */
+  rightId: string | null;
+  /** sessions on screen right now — both panes when split, else just the focused one */
+  visibleIds: string[];
+}
+
+/**
+ * Work out the split layout from the focused session and the pairing recorded on
+ * it. A pair is symmetric and lives on the session (`partner`), so it survives a
+ * relaunch, and left/right order follows RAIL POSITION rather than which pane you
+ * happen to be focused on — otherwise the two panes would swap places every time
+ * you clicked between them.
+ *
+ * A stale `partner` (self-pairing, or pointing at a session that has since
+ * closed) degrades to "not split" rather than rendering an empty pane. Pure, so
+ * it's unit-tested.
+ */
+export function splitLayout(sessions: Session[], activeId: string): SplitLayout {
+  const active = sessions.find((s) => s.id === activeId);
+  const partnerId =
+    active?.partner && active.partner !== activeId && sessions.some((s) => s.id === active.partner)
+      ? active.partner
+      : null;
+  if (!partnerId) return { leftId: activeId, rightId: null, visibleIds: [activeId] };
+  const ai = sessions.findIndex((s) => s.id === activeId);
+  const pi = sessions.findIndex((s) => s.id === partnerId);
+  const [leftId, rightId] = ai <= pi ? [activeId, partnerId] : [partnerId, activeId];
+  return { leftId, rightId, visibleIds: [leftId, rightId] };
+}
+
 function uid(): string {
   try {
     return crypto.randomUUID();
@@ -130,26 +164,39 @@ export function moveBefore<T extends { id: string }>(
   return [...without.slice(0, idx), list[from], ...without.slice(idx)];
 }
 
+const isSession = (i: RailItem): i is Session => !isDivider(i);
+
 /**
- * Update one session's field, returning the SAME array (referentially) when the
- * value is unchanged — so React can bail out of the render. The frequent poll-
- * driven setters (cwd/running) would otherwise allocate a fresh array every tick
- * and re-render the whole app for no change.
+ * Update one rail item's fields, returning the SAME array (referentially) when
+ * every field already holds that value — so React can bail out of the render.
+ * The frequent poll-driven setters (cwd/running) would otherwise allocate a
+ * fresh array every tick and re-render the whole app for no change.
+ *
+ * Generic over the row type so sessions and dividers share one implementation:
+ * the two hand-rolled copies had to be kept in step by hand, and only the
+ * session one had the bail-out.
  */
-function patchSession<K extends keyof Session>(
+function patchItem<T extends RailItem>(
   prev: RailItem[],
   id: string,
-  key: K,
-  value: Session[K]
+  is: (i: RailItem) => i is T,
+  patch: Partial<T>
 ): RailItem[] {
-  const i = prev.findIndex((x) => !isDivider(x) && x.id === id);
+  const i = prev.findIndex((x) => x.id === id && is(x));
   if (i < 0) return prev;
-  const s = prev[i] as Session;
-  if (s[key] === value) return prev;
+  const cur = prev[i] as T;
+  const keys = Object.keys(patch) as (keyof T)[];
+  if (keys.every((k) => cur[k] === patch[k])) return prev;
   const next = [...prev];
-  next[i] = { ...s, [key]: value };
+  next[i] = { ...cur, ...patch };
   return next;
 }
+
+const patchSession = (prev: RailItem[], id: string, patch: Partial<Session>) =>
+  patchItem(prev, id, isSession, patch);
+
+const patchDivider = (prev: RailItem[], id: string, patch: Partial<Divider>) =>
+  patchItem(prev, id, isDivider, patch);
 
 const PERSIST_KEY = "beecork.sessions.v1";
 
@@ -304,32 +351,32 @@ export function useSessions() {
   }, []);
 
   const rename = useCallback((id: string, custom: string) => {
-    setItems((prev) => patchSession(prev, id, "custom", custom.trim() || undefined));
+    setItems((prev) => patchSession(prev, id, { custom: custom.trim() || undefined }));
   }, []);
 
   const setDynamic = useCallback((id: string, dynamic: string) => {
-    setItems((prev) => patchSession(prev, id, "dynamic", dynamic.trim() || undefined));
+    setItems((prev) => patchSession(prev, id, { dynamic: dynamic.trim() || undefined }));
   }, []);
 
   const setCwd = useCallback((id: string, cwd: string) => {
-    setItems((prev) => patchSession(prev, id, "cwd", cwd));
+    setItems((prev) => patchSession(prev, id, { cwd }));
   }, []);
 
   const setRunning = useCallback((id: string, running: string | undefined) => {
-    setItems((prev) => patchSession(prev, id, "running", running));
+    setItems((prev) => patchSession(prev, id, { running }));
   }, []);
 
   // The running agent's conversation id (from the status poll), persisted so a
   // relaunch resumes this tab's own chat.
   const setAgentId = useCallback((id: string, agentId: string | undefined) => {
-    setItems((prev) => patchSession(prev, id, "agentId", agentId));
+    setItems((prev) => patchSession(prev, id, { agentId }));
   }, []);
 
   // Dismiss a restored session's "Resume" offer (they resumed it, or started
   // typing their own thing) — clears both the agent and its saved conversation id.
   const clearResume = useCallback((id: string) => {
     setItems((prev) =>
-      patchSession(patchSession(prev, id, "resumeAgent", undefined), id, "resumeSessionId", undefined)
+      patchSession(prev, id, { resumeAgent: undefined, resumeSessionId: undefined })
     );
   }, []);
 
@@ -381,13 +428,7 @@ export function useSessions() {
   }, []);
 
   const renameDivider = useCallback((id: string, name: string) => {
-    setItems((prev) => {
-      const i = prev.findIndex((x) => isDivider(x) && x.id === id);
-      if (i < 0 || (prev[i] as Divider).name === name.trim()) return prev;
-      const next = [...prev];
-      next[i] = { ...(prev[i] as Divider), name: name.trim() };
-      return next;
-    });
+    setItems((prev) => patchDivider(prev, id, { name: name.trim() }));
   }, []);
 
   // Removing a divider destroys nothing — its sections just merge.

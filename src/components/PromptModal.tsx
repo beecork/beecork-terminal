@@ -31,8 +31,8 @@ export default function PromptModal({
     if (!el) return;
     el.focus();
     el.setSelectionRange(0, selectTo ?? initialValue.length);
-    // run once on mount
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // Mount only: this seeds the field, so re-running on a prop change would
+    // yank the caret back while the user is typing.
   }, []);
 
   const submit = () => {

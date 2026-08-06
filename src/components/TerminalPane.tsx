@@ -6,7 +6,16 @@ import { SearchAddon } from "@xterm/addon-search";
 import { invoke, Channel } from "@tauri-apps/api/core";
 import { getRoot, revealPath, openUrl } from "../lib/api";
 import { useSettings, zoomFont, SMOOTH_SCROLL_MS, type Theme, type Surface } from "../lib/settings";
-import { decodeBase64, PATH_RE, URL_RE, looksLikePath, splitFileLine, parseOsc7 } from "../lib/paths";
+import {
+  decodeBase64,
+  isAbsolute,
+  joinPath,
+  PATH_RE,
+  URL_RE,
+  looksLikePath,
+  splitFileLine,
+  parseOsc7,
+} from "../lib/paths";
 import { resumeCommand } from "../lib/sessions";
 import { useContextMenu } from "../lib/useContextMenu";
 import { copyText, readText } from "../lib/clipboard";
@@ -156,6 +165,20 @@ export default function TerminalPane({
   const cbRef = useRef({ onOpenPath, onBell, onSeen, onTitle, onCwd, onStatusHint, onActivity, onResumeConsumed });
   cbRef.current = { onOpenPath, onBell, onSeen, onTitle, onCwd, onStatusHint, onActivity, onResumeConsumed };
 
+  // Has this pane ever been on screen? Gates building the xterm at all.
+  //
+  // Every session renders a TerminalPane (they must, so their shells keep
+  // running), but a pane you have never opened has nothing to draw: building it
+  // eagerly meant one Terminal + one WebGL context per session, and a webview
+  // only grants a handful of GL contexts before it starts dropping them. Once
+  // built it is never torn down, mirroring the lazy shell spawn below.
+  //
+  // Latched during render rather than in an effect: React re-runs this component
+  // immediately with the new value, before committing or touching the DOM, so
+  // the terminal is built in the SAME pass the pane first becomes visible. An
+  // effect would commit an empty pane first and build on a second render.
+  const [rendered, setRendered] = useState(visible);
+  if (visible && !rendered) setRendered(true);
   const [showSearch, setShowSearch] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -228,17 +251,24 @@ export default function TerminalPane({
 
   function openToken(token: string, reveal = false) {
     const { file, line } = splitFileLine(token);
-    let abs = file;
-    if (!file.startsWith("/")) {
-      const root = rootRef.current;
-      if (root) abs = root.replace(/\/$/, "") + "/" + file.replace(/^\.\//, "");
-    }
+    // A relative token resolves against THIS SESSION's working directory — the
+    // folder the output actually came from — not the app process's cwd. A
+    // Finder-launched .app has cwd `/`, so basing this on `get_root()` silently
+    // turned "src/App.tsx" into "/src/App.tsx". It only ever failed in the
+    // installed app, because `tauri dev` runs the binary from the project root.
+    const base = lastCwdRef.current ?? startCwd ?? rootRef.current;
+    const abs = isAbsolute(file)
+      ? file
+      : base
+        ? joinPath(base, file.replace(/^\.[\\/]/, ""))
+        : file;
     // ⌘/Ctrl-click reveals in Finder; a plain click opens it in the editor.
     if (reveal) void revealPath(abs).catch(() => {});
     else cbRef.current.onOpenPath(abs, line);
   }
 
   useEffect(() => {
+    if (!rendered) return;
     if (!hostRef.current || !mountRef.current) return;
     let disposed = false;
     let cwdHintTimer: ReturnType<typeof setTimeout> | undefined;
@@ -409,7 +439,9 @@ export default function TerminalPane({
 
     const titleSub = term.onTitleChange((t) => {
       // Terminal output controls this via OSC escapes — strip control chars
-      // and cap the length before it reaches the session/window title.
+      // and cap the length before it reaches the session/window title. The
+      // control characters in this class are the point, not an accident.
+      // eslint-disable-next-line no-control-regex
       const clean = t.replace(/[\u0000-\u001f\u007f]/g, "").slice(0, 120);
       cbRef.current.onTitle(sessionId, clean);
     });
@@ -484,14 +516,20 @@ export default function TerminalPane({
       fitRef.current = null;
       searchRef.current = null;
     };
-  }, [sessionId]);
+  }, [sessionId, rendered]);
 
-  // On becoming visible (either split pane), refit and clear "wants you" — you
-  // can see it now. (A width change while already visible is handled by the
-  // ResizeObserver.)
+  // Becoming visible clears "wants you" — you can see it now. Kept separate from
+  // the fit/spawn below so acknowledging attention never waits on the terminal
+  // having been built.
   useEffect(() => {
     if (!visible) return;
     cbRef.current.onSeen(sessionId);
+  }, [visible, sessionId]);
+
+  // On becoming visible (either split pane), refit. (A width change while
+  // already visible is handled by the ResizeObserver.)
+  useEffect(() => {
+    if (!visible || !rendered) return;
     const raf = requestAnimationFrame(() => {
       try {
         fitRef.current?.fit();
@@ -511,7 +549,7 @@ export default function TerminalPane({
       }
     });
     return () => cancelAnimationFrame(raf);
-  }, [visible, sessionId]);
+  }, [visible, sessionId, rendered]);
 
   // Only the focused pane grabs the keyboard. `focusSignal` bumps when an overlay
   // (settings, confirm, file panel) closes, so the terminal refocuses without a click.

@@ -23,6 +23,13 @@ const WORK_MIN_MS = 2500;
 // window. The amber dot still lights; only the repeat sound is suppressed.
 // Precise signals (bell, command exit) are exempt and always chime.
 const INFER_RECHIME_MS = 60_000;
+// How often the batched status poll runs.
+const POLL_MS = 2000;
+// …and how many of those ticks also resolve each running agent's conversation
+// id. That lookup reads the filesystem, and its only consumer is the persisted
+// layout (so a relaunch reopens THIS tab's chat) — it needs to be current by the
+// time you quit, not every tick. 15 ticks ≈ every 30s.
+const AGENT_EVERY = 15;
 
 function addId(set: Set<string>, id: string): Set<string> {
   if (set.has(id)) return set;
@@ -51,7 +58,9 @@ export function useSessionStatus(
   visibleIds: string[],
   setCwd: (id: string, cwd: string) => void,
   setRunning: (id: string, running: string | undefined) => void,
-  setAgentId: (id: string, agentId: string | undefined) => void
+  setAgentId: (id: string, agentId: string | undefined) => void,
+  /** the user's configured startup folder — the honest seed for the folder view */
+  defaultCwd?: string
 ) {
   const [terminalCwd, setTerminalCwd] = useState<string | null>(null);
   const [wantsYou, setWantsYou] = useState<Set<string>>(() => new Set());
@@ -239,9 +248,23 @@ export function useSessionStatus(
     [clearWants]
   );
 
+  // Seed the folder view before the first status poll lands. Prefer the user's
+  // configured default folder; `get_root()` is only a last resort, because it is
+  // the APP PROCESS's cwd — `/` for a Finder-launched .app, which would root the
+  // file tree at the whole filesystem. Seeding never OVERWRITES a cwd we already
+  // know: the async resolve used to land after the restore below and clobber a
+  // restored session's folder with the process cwd.
   useEffect(() => {
-    getRoot().then(setTerminalCwd).catch(() => {});
-  }, []);
+    let cancelled = false;
+    const seed = (p: string) => {
+      if (!cancelled && p) setTerminalCwd((prev) => prev ?? p);
+    };
+    if (defaultCwd) seed(defaultCwd);
+    else getRoot().then(seed).catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [defaultCwd]);
 
   // Immediate status on session switch.
   useEffect(() => {
@@ -251,16 +274,30 @@ export function useSessionStatus(
   }, [activeId, applyStatus]);
 
   // Poll every session for cwd + running command — one batched call per tick.
+  //
+  // This deliberately keeps running when the window is hidden. It looks like an
+  // obvious thing to pause, but a hidden window is exactly when this poll earns
+  // its keep: it is the ONLY producer that notices a silent background command
+  // finishing (running → idle), which is the "come look, it's done" signal you
+  // most want while you're in another app. What *is* skipped is the expensive
+  // half — see AGENT_EVERY.
   useEffect(() => {
+    let tick = 0;
     const t = setInterval(() => {
       const ids = sessionsRef.current.map((s) => s.id);
       if (!ids.length) return;
-      ptyStatusAll(ids)
+      // Resolving each agent's conversation id costs a transcript-directory scan
+      // (and sometimes an `lsof`) per running agent. Its only consumer is the
+      // persisted layout, so it has to be current by the time you QUIT — not
+      // twice a second. Ask on the first tick, then every AGENT_EVERY ticks.
+      const withAgents = tick % AGENT_EVERY === 0;
+      tick++;
+      ptyStatusAll(ids, withAgents)
         .then((map) => {
           for (const [id, st] of Object.entries(map)) applyStatus(id, st);
         })
         .catch(() => {});
-    }, 2000);
+    }, POLL_MS);
     return () => clearInterval(t);
   }, [applyStatus]);
 

@@ -1,5 +1,12 @@
 // Filesystem commands for the file-browser panel: list a directory, read a
 // file for viewing/editing, and write it back.
+//
+// Everything that touches the disk or spawns a helper process is
+// `#[tauri::command(async)]`, which runs it on the async runtime instead of
+// INLINE on the IPC/main thread (the default for a sync command). A directory
+// listing on a cold/network volume, a 2 MB read, or a `trash::delete` is easily
+// long enough to be felt as a frozen window. `get_root`/`home_dir` are pure env
+// lookups and stay sync — the hop would cost more than the work.
 
 use std::cmp::Ordering;
 use std::path::PathBuf;
@@ -16,7 +23,6 @@ pub struct Entry {
 
 #[derive(Serialize)]
 pub struct Listing {
-    path: String,
     entries: Vec<Entry>,
 }
 
@@ -51,16 +57,34 @@ pub fn get_root() -> String {
     project_root().to_string_lossy().into_owned()
 }
 
+/// The user's home directory, if the environment exposes one. THE single place
+/// this is worked out — a GUI launch gives no shell cwd but does give `HOME`
+/// (`USERPROFILE` on Windows), and four separate copies of that little bit of
+/// knowledge is how three of them end up fixed and the fourth doesn't.
+pub fn home() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+        .filter(|p| !p.as_os_str().is_empty())
+}
+
+/// The home directory as a string, falling back to the filesystem root — for the
+/// callers that need *some* directory and can't do anything with `None`.
+pub fn home_or_root() -> String {
+    home()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "/".to_string())
+}
+
 /// The user's home directory — offered as the default startup folder on first run.
 #[tauri::command]
 pub fn home_dir() -> String {
-    let var = if cfg!(target_os = "windows") { "USERPROFILE" } else { "HOME" };
-    std::env::var(var).unwrap_or_else(|_| "/".to_string())
+    home_or_root()
 }
 
 /// Reveal a path in the OS file manager (Finder / Explorer / default), selecting
 /// it where the platform supports it.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn reveal_path(path: String) -> Result<(), String> {
     use std::process::Command;
     #[cfg(target_os = "macos")]
@@ -81,7 +105,7 @@ pub fn reveal_path(path: String) -> Result<(), String> {
 
 /// Open an http(s) URL in the user's default browser. Only web URLs are allowed —
 /// never `file://`, `javascript:`, etc. — since URLs can come from terminal output.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn open_url(url: String) -> Result<(), String> {
     if !(url.starts_with("http://") || url.starts_with("https://")) {
         return Err("Refusing to open a non-http(s) URL.".into());
@@ -97,7 +121,7 @@ pub fn open_url(url: String) -> Result<(), String> {
 }
 
 /// Rename / move a filesystem entry. Refuses to clobber an existing target.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn rename_path(from: String, to: String) -> Result<(), String> {
     if std::path::Path::new(&to).exists() {
         return Err(format!("“{}” already exists", basename(&to)));
@@ -106,7 +130,7 @@ pub fn rename_path(from: String, to: String) -> Result<(), String> {
 }
 
 /// Create an empty file or a directory. Errors if the path already exists.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn create_path(path: String, is_dir: bool) -> Result<(), String> {
     let p = std::path::Path::new(&path);
     if p.exists() {
@@ -123,20 +147,21 @@ pub fn create_path(path: String, is_dir: bool) -> Result<(), String> {
 }
 
 /// Move a path to the OS trash — recoverable, never a permanent delete.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn delete_path(path: String) -> Result<(), String> {
     trash::delete(&path).map_err(|e| e.to_string())
 }
 
-/// Last path segment (for user-facing error messages).
-fn basename(p: &str) -> &str {
+/// Last path segment, on either separator flavour. Shared: used for user-facing
+/// error messages here, and for classifying argv[0] / a shell program in `pty`.
+pub fn basename(p: &str) -> &str {
     p.trim_end_matches(['/', '\\'])
         .rsplit(['/', '\\'])
         .next()
         .unwrap_or(p)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn list_dir(path: Option<String>) -> Result<Listing, String> {
     let dir = path.map(PathBuf::from).unwrap_or_else(project_root);
 
@@ -158,22 +183,19 @@ pub fn list_dir(path: Option<String>) -> Result<Listing, String> {
         _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
     });
 
-    Ok(Listing {
-        path: dir.to_string_lossy().into_owned(),
-        entries,
-    })
+    Ok(Listing { entries })
 }
 
 /// Byte size of a regular file (follows symlinks). Used by the media viewer to
 /// guard against decoding an enormous image into the webview — the asset protocol
 /// streams the bytes, so `read_file`'s size cap never runs on that path.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn file_size(path: String) -> Result<f64, String> {
     let meta = std::fs::metadata(&path).map_err(|e| e.to_string())?;
     Ok(meta.len() as f64)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn read_file(path: String) -> Result<FileData, String> {
     // `metadata` follows symlinks; reject anything that isn't a regular file
     // (a FIFO/device in an opened repo would otherwise block the read forever).
@@ -199,7 +221,7 @@ pub fn read_file(path: String) -> Result<FileData, String> {
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn write_file(
     path: String,
     content: String,
