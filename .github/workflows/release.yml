@@ -22,7 +22,11 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: 20
+          # 22 (LTS), not 20: jsdom's bundled undici calls
+          # `webidl.util.markAsUncloneable`, which Node 20 doesn't have, so the
+          # component tests couldn't even start a worker there. GitHub also now
+          # flags Node 20 as deprecated on its runners. Matches local dev.
+          node-version: 22
           cache: npm
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
       # The updater manifest (latest.json) advertises the version from
@@ -102,7 +106,11 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: 20
+          # 22 (LTS), not 20: jsdom's bundled undici calls
+          # `webidl.util.markAsUncloneable`, which Node 20 doesn't have, so the
+          # component tests couldn't even start a worker there. GitHub also now
+          # flags Node 20 as deprecated on its runners. Matches local dev.
+          node-version: 22
           cache: npm
 
       - name: Install Rust
