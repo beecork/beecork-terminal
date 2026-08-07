@@ -103,13 +103,15 @@ git push --follow-tags
 > GitHub, nothing would build. If you ever end up with a lightweight tag, push it
 > explicitly instead: `git push origin v0.1.0`.
 
-> ⚠️ **Pushing the tag currently does NOT start a build — you must dispatch it.**
-> Observed on v0.1.25 (2026-08-06): the tag reached GitHub (`refs/tags/v0.1.25`
-> confirmed on the remote), the workflow was `active`, Actions was enabled, and the
-> `on: push: tags: v*` trigger was byte-identical to the last release that worked —
-> and no run was created at all. Twice, on two separate pushes of the tag.
+> ⚠️ **A tag push can be badly delayed — dispatch instead of waiting.**
+> Observed on v0.1.25 (2026-08-06): the tag reached GitHub and no run appeared for
+> many minutes, on two separate pushes. (Corrected on v0.1.26: those push runs DID
+> eventually arrive, ~20 minutes late. So the trigger is not broken, it is
+> unreliable — and on v0.1.26 it fired promptly, producing a SECOND run racing the
+> dispatched one. Cancel one if that happens; prefer keeping the dispatched run,
+> since v0.1.24's push-triggered run is the one that failed to publish.)
 >
-> **So after pushing the tag, always run:**
+> **So after pushing the tag, don't wait — run:**
 > ```bash
 > gh workflow run release.yml --ref v0.1.25   # the TAG, not main
 > gh run watch $(gh api "repos/beecork/beecork-terminal/actions/runs?per_page=1" --jq '.workflow_runs[0].id')

@@ -135,9 +135,11 @@ repo's config is attacker-controlled input.
   (plus `package-lock.json`, which `npm install` refreshes). CI checks all five.
 - **The tag must be annotated** (`git tag -a`) — `--follow-tags` pushes only
   annotated tags, so a lightweight one is silently left behind.
-- **Pushing the tag does not reliably start the build.** Dispatch it:
-  `gh workflow run release.yml --ref vX.Y.Z`, then confirm with `gh release view`
-  that it actually published. v0.1.24 built green and never shipped.
+- **Pushing the tag does not *reliably* start the build** — it has been ~20
+  minutes late, and it has also fired promptly and produced a second run racing a
+  dispatched one. Dispatch rather than wait: `gh workflow run release.yml --ref
+  vX.Y.Z`, cancel the duplicate if one appears, then confirm with `gh release
+  view` that it actually published. v0.1.24 built green and never shipped.
 - **Never regenerate the updater signing key.** The public key in
   `tauri.conf.json` must match the private key in repo secrets and in every
   installed copy, or all existing installs reject every future update.
