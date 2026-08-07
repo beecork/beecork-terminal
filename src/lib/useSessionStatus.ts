@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getRoot, ptyStatus, ptyStatusAll, type PtyStatus } from "./api";
-import { wantsAttention, displayName, type Session } from "./sessions";
+import { wantsAttention, displayName, RESUMABLE_AGENTS, type Session } from "./sessions";
 import { notify } from "./notify";
+import { useLatestWins } from "./latest";
 import * as sound from "./sound";
 
 // Output must pause at least this long for the busy dot to turn off.
@@ -30,6 +31,15 @@ const POLL_MS = 2000;
 // layout (so a relaunch reopens THIS tab's chat) — it needs to be current by the
 // time you quit, not every tick. 15 ticks ≈ every 30s.
 const AGENT_EVERY = 15;
+// …but the moment an agent STARTS is the one time that slow cadence hurts: start
+// Claude, quit inside 30 seconds, and the tab never captured a conversation id,
+// so the restored session falls back to the generic `--continue` and reopens
+// whichever chat ran last — exactly the failure per-tab resume exists to
+// prevent. One lookup at the transition isn't enough either: a just-started
+// agent hasn't written its transcript yet, so the first few come back empty.
+// Grant a short window of eager ticks instead, ended early once every running
+// agent has its id.
+const AGENT_EAGER_TICKS = 15;
 
 function addId(set: Set<string>, id: string): Set<string> {
   if (set.has(id)) return set;
@@ -82,6 +92,12 @@ export function useSessionStatus(
   // of inside a setState updater (which must stay side-effect free).
   const wantsRef = useRef<Set<string>>(new Set());
 
+  // Guards against a slow status reply overwriting a fresher one — see latest.ts.
+  const latest = useLatestWins();
+  // Remaining eager agent-id ticks (see AGENT_EAGER_TICKS). One counter, not a
+  // per-session map: nothing to leak, and markClosed needs no extra cleanup.
+  const agentEager = useRef(0);
+
   const activeIdRef = useRef(activeId);
   activeIdRef.current = activeId;
   const sessionsRef = useRef(sessions);
@@ -109,12 +125,26 @@ export function useSessionStatus(
   const flagWants = useCallback((id: string, inferred: boolean) => {
     if (wantsRef.current.has(id)) return;
     const now = performance.now();
-    if (!inferred || now - (inferredChimeAt.current[id] ?? -Infinity) >= INFER_RECHIME_MS) {
-      if (inferred) inferredChimeAt.current[id] = now;
-      sound.attention();
-    }
+    // Decide the chime (and stamp the rate limit only when it will really sound),
+    // then light the dot, and only THEN make noise. Sound is best-effort and the
+    // flag is not: a throwing sound call must never cost the user their "needs
+    // you" dot and OS notification — the same rule the bell path in TerminalPane
+    // spells out. This was the last site where the order was still the other way.
+    const chime =
+      !inferred || now - (inferredChimeAt.current[id] ?? -Infinity) >= INFER_RECHIME_MS;
+    if (chime && inferred) inferredChimeAt.current[id] = now;
     wantsRef.current = addId(wantsRef.current, id);
     setWantsYou(wantsRef.current);
+    if (chime) {
+      // Ordering alone is not enough: an exception escaping the caller aborts
+      // React's pending state flush too, so the dot would still never light.
+      // Same guard the terminal's Enter tone uses.
+      try {
+        sound.attention();
+      } catch {
+        /* never let audio cost the user their notification */
+      }
+    }
   }, []);
 
   const applyCwd = useCallback(
@@ -128,10 +158,13 @@ export function useSessionStatus(
   );
 
   const applyStatus = useCallback(
-    (id: string, st: PtyStatus) => {
+    (id: string, st: PtyStatus, ticket: number) => {
       // Drop late responses for a session that's already closed (else a stale
       // {running:null} could re-flag a gone session as "wants you").
       if (!sessionsRef.current.some((s) => s.id === id)) return;
+      // …and drop one that a newer reply for THIS session already overtook. The
+      // status commands are async now, so completion order is not call order.
+      if (!latest.accept(id, ticket)) return;
       if (st.cwd) applyCwd(id, st.cwd);
       const nowRunning = st.running ?? undefined;
       const was = prevRunning.current[id];
@@ -144,6 +177,12 @@ export function useSessionStatus(
       if (wantsAttention(was, nowRunning, visibleIdsRef.current.includes(id))) {
         flagWants(id, false); // a command really exited — precise, always chimes
       }
+      // An agent just started — resolve its conversation id promptly rather than
+      // waiting up to 30s for the next slow tick. Gated to the agents the backend
+      // can actually resolve, or a `vim` tab would arm this forever.
+      if (!was && nowRunning && RESUMABLE_AGENTS.has(nowRunning)) {
+        agentEager.current = AGENT_EAGER_TICKS;
+      }
       prevRunning.current[id] = nowRunning;
       setRunning(id, nowRunning);
       // Pin the running agent's conversation id. When the agent exits (running →
@@ -153,7 +192,7 @@ export function useSessionStatus(
       const agentId = st.agent_session ?? undefined;
       if (agentId || !nowRunning) setAgentId(id, agentId);
     },
-    [applyCwd, setRunning, setAgentId, flagWants]
+    [applyCwd, setRunning, setAgentId, flagWants, latest]
   );
 
   const onCwd = useCallback((id: string, path: string) => applyCwd(id, path), [applyCwd]);
@@ -161,9 +200,10 @@ export function useSessionStatus(
   const onStatusHint = useCallback(
     (id: string) => {
       if (id !== activeIdRef.current) return;
-      ptyStatus(id).then((st) => applyStatus(id, st)).catch(() => {});
+      const ticket = latest.take();
+      ptyStatus(id).then((st) => applyStatus(id, st, ticket)).catch(() => {});
     },
-    [applyStatus]
+    [applyStatus, latest]
   );
 
   // Every output chunk marks the session busy and (re)arms the quiet timers.
@@ -242,10 +282,11 @@ export function useSessionStatus(
       clearTimeout(attnTimers.current[id]);
       delete attnTimers.current[id];
       bellRang.current.delete(id);
+      latest.forget(id);
       clearWants(id);
       setBusy((prev) => delId(prev, id));
     },
-    [clearWants]
+    [clearWants, latest]
   );
 
   // Seed the folder view before the first status poll lands. Prefer the user's
@@ -270,8 +311,9 @@ export function useSessionStatus(
   useEffect(() => {
     const known = sessionsRef.current.find((s) => s.id === activeId)?.cwd;
     if (known) setTerminalCwd(known);
-    ptyStatus(activeId).then((st) => applyStatus(activeId, st)).catch(() => {});
-  }, [activeId, applyStatus]);
+    const ticket = latest.take();
+    ptyStatus(activeId).then((st) => applyStatus(activeId, st, ticket)).catch(() => {});
+  }, [activeId, applyStatus, latest]);
 
   // Poll every session for cwd + running command — one batched call per tick.
   //
@@ -290,16 +332,31 @@ export function useSessionStatus(
       // (and sometimes an `lsof`) per running agent. Its only consumer is the
       // persisted layout, so it has to be current by the time you QUIT — not
       // twice a second. Ask on the first tick, then every AGENT_EVERY ticks.
-      const withAgents = tick % AGENT_EVERY === 0;
+      // Stop resolving eagerly as soon as every running agent has its id.
+      if (
+        agentEager.current > 0 &&
+        !sessionsRef.current.some(
+          (s) => s.running && RESUMABLE_AGENTS.has(s.running) && !s.agentId
+        )
+      ) {
+        agentEager.current = 0;
+      }
+      const withAgents = tick % AGENT_EVERY === 0 || agentEager.current > 0;
+      if (agentEager.current > 0) agentEager.current--;
       tick++;
+      // ONE ticket for the whole batch, claimed per session id inside applyStatus.
+      const ticket = latest.take();
       ptyStatusAll(ids, withAgents)
         .then((map) => {
-          for (const [id, st] of Object.entries(map)) applyStatus(id, st);
+          for (const [id, st] of Object.entries(map)) applyStatus(id, st, ticket);
         })
         .catch(() => {});
     }, POLL_MS);
     return () => clearInterval(t);
-  }, [applyStatus]);
+    // `latest` is stable for the hook's lifetime (a lazy ref), so listing it
+    // cannot restart the interval — which it must not, or the poll would reset
+    // on every render.
+  }, [applyStatus, latest]);
 
   return { terminalCwd, wantsYou, busy, onCwd, onStatusHint, onActivity, onBell, onSeen, markClosed };
 }

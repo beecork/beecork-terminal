@@ -52,7 +52,7 @@ interface PromptState {
   initial: string;
   selectTo?: number;
   confirmLabel: string;
-  onSubmit: (value: string) => void;
+  onSubmit: (value: string) => void | Promise<void>;
 }
 
 type PanelLayout = "stacked" | "sideBySide";
@@ -138,13 +138,12 @@ export default function SidePanel({
       label: `Create in ${basename(dir) || dir}`,
       initial: "",
       confirmLabel: "Create",
-      onSubmit: (name) => {
+      // Rejects → PromptModal shows the backend's message and stays open, so the
+      // name can be fixed. Only close on success.
+      onSubmit: async (name) => {
         const full = joinPath(dir, name);
-        createPath(full, isDir)
-          .then(() => {
-            if (!isDir) openInFocused(full); // open a freshly-created file
-          })
-          .catch((err) => console.error("create failed", err));
+        await createPath(full, isDir);
+        if (!isDir) openInFocused(full); // open a freshly-created file
         setPrompt(null);
       },
     });
@@ -158,10 +157,8 @@ export default function SidePanel({
       initial: entry.name,
       selectTo: !entry.is_dir && dot > 0 ? dot : entry.name.length, // preselect the stem
       confirmLabel: "Rename",
-      onSubmit: (name) => {
-        renamePath(entry.path, joinPath(dirname(entry.path), name)).catch((err) =>
-          console.error("rename failed", err)
-        );
+      onSubmit: async (name) => {
+        await renamePath(entry.path, joinPath(dirname(entry.path), name));
         setPrompt(null);
       },
     });
@@ -419,8 +416,10 @@ export default function SidePanel({
           confirmLabel="Move to Trash"
           danger
           onCancel={() => setConfirmDelete(null)}
-          onConfirm={() => {
-            deletePath(confirmDelete.path).catch((err) => console.error("delete failed", err));
+          onConfirm={async () => {
+            // Same as the prompts: a failed trash must not close silently, or the
+            // user believes the file went to the Trash when it didn't.
+            await deletePath(confirmDelete.path);
             setConfirmDelete(null);
           }}
         />

@@ -78,6 +78,10 @@ interface Props {
   active: boolean;
   /** directory the shell should start in (new sessions inherit the active cwd) */
   startCwd?: string;
+  /** where the session IS right now, from the status poll (`session.cwd`). The
+   *  poll reads the shell process's own cwd, so this is the only source that
+   *  follows `cd` for a default zsh/bash — those never emit OSC 7. */
+  currentCwd?: string;
   onOpenPath: (path: string, line?: number) => void;
   /** terminal bell rang */
   onBell: (id: string) => void;
@@ -113,6 +117,7 @@ export default function TerminalPane({
   visible,
   active,
   startCwd,
+  currentCwd,
   onOpenPath,
   onBell,
   onSeen,
@@ -153,9 +158,22 @@ export default function TerminalPane({
   // sessions don't all cold-start at once, and a hidden (display:none) pane never
   // starts its shell at the wrong 80×24 size. See the `visible` effect below.
   const spawnedRef = useRef(false);
-  // Last cwd this shell reported (via OSC 7) — so a revived shell restarts where
-  // the session actually is, not back in its mount-time startCwd.
+  // Last cwd this shell reported via OSC 7 — instant, but only shells with
+  // explicit integration emit it. A default macOS zsh does NOT: /etc/zshrc only
+  // sources /etc/zshrc_$TERM_PROGRAM, and we present as TERM_PROGRAM=Beecork, so
+  // Apple's update_terminal_cwd never runs. For most users this stays null.
   const lastCwdRef = useRef<string | null>(null);
+  // …which is why the poll-derived cwd matters. Held in a ref because both
+  // readers live in closures built ONCE in the mount effect (the link provider's
+  // `activate`, and `spawn`) — reading the prop there would pin it to whatever
+  // the value was on the pane's first render, making the whole thing inert.
+  const currentCwdRef = useRef(currentCwd);
+  currentCwdRef.current = currentCwd;
+  // A directory a spawn already failed on — almost always one deleted out from
+  // under the session. Both cwd sources can still point at it (OSC 7's last push,
+  // and the polled cwd, which cannot refresh while the shell is dead), so
+  // remember it and skip it on the retry rather than failing on it forever.
+  const badCwdRef = useRef<string | null>(null);
 
   const { theme, settings, update } = useSettings();
   const lookRef = useRef({ theme, settings });
@@ -256,7 +274,13 @@ export default function TerminalPane({
     // Finder-launched .app has cwd `/`, so basing this on `get_root()` silently
     // turned "src/App.tsx" into "/src/App.tsx". It only ever failed in the
     // installed app, because `tauri dev` runs the binary from the project root.
-    const base = lastCwdRef.current ?? startCwd ?? rootRef.current;
+    //
+    // Freshest first: the shell's own OSC 7 push, then the cwd the status poll
+    // read from the shell process. OSC 7 is NOT the primary source — a default
+    // zsh/bash never emits it — so for most users the polled cwd is the one that
+    // actually tracks `cd`, and startCwd is only the seed until the first poll.
+    const base =
+      lastCwdRef.current ?? currentCwdRef.current ?? startCwd ?? rootRef.current;
     const abs = isAbsolute(file)
       ? file
       : base
@@ -405,25 +429,43 @@ export default function TerminalPane({
           sound.exit(); // after the banner — a throwing sound must not eat it
         }
       };
+      // Restart where the session actually IS: the shell's own OSC 7 push, else
+      // the polled cwd, else the mount cwd, the configured default folder, and
+      // finally the Rust home fallback (null). A directory a previous spawn
+      // already failed on is skipped — without that, adding the polled cwd would
+      // brick the pane, because it cannot refresh while the shell is dead.
+      const cwd =
+        [
+          lastCwdRef.current,
+          currentCwdRef.current,
+          startCwd,
+          lookRef.current.settings.defaultCwd,
+        ].find((c): c is string => !!c && c !== badCwdRef.current) ?? null;
       invoke("pty_spawn", {
         id: sessionId,
-        // Restart where the session actually is; fall back to the mount cwd, then
-        // the configured default folder, then the Rust home fallback (null).
-        cwd: lastCwdRef.current ?? startCwd ?? lookRef.current.settings.defaultCwd ?? null,
+        cwd,
         onEvent: channel,
         shell: null,
         cols: term.cols,
         rows: term.rows,
-      }).catch((e) => {
-        // A failed spawn (bad cwd, fd exhaustion, …) must not leave a silent dead
-        // pane: mark it exited so a keypress retries, and say what happened.
-        console.error("pty_spawn failed", e);
-        exitedRef.current = true;
-        // The usual cause is a gone directory — clear it so the retry falls back
-        // to startCwd / root instead of failing on the same dead cwd forever.
-        lastCwdRef.current = null;
-        term.write(`\r\n\x1b[31m[failed to start shell: ${e} — press any key to retry]\x1b[0m\r\n`);
-      });
+      })
+        .then(() => {
+          badCwdRef.current = null; // this directory works — stop skipping it
+        })
+        .catch((e) => {
+          // A failed spawn (bad cwd, fd exhaustion, …) must not leave a silent
+          // dead pane: mark it exited so a keypress retries, and say what happened.
+          console.error("pty_spawn failed", e);
+          exitedRef.current = true;
+          // The usual cause is a gone directory. Remember it — and clear the OSC 7
+          // value, which may point at the same place — so the retry picks the next
+          // candidate instead of failing identically forever.
+          badCwdRef.current = cwd;
+          lastCwdRef.current = null;
+          term.write(
+            `\r\n\x1b[31m[failed to start shell: ${e} — press any key to retry]\x1b[0m\r\n`
+          );
+        });
     };
     restartRef.current = spawn;
 
@@ -605,6 +647,10 @@ export default function TerminalPane({
     else searchRef.current?.findPrevious(term);
   }
 
+  // null for an agent we don't know how to resume — no pill at all, rather than
+  // offering a command that doesn't exist. See resumeCommand's allowlist.
+  const resumeCmd = resumeAgent ? resumeCommand(resumeAgent, resumeSessionId) : null;
+
   return (
     <div
       className="terminal-wrap"
@@ -619,15 +665,12 @@ export default function TerminalPane({
           <Close size={14} />
         </button>
       )}
-      {resumeAgent && visible && (
+      {resumeCmd && visible && (
         <button
           className="term-resume"
-          title={`Run "${resumeCommand(resumeAgent, resumeSessionId)}" to pick this agent back up`}
+          title={`Run "${resumeCmd}" to pick this agent back up`}
           onClick={() => {
-            invoke("pty_write", {
-              id: sessionId,
-              data: resumeCommand(resumeAgent, resumeSessionId) + "\r",
-            }).catch(() => {});
+            invoke("pty_write", { id: sessionId, data: resumeCmd + "\r" }).catch(() => {});
             onResumeConsumed(sessionId);
             termRef.current?.focus();
           }}

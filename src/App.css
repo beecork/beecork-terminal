@@ -1680,3 +1680,16 @@ body {
   font-size: 11px;
   color: var(--muted);
 }
+
+/* Inline error inside a modal: a failed rename/create/delete keeps its dialog
+   open and shows the backend's own message instead of closing on a silent
+   no-op. Same red as the editor's error text. */
+.modal-error {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #f38ba8;
+}
+.modal.confirm .modal-error {
+  margin-top: 10px; /* .modal.confirm .modal-body zeroes the body gap */
+}

@@ -132,7 +132,7 @@ git push --follow-tags
 > ever fails this way again, re-run it via `workflow run` rather than chasing the
 > permission.
 
-The tag triggers `release.yml`. ~10–15 min later a **GitHub Release** appears with:
+Once the run is dispatched, ~10–15 min later a **GitHub Release** appears with:
 `.dmg` (arm64 + x64), `.msi` + `.exe` (Windows), `.AppImage` + `.deb` (Linux).
 
 ---

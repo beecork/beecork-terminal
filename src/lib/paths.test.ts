@@ -309,6 +309,13 @@ describe("isDirectChild", () => {
     expect(isDirectChild("/a", "/")).toBe(true);
     expect(isDirectChild("/a/b", "/")).toBe(false);
   });
+  // Regression: `dirname` special-cases the drive root upward ("C:\a" → "C:\")
+  // while isDirectChild normalized downward ("C:\" → "C:"), so they could never
+  // meet and the file tree stopped refreshing there.
+  it("works at a Windows drive root", () => {
+    expect(isDirectChild("C:\\a.ts", "C:\\")).toBe(true);
+    expect(isDirectChild("C:\\a\\b.ts", "C:\\")).toBe(false);
+  });
   it("works on Windows paths", () => {
     expect(isDirectChild("C:\\repo\\a.ts", "C:\\repo")).toBe(true);
     expect(isDirectChild("C:\\repo\\sub\\a.ts", "C:\\repo")).toBe(false);

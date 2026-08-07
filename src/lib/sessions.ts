@@ -62,24 +62,49 @@ export function isDivider(item: RailItem): item is Divider {
 }
 
 /**
- * The shell command that resumes an agent. With a specific `sessionId` we resume
- * THAT conversation (`claude --resume <id>`) so each tab reopens its own chat;
- * without one we fall back to "continue the latest", the best we can do when the
- * id was never captured.
+ * Agents we know how to resume — and the ONLY values the Resume pill may offer.
+ *
+ * `agent` is captured from the foreground process name, and `classify_command`
+ * (pty.rs) returns the basename of whatever was running: `vim`, `htop`, `npm`.
+ * Without this gate, quitting inside vim restored a "⟳ Resume vim" pill that
+ * typed `vim --continue` into the shell and pressed Enter for you. It is also
+ * the set whose conversation id the backend can resolve at all —
+ * `resolve_agent_session` (agents.rs) has match arms for exactly these two.
  */
-export function resumeCommand(agent: string, sessionId?: string): string {
-  if (sessionId) {
-    const map: Record<string, string> = {
-      claude: `claude --resume ${sessionId}`,
-      codex: `codex resume ${sessionId}`,
-    };
-    return map[agent] ?? `${agent} --resume ${sessionId}`;
-  }
-  const map: Record<string, string> = {
+const RESUMABLE = ["claude", "codex"] as const;
+export type ResumableAgent = (typeof RESUMABLE)[number];
+
+export function isResumableAgent(agent: string | undefined): agent is ResumableAgent {
+  return !!agent && (RESUMABLE as readonly string[]).includes(agent);
+}
+
+/** Set form, for the status poll's eager agent-id window. */
+export const RESUMABLE_AGENTS: ReadonlySet<string> = new Set(RESUMABLE);
+
+/**
+ * The shell command that resumes an agent, or `null` when we don't know how —
+ * which is also the signal not to offer a Resume pill at all. With a specific
+ * `sessionId` we resume THAT conversation (`claude --resume <id>`) so each tab
+ * reopens its own chat; without one we fall back to "continue the latest", the
+ * best we can do when the id was never captured.
+ *
+ * There is deliberately no generic `<agent> --continue` fallback: this string is
+ * written to the pty with a trailing Enter, so it may only ever be built from a
+ * name on the allowlist. (`aider --continue` was never a real flag either — the
+ * old fallback offered commands that don't exist.) The `Record<ResumableAgent, …>`
+ * maps make adding an agent a compile error until both forms are spelled out.
+ */
+export function resumeCommand(agent: string, sessionId?: string): string | null {
+  if (!isResumableAgent(agent)) return null;
+  const withId: Record<ResumableAgent, (id: string) => string> = {
+    claude: (id) => `claude --resume ${id}`,
+    codex: (id) => `codex resume ${id}`,
+  };
+  const latest: Record<ResumableAgent, string> = {
     claude: "claude --continue",
     codex: "codex resume",
   };
-  return map[agent] ?? `${agent} --continue`;
+  return sessionId ? withId[agent](sessionId) : latest[agent];
 }
 
 /** Priority: your rename → terminal title → running tool → folder → base name. */
@@ -267,8 +292,13 @@ export function useSessions() {
           cwd: s.cwd,
           startCwd: s.cwd,
           partner: s.partner,
-          resumeAgent: s.agent,
-          resumeSessionId: s.agentSession,
+          // Only trust a saved `agent` we know how to resume. Older saves (and
+          // any future backend relabelling) can hold a plain foreground command
+          // like "vim" — and guarding only the WRITE would leave those offering a
+          // bogus pill on the very next launch, since restore runs first. The
+          // conversation id goes with it: it means nothing without its agent.
+          resumeAgent: isResumableAgent(s.agent) ? s.agent : undefined,
+          resumeSessionId: isResumableAgent(s.agent) ? s.agentSession : undefined,
         };
       });
       const first = items.find((i) => !isDivider(i)) as Session;
@@ -313,7 +343,11 @@ export function useSessions() {
                 custom: i.custom,
                 cwd: i.cwd,
                 partner: i.partner,
-                agent: i.running ?? i.resumeAgent,
+                // Never persist a non-agent foreground command as something to
+                // resume (JSON.stringify drops the undefined key entirely).
+                agent: isResumableAgent(i.running ?? i.resumeAgent)
+                  ? (i.running ?? i.resumeAgent)
+                  : undefined,
                 agentSession: i.agentId ?? i.resumeSessionId,
               }
         ),

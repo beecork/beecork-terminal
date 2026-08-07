@@ -142,6 +142,39 @@ struct SoundCmd {
     volume: f32,
 }
 
+/// Chimes for an EVENT the user must not miss. Everything else is feedback for
+/// an action they just took, so an older one is stale the moment a newer one
+/// exists — dropping it is what a real instrument does, not a regression.
+const NEVER_DROP: &[&str] = &["attention", "exit"];
+
+/// Take `first` plus everything already queued behind it, and return what is
+/// still worth playing, in arrival order: every never-drop chime, plus at most
+/// the most RECENT droppable one.
+///
+/// Playback is serial and a chime spans up to ~155 ms, while the UI can ask for
+/// one every 45 ms (Enter autorepeat) into an unbounded channel — so the queue
+/// grows faster than it drains and the sounds fall progressively behind the
+/// keystrokes that caused them. When the thread IS keeping up (the normal case)
+/// nothing is queued and this returns `first` alone, so the first sound of a
+/// burst always plays; collapsing only happens among commands already waiting
+/// behind a playing sound.
+fn coalesce(first: SoundCmd, rx: &Receiver<SoundCmd>) -> Vec<SoundCmd> {
+    let mut queued = vec![first];
+    while let Ok(cmd) = rx.try_recv() {
+        queued.push(cmd);
+    }
+    if queued.len() == 1 {
+        return queued;
+    }
+    let last_stale = queued.iter().rposition(|c| !NEVER_DROP.contains(&c.kind.as_str()));
+    queued
+        .into_iter()
+        .enumerate()
+        .filter(|(i, c)| NEVER_DROP.contains(&c.kind.as_str()) || Some(*i) == last_stale)
+        .map(|(_, c)| c)
+        .collect()
+}
+
 /// Managed state: a handle to the dedicated audio thread. Playing never touches
 /// the UI/IPC thread — `play_sound` just enqueues.
 pub struct SoundState {
@@ -188,7 +221,9 @@ fn audio_loop(rx: Receiver<SoundCmd>) {
     #[cfg(windows)]
     let mut held: Option<(OutputStream, rodio::OutputStreamHandle)> = None;
 
-    while let Ok(cmd) = rx.recv() {
+    while let Ok(first) = rx.recv() {
+      // Drop what went stale while we were playing — see `coalesce`.
+      for cmd in coalesce(first, &rx) {
         let samples = render(&spec(&cmd.kind), cmd.volume);
         if samples.is_empty() {
             continue;
@@ -233,6 +268,7 @@ fn audio_loop(rx: Receiver<SoundCmd>) {
                 }
             }
         }
+      }
     }
 }
 
@@ -262,6 +298,29 @@ mod tests {
             // At least some energy — it's not silence.
             assert!(buf.iter().any(|s| s.abs() > 0.001), "{kind} is silent");
         }
+    }
+
+    #[test]
+    fn coalesce_passes_a_lone_sound_through() {
+        let (_tx, rx) = mpsc::channel::<SoundCmd>();
+        let out = coalesce(SoundCmd { kind: "send".into(), volume: 0.4 }, &rx);
+        assert_eq!(out.len(), 1, "the first sound of a burst must always play");
+        assert_eq!(out[0].kind, "send");
+    }
+
+    #[test]
+    fn coalesce_drops_stale_ticks_but_never_a_chime() {
+        let (tx, rx) = mpsc::channel::<SoundCmd>();
+        for v in [0.1f32, 0.2, 0.3] {
+            tx.send(SoundCmd { kind: "send".into(), volume: v }).unwrap();
+        }
+        tx.send(SoundCmd { kind: "attention".into(), volume: 0.5 }).unwrap();
+        tx.send(SoundCmd { kind: "send".into(), volume: 0.9 }).unwrap();
+        let out = coalesce(SoundCmd { kind: "send".into(), volume: 0.0 }, &rx);
+        let kinds: Vec<&str> = out.iter().map(|c| c.kind.as_str()).collect();
+        // The chime survives a wall of typing ticks; only the newest tick plays.
+        assert_eq!(kinds, ["attention", "send"]);
+        assert!((out[1].volume - 0.9).abs() < f32::EPSILON);
     }
 
     #[test]

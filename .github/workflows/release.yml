@@ -1,12 +1,19 @@
 name: Release
 
-# Cut a release by bumping the version in ALL THREE files, then tagging:
-#   package.json + src-tauri/tauri.conf.json + src-tauri/Cargo.toml  (Tauri uses
-#   tauri.conf.json for the bundle + updater — npm version alone is NOT enough),
-#   then: git commit -am vX.Y.Z && git tag vX.Y.Z && git push --follow-tags
-# The tag (vX.Y.Z) triggers tests + dependency audits, then a matrix build on
-# mac/win/linux that publishes a GitHub Release with the installers and the
-# signed updater manifest (latest.json). See RELEASING.md "Cutting a release".
+# Cut a release by bumping the version in ALL FOUR files, then tagging:
+#   package.json + src-tauri/tauri.conf.json + src-tauri/Cargo.toml +
+#   src-tauri/Cargo.lock  (Tauri reads tauri.conf.json for the bundle + updater,
+#   so `npm version` alone is NOT enough; a stale Cargo.lock dirties the build
+#   tree). `npm install` refreshes package-lock.json for you.
+#     git commit -am vX.Y.Z
+#     git tag -a vX.Y.Z -m vX.Y.Z   # MUST be annotated: --follow-tags pushes only those
+#     git push --follow-tags
+#     gh workflow run release.yml --ref vX.Y.Z   # pushing the tag does NOT reliably
+#                                                # start a run — dispatch it
+# The run does tests + dependency audits, then a matrix build on mac/win/linux
+# that publishes a GitHub Release with the installers and the signed updater
+# manifest (latest.json). See RELEASING.md "Cutting a release" — including the
+# step that confirms the release actually published.
 
 on:
   push:
@@ -33,16 +40,29 @@ jobs:
       # tauri.conf.json, NOT the git tag — so a tag that doesn't match it would
       # publish a release that installed clients never see as an update. Fail
       # fast if they disagree. (Skipped on manual workflow_dispatch, non-tag ref.)
-      - name: Verify tag matches tauri.conf.json version
+      - name: Verify tag matches every versioned file
         if: startsWith(github.ref, 'refs/tags/')
         run: |
-          CONF=$(node -p "require('./src-tauri/tauri.conf.json').version")
           TAG="${GITHUB_REF_NAME#v}"
-          if [ "$CONF" != "$TAG" ]; then
-            echo "::error::git tag $GITHUB_REF_NAME != tauri.conf.json version $CONF — bump all three (package.json, src-tauri/tauri.conf.json, src-tauri/Cargo.toml)"
+          FAIL=""
+          check() {
+            if [ "$2" != "$TAG" ]; then
+              echo "::error::$1 is $2, but the tag is v$TAG"
+              FAIL="yes"
+            else
+              echo "  ok  $1 = $2"
+            fi
+          }
+          check package.json      "$(node -p "require('./package.json').version")"
+          check package-lock.json "$(node -p "require('./package-lock.json').version")"
+          check tauri.conf.json   "$(node -p "require('./src-tauri/tauri.conf.json').version")"
+          check Cargo.toml        "$(grep -m1 '^version = ' src-tauri/Cargo.toml | sed -E 's/^version = "(.*)"/\1/')"
+          check Cargo.lock        "$(awk '/^name = "beecork-terminal"$/{getline; sub(/^version = "/,""); sub(/"$/,""); print; exit}' src-tauri/Cargo.lock)"
+          if [ -n "$FAIL" ]; then
+            echo "::error::Version bump is incomplete — every file above must match the tag. See RELEASING.md."
             exit 1
           fi
-          echo "version OK: $CONF"
+          echo "version OK: $TAG"
       # `cargo test` compiles the Tauri crate, which on Linux needs the WebKitGTK/
       # glib system libs AND libasound2-dev (ALSA headers for rodio/cpal, the native
       # sound engine) — same set the release job installs for its ubuntu leg.
@@ -74,7 +94,11 @@ jobs:
         # Blocking: fails on any new advisory. A short, justified ignore-list for
         # unfixable transitive advisories lives in src-tauri/.cargo/audit.toml.
         run: |
-          cargo install cargo-audit --locked
+          # Pinned like every action in this workflow: --locked pins cargo-audit's
+          # own dependencies but NOT cargo-audit itself, so without --version each
+          # release compiles whatever is newest on crates.io — an unpinned binary
+          # holding a release gate. Bump deliberately.
+          cargo install cargo-audit --locked --version 0.22.2
           cd src-tauri && cargo audit
 
   release:

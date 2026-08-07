@@ -1,6 +1,13 @@
 # File-browser folder navigation + terminal `cd` sync
 
-_Status: decided — ready to implement. Medium-sized change (frontend-only)._
+_Status: **SUPERSEDED** — shipped in v0.1.22/v0.1.25 with a different design.
+The navigation itself landed as described; the **quoting** did not. This brief
+prescribed a frontend `shellQuote` with `navigator.userAgent` platform detection
+and "no Rust changes required". What shipped instead quotes in **Rust**, keyed on
+the shell that session actually runs (`shell_kind` / `quote_for_shell` /`cd_line` in
+`src-tauri/src/pty.rs`) — the pty already knows its own shell, so nothing has to be
+guessed from a user agent, and "Windows" is two incompatible shells. Kept for the
+"how it is now" survey below; do NOT implement from the design section._
 
 ## Intention
 

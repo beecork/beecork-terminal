@@ -371,14 +371,46 @@ pub fn pty_write(state: tauri::State<PtyState>, id: String, data: String) -> Res
 
 /// `cd` a session into `dir`, quoted for the shell that session actually runs.
 ///
+/// The exact line `pty_cd` types. Pure, so the shell-specific forms and the
+/// submit byte are unit-tested rather than trusted.
+///
 /// Submitted with `\r`, not `\n`: that's the byte the Enter key sends, and the
 /// only one Windows ConPTY (cmd.exe / PowerShell) accepts as "run this line". A
 /// `\n` works on macOS/Linux but on Windows leaves the command typed-but-unrun.
+///
+/// `cd` is not the same command in every shell:
+///   • PowerShell — `cd` is an alias for `Set-Location`, whose positional `-Path`
+///     does WILDCARD matching, so a directory really named `work [old]` is read
+///     as a character class and "does not exist". Quoting does not help: the
+///     wildcard is interpreted at parameter binding, after the parser.
+///     `-LiteralPath` turns it off.
+///   • cmd.exe — `cd` will not change DRIVE without `/d`: from `C:\`,
+///     `cd "D:\project"` silently sets D:'s current directory and leaves you on
+///     C:. (cmd also expands `%VAR%` inside quotes with no usable escape at an
+///     interactive prompt, so a directory whose NAME contains `%` cannot be
+///     reached this way. Known, and not fixable from our side.)
+fn cd_line(shell: &str, dir: &str) -> String {
+    let quoted = quote_for_shell(shell, dir);
+    match shell_kind(shell) {
+        ShellKind::PowerShell => format!("Set-Location -LiteralPath {quoted}\r"),
+        ShellKind::Cmd => format!("cd /d {quoted}\r"),
+        ShellKind::Posix => format!("cd {quoted}\r"),
+    }
+}
+
+/// The exact text `pty_insert_paths` types: quoted paths plus a trailing space,
+/// and NO submit byte — dropping files onto a terminal types them, it doesn't run
+/// them. Pure, so that distinction is pinned by a test.
+fn insert_line(shell: &str, paths: &[String]) -> String {
+    let quoted: Vec<String> = paths.iter().map(|p| quote_for_shell(shell, p)).collect();
+    format!("{} ", quoted.join(" "))
+}
+
+/// `cd` a session into `dir`, quoted and phrased for the shell it actually runs.
 #[tauri::command]
 pub fn pty_cd(state: tauri::State<PtyState>, id: String, dir: String) -> Result<(), String> {
     if let Some((tx, shell)) = session_input(&state, &id) {
-        let line = format!("cd {}\r", quote_for_shell(&shell, &dir));
-        let _ = tx.send(line.into_bytes());
+        let _ = tx.send(cd_line(&shell, &dir).into_bytes());
     }
     Ok(())
 }
@@ -395,8 +427,7 @@ pub fn pty_insert_paths(
         return Ok(());
     }
     if let Some((tx, shell)) = session_input(&state, &id) {
-        let quoted: Vec<String> = paths.iter().map(|p| quote_for_shell(&shell, p)).collect();
-        let _ = tx.send(format!("{} ", quoted.join(" ")).into_bytes());
+        let _ = tx.send(insert_line(&shell, &paths).into_bytes());
     }
     Ok(())
 }
@@ -771,6 +802,38 @@ mod tests {
         assert_eq!(shell_kind("/opt/microsoft/powershell/7/pwsh"), ShellKind::PowerShell);
         // Unknown shells get the POSIX treatment — the safe default off Windows.
         assert_eq!(shell_kind("/bin/nu"), ShellKind::Posix);
+    }
+
+    #[test]
+    fn cd_line_submits_with_a_carriage_return_in_every_shell() {
+        use super::cd_line;
+        assert_eq!(cd_line("/bin/zsh", "/Users/me/my proj"), "cd '/Users/me/my proj'\r");
+        // PowerShell needs -LiteralPath, or `[ ]` in a real directory name is
+        // read as a wildcard character class and the cd fails.
+        assert_eq!(
+            cd_line("powershell.exe", "C:\\work [old]"),
+            "Set-Location -LiteralPath 'C:\\work [old]'\r"
+        );
+        // cmd needs /d, or changing drive silently does nothing at all.
+        assert_eq!(cd_line("cmd.exe", "D:\\project"), "cd /d \"D:\\project\"\r");
+        // The law: `\r`, never `\n` — `\n` leaves the line typed-but-unrun on ConPTY.
+        for shell in ["/bin/zsh", "cmd.exe", "pwsh"] {
+            let line = cd_line(shell, "/tmp/x");
+            assert!(line.ends_with('\r'), "{shell}: must submit with \\r");
+            assert!(!line.contains('\n'), "{shell}: \\n does not submit on Windows");
+        }
+    }
+
+    #[test]
+    fn insert_line_types_paths_but_never_submits() {
+        use super::insert_line;
+        let line = insert_line("/bin/zsh", &["/a b".into(), "/c'd".into()]);
+        assert_eq!(line, r"'/a b' '/c'\''d' ");
+        assert!(
+            !line.contains('\r') && !line.contains('\n'),
+            "dropping files onto a terminal types them — it must never run them"
+        );
+        assert!(line.ends_with(' '), "trailing space separates them from what is typed next");
     }
 
     #[test]

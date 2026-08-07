@@ -131,6 +131,42 @@ pub fn resolve_agent_session(
 
 #[cfg(test)]
 mod tests {
+    /// Create `path` with an mtime `secs_ago` in the past. Deterministic — no
+    /// sleeping, so the ordering these tests assert cannot flake.
+    fn touch(path: &std::path::Path, secs_ago: u64) {
+        let f = std::fs::File::create(path).unwrap();
+        f.set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(secs_ago))
+            .unwrap();
+    }
+
+    // Per-tab agent resume rides on this: `lsof` usually misses (Claude opens and
+    // closes its transcript per append), so mtime-newest is the workhorse.
+    #[test]
+    fn newest_transcript_uuid_picks_the_most_recently_written_chat() {
+        let dir = tempfile::tempdir().unwrap();
+        // The NEWEST file sorts FIRST by name, so a pass cannot come from
+        // read_dir order standing in for the mtime comparison.
+        let newest = "11111111-1111-4111-8111-111111111111";
+        let older = "99999999-9999-4999-8999-999999999999";
+        touch(&dir.path().join(format!("{older}.jsonl")), 600);
+        touch(&dir.path().join(format!("{newest}.jsonl")), 5);
+        // Newest in the folder, but not resumable transcripts: a non-uuid stem
+        // and a non-.jsonl file. Either would hand `--resume` a bogus id.
+        touch(&dir.path().join("session-notes.jsonl"), 0);
+        touch(&dir.path().join(format!("{newest}.json")), 0);
+        assert_eq!(super::newest_transcript_uuid(dir.path()).as_deref(), Some(newest));
+    }
+
+    #[test]
+    fn newest_transcript_uuid_handles_codex_stems_and_empty_folders() {
+        let dir = tempfile::tempdir().unwrap();
+        // Nothing resumable → None → the frontend keeps the generic `--continue`.
+        assert_eq!(super::newest_transcript_uuid(dir.path()), None);
+        let uuid = "019f5c24-8fb9-7362-8187-28ffcef7688c";
+        touch(&dir.path().join(format!("rollout-2026-07-13T19-42-07-{uuid}.jsonl")), 5);
+        assert_eq!(super::newest_transcript_uuid(dir.path()).as_deref(), Some(uuid));
+    }
+
     #[test]
     fn claude_slug_matches_claude_encoding() {
         // Every non-alphanumeric byte becomes '-', with no collapsing — so a

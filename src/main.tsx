@@ -6,7 +6,7 @@ import { SettingsProvider } from "./lib/settings";
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
-    <ErrorBoundary what="Beecork Terminal">
+    <ErrorBoundary what="Beecork Terminal" remountsTerminals>
       <SettingsProvider>
         <App />
       </SettingsProvider>

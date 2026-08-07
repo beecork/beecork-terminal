@@ -13,7 +13,13 @@ import ErrorBoundary from "./components/ErrorBoundary";
 import RenameInput from "./components/RenameInput";
 import PaneHeader from "./components/PaneHeader";
 import { Folder, Chevron, Pencil, Split } from "./components/icons";
-import { useSessions, displayName, splitLayout, type Session } from "./lib/sessions";
+import {
+  useSessions,
+  displayName,
+  splitLayout,
+  isResumableAgent,
+  type Session,
+} from "./lib/sessions";
 import { useSessionStatus } from "./lib/useSessionStatus";
 import { basename } from "./lib/paths";
 import { ptyCd, ptyInsertPaths, setWatchRoot } from "./lib/api";
@@ -45,6 +51,15 @@ export default function App() {
     (v) => (v ? "1" : "0")
   );
   const [editingTop, setEditingTop] = useState(false);
+  // Set only when the file browser has been steered somewhere WITHOUT cd-ing the
+  // terminal (an agent owns the prompt — see openInTerminal). It records WHICH
+  // session and cwd it was taken against, so it expires by derivation the moment
+  // either moves rather than needing an effect to clear it.
+  const [browse, setBrowse] = useState<{
+    dir: string;
+    againstCwd: string | null;
+    sessionId: string;
+  } | null>(null);
   const [splitPct, setSplitPct] = usePersistedState(
     "beecork.splitPct",
     50,
@@ -122,6 +137,9 @@ export default function App() {
       setAgentId,
       settings.defaultCwd
     );
+
+  const terminalCwdRef = useRef(terminalCwd);
+  terminalCwdRef.current = terminalCwd;
 
   // The attention chime lives inside useSessionStatus (flagWants): it fires the
   // instant a session newly needs you, and only there is the CAUSE known — a
@@ -218,11 +236,24 @@ export default function App() {
     sound.blip(); // a file was opened into the editor (sound after the open)
   }, []);
 
-  // File-browser right-click → "Open folder in terminal": cd the active session
-  // there. Quoting and the Enter byte are the backend's job — it knows which
+  // Navigate the file browser to `dir` — which normally means `cd`-ing the active
+  // session there, since the browser deliberately follows the terminal.
+  //
+  // …but not while an agent owns the prompt. `cd …` written to a session running
+  // Claude Code isn't a command, it's a MESSAGE: you click a folder to look at it
+  // and instead say "cd /some/path" to your agent. So when a known agent is
+  // running we re-root the browser view alone and leave the pty untouched.
+  // Quoting and the Enter byte are the backend's job otherwise — it knows which
   // shell this session actually runs (see api.ptyCd).
   const openInTerminal = useCallback(
     (dir: string) => {
+      const s = sessionsRef.current.find((x) => x.id === activeIdRef.current);
+      if (isResumableAgent(s?.running)) {
+        // Look, don't type. Tagged with the cwd/session it was taken against so a
+        // real `cd` or a tab switch puts the browser back in step automatically.
+        setBrowse({ dir, againstCwd: terminalCwdRef.current, sessionId: activeIdRef.current });
+        return;
+      }
       ptyCd(activeIdRef.current, dir).catch(() => {});
       focusTerminal();
     },
@@ -365,6 +396,13 @@ export default function App() {
     getCurrentWindow().setTitle(`${activeName} — Beecork`).catch(() => {});
   }, [activeName]);
 
+  // The override survives only while the terminal hasn't moved and you haven't
+  // switched tabs; otherwise the browser follows the terminal as usual.
+  const browseCwd =
+    browse && browse.againstCwd === terminalCwd && browse.sessionId === activeId
+      ? browse.dir
+      : null;
+
   const startPanelDrag = useDrag({
     cursor: "col-resize",
     onMove: (e) => {
@@ -433,8 +471,7 @@ export default function App() {
           onCreate={newSession}
           onClose={requestClose}
           onToggleExpand={() => {
-            // Schedule the visual first (so a throwing sound can't drop the toggle),
-            // then play — withVisual holds the visual back to land with the sound.
+            // Run the visual first, so a throwing sound can't drop the toggle.
             sound.withVisual(() => setRailExpanded((e) => !e));
             if (railExpanded) sound.panelClose();
             else sound.panelOpen();
@@ -492,6 +529,7 @@ export default function App() {
                   visible={visible}
                   active={isFocused && visible}
                   startCwd={s.startCwd}
+                  currentCwd={s.cwd}
                   onOpenPath={onOpenPath}
                   onBell={onBell}
                   onSeen={onSeen}
@@ -529,7 +567,7 @@ export default function App() {
               <ErrorBoundary what="The file panel" inline>
               <SidePanel
                 openRequest={openRequest}
-                root={terminalCwd}
+                root={browseCwd ?? terminalCwd}
                 sessionId={activeId}
                 liveSessionIds={sessionIds}
                 onFocusSurface={onFocusSurface}

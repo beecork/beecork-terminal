@@ -103,11 +103,15 @@ export function parentDir(path: string): string {
 }
 
 /** Is `path` an entry sitting DIRECTLY inside `dir` (not deeper)? Used to decide
- *  whether a filesystem event can change a directory's listing at all. */
+ *  whether a filesystem event can change a directory's listing at all.
+ *
+ *  Both sides go through `dirname` so the drive-root special case (`"C:\a"` →
+ *  `"C:\"`, not the bare `"C:"`) applies identically to each. Normalizing `dir`
+ *  by hand instead made the two disagree at exactly that root, so browsing at a
+ *  Windows drive root never refreshed the tree. */
 export function isDirectChild(path: string, dir: string): boolean {
   if (!dir) return false;
-  const d = dir.replace(TRAILING_SEP_RE, "") || dir;
-  return dirname(path) === d;
+  return dirname(path) === dirname(joinPath(dir, "x"));
 }
 
 /** Path relative to `root` ("/r/a/b" under "/r" → "a/b"); returns it unchanged if

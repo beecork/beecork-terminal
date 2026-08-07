@@ -98,6 +98,18 @@ export const fileSize = (path: string) => invoke<number>("file_size", { path });
 export const writeFile = (path: string, content: string, expectedMtime?: number) =>
   invoke<number>("write_file", { path, content, expectedMtime: expectedMtime ?? null });
 
+/**
+ * Was a failed `writeFile` the RECOVERABLE kind — the file changed on disk under
+ * your edits — rather than a fatal one? That distinction is what puts the
+ * Overwrite / Reload buttons on screen instead of a dead end.
+ *
+ * Keyed on the wording of `write_file`'s conflict error in `src-tauri/src/fs.rs`
+ * (`CONFLICT_MSG`). The two must change together: reword the Rust string and this
+ * silently stops matching, so a save just fails with no way out. `api.test.ts`
+ * and that file's own test are the tripwire.
+ */
+export const isDiskConflict = (msg: string) => /changed on disk/i.test(msg);
+
 export type ChangeStatus =
   | "untracked"
   | "added"

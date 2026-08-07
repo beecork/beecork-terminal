@@ -41,9 +41,26 @@ export function useFolderHistory(
 ) {
   const histRef = useRef<Record<string, History>>({});
   const navTargetRef = useRef<string | null>(null);
+  // Which session the `root` we last saw belonged to. `root` is the ACTIVE
+  // terminal's cwd, and on a tab switch it arrives a commit AFTER `sessionId`
+  // (App updates it from an effect), so the first render after a switch pairs the
+  // incoming session's id with the OUTGOING session's folder. Recording that put
+  // another project's folder into this session's trail — and Back then typed a
+  // real `cd` into a shell that had never been there.
+  const prevSessionRef = useRef(sessionId);
   const [, bump] = useState(0);
 
   useEffect(() => {
+    const switched = prevSessionRef.current !== sessionId;
+    // Updated BEFORE the `!root` early return below: a switch that happens while
+    // root is still null (app start, or a new session before its first status
+    // lands) would otherwise leave this stale and swallow the next real record.
+    prevSessionRef.current = sessionId;
+    if (switched) {
+      // A pending Back/Forward steer belonged to the session we just left.
+      navTargetRef.current = null;
+      return; // this render's `root` is still the outgoing session's cwd
+    }
     if (!root) return;
     if (navTargetRef.current === root) {
       navTargetRef.current = null; // our own Back/Forward — already recorded
@@ -51,8 +68,6 @@ export function useFolderHistory(
     }
     const prev = histRef.current[sessionId] ?? EMPTY_HISTORY;
     const next = recordVisit(prev, root);
-    // A tab switch changes `root` too, but the incoming session's cwd already
-    // sits at the top of its own trail, so that records nothing.
     if (next === prev) return;
     histRef.current[sessionId] = next;
     bump((v) => v + 1);

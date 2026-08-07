@@ -15,16 +15,25 @@
 // Either way we refuse to watch filesystem-wide roots (`/`, the home dir): a
 // Finder-launched app has cwd `/`, and watching that would walk the whole disk.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{channel, Sender};
+use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
-#[cfg(target_os = "linux")]
+// NOT `#[cfg(linux)]`: `drain_window` inspects the event kind on every platform.
 use notify::EventKind;
 use tauri::{AppHandle, Emitter, Manager};
 
 const IGNORED: &[&str] = &[".git", "node_modules", "target", "dist", ".DS_Store"];
+
+/// How long to gather filesystem events before emitting one batch. A bulk
+/// operation — a `git checkout`, an `npm install`, an agent rewriting a tree —
+/// delivers roughly one notify event per path, and without this each one crossed
+/// IPC and woke the webview separately. 100 ms sits well inside the frontend's
+/// 300 ms per-subscriber debounce, so the live diff is no slower in practice.
+const COALESCE_MS: u64 = 100;
 
 /// Lets the UI re-root the watcher when the terminal `cd`s elsewhere. Holds the
 /// sender into the live watch loop; `set_watch_root` posts a `Reroot` to it.
@@ -112,6 +121,55 @@ fn watch_tree<W: Watcher>(watcher: &mut W, dir: &Path) {
     }
 }
 
+/// Gather `first` plus everything arriving within `window` into ONE deduplicated,
+/// ignore-filtered path list. Returns `(paths, reroot)`.
+///
+/// Three things here are load-bearing:
+///   • A `Reroot` returns IMMEDIATELY rather than waiting out the window, so
+///     re-rooting stays exactly as responsive as it was — the file browser must
+///     not visibly lag the terminal's `cd`.
+///   • `on_create` runs per EVENT, not per batch: the batch is just strings and
+///     has lost the event kinds, and Linux/inotify depends on this call to watch
+///     newly-created directories.
+///   • An empty returned list means "nothing relevant changed" and the caller
+///     must NOT emit it — an empty payload is the re-root signal (`events.ts`).
+fn drain_window(
+    first: WatchMsg,
+    rx: &Receiver<WatchMsg>,
+    window: Duration,
+    mut on_create: impl FnMut(&Path),
+) -> (Vec<String>, Option<PathBuf>) {
+    let mut batch: BTreeSet<String> = BTreeSet::new();
+    let mut pending = Some(first);
+    let deadline = Instant::now() + window;
+    while let Some(msg) = pending.take() {
+        match msg {
+            WatchMsg::Event(Ok(event)) => {
+                if matches!(event.kind, EventKind::Create(_)) {
+                    for p in &event.paths {
+                        on_create(p);
+                    }
+                }
+                batch.extend(
+                    event
+                        .paths
+                        .iter()
+                        .filter(|p| !is_ignored(p))
+                        .map(|p| p.to_string_lossy().into_owned()),
+                );
+            }
+            WatchMsg::Event(Err(_)) => {}
+            WatchMsg::Reroot(new) => return (batch.into_iter().collect(), Some(new)),
+        }
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            break;
+        }
+        pending = rx.recv_timeout(left).ok();
+    }
+    (batch.into_iter().collect(), None)
+}
+
 /// Build a fresh watcher wired to `tx`. Dropping the returned watcher releases
 /// all of its kernel watches, which is how re-rooting cleans up the old tree.
 fn make_watcher(tx: Sender<WatchMsg>) -> Option<RecommendedWatcher> {
@@ -142,46 +200,40 @@ pub fn watch_project(app: AppHandle) {
         watch_root(&mut watcher, &root);
     }
 
-    for msg in rx {
-        match msg {
-            WatchMsg::Event(Ok(event)) => {
-                // On Linux, keep the tree covered as new directories appear (inotify
-                // is non-recursive). On macOS/Windows the recursive watch already
-                // covers new subdirs, so there is nothing to re-add.
+    loop {
+        let Ok(first) = rx.recv() else { return }; // all senders dropped
+        let (changed, reroot) = drain_window(
+            first,
+            &rx,
+            Duration::from_millis(COALESCE_MS),
+            |p| {
+                let _ = p; // used on Linux only
+                // On Linux, keep the tree covered as new directories appear
+                // (inotify is non-recursive). On macOS/Windows the recursive
+                // watch already covers new subdirs, so there is nothing to add.
                 #[cfg(target_os = "linux")]
-                if matches!(event.kind, EventKind::Create(_)) {
-                    for p in &event.paths {
-                        if !is_ignored(p) && is_real_dir(p) {
-                            watch_tree(&mut watcher, p);
-                        }
-                    }
+                if !is_ignored(p) && is_real_dir(p) {
+                    watch_tree(&mut watcher, p);
                 }
-                // Emit the changed (non-ignored) paths so the frontend can skip
-                // refetches that don't concern it (e.g. an editor watching one file).
-                let changed: Vec<String> = event
-                    .paths
-                    .iter()
-                    .filter(|p| !is_ignored(p))
-                    .map(|p| p.to_string_lossy().into_owned())
-                    .collect();
-                if !changed.is_empty() {
-                    let _ = app.emit("fs-changed", changed);
-                }
-            }
-            WatchMsg::Event(Err(_)) => {}
-            WatchMsg::Reroot(new) => {
-                if new != root && new.is_dir() && !too_broad_to_watch(&new) {
-                    // Drop the old watcher (releasing all its watches) and build a
-                    // fresh one rooted at `new`, so the live diff follows the
-                    // terminal when it cd's outside the launch directory.
-                    if let Some(w) = make_watcher(tx.clone()) {
-                        watcher = w;
-                        root = new;
-                        watch_root(&mut watcher, &root);
-                        // Empty payload = "everything changed" (a re-root), so
-                        // path-filtered subscribers still refresh.
-                        let _ = app.emit("fs-changed", Vec::<String>::new());
-                    }
+            },
+        );
+        // NEVER emit an empty list here: an empty payload is the RE-ROOT signal
+        // ("everything changed") and bypasses every subscriber's path filter.
+        if !changed.is_empty() {
+            let _ = app.emit("fs-changed", changed);
+        }
+        if let Some(new) = reroot {
+            if new != root && new.is_dir() && !too_broad_to_watch(&new) {
+                // Drop the old watcher (releasing all its watches) and build a
+                // fresh one rooted at `new`, so the live diff follows the
+                // terminal when it cd's outside the launch directory.
+                if let Some(w) = make_watcher(tx.clone()) {
+                    watcher = w;
+                    root = new;
+                    watch_root(&mut watcher, &root);
+                    // Empty payload = "everything changed" (a re-root), so
+                    // path-filtered subscribers still refresh.
+                    let _ = app.emit("fs-changed", Vec::<String>::new());
                 }
             }
         }
@@ -217,6 +269,80 @@ mod tests {
         assert!(!is_broad_root(Path::new("/Users/me/Coding/app"), Some(home)));
         assert!(!is_broad_root(Path::new("/opt/app"), Some(home)));
         assert!(!is_broad_root(Path::new("/opt/app"), None));
+    }
+
+    fn ev(kind: EventKind, paths: &[&str]) -> WatchMsg {
+        let mut e = notify::Event::new(kind);
+        for p in paths {
+            e = e.add_path(PathBuf::from(*p));
+        }
+        WatchMsg::Event(Ok(e))
+    }
+
+    #[test]
+    fn coalesces_a_burst_into_one_deduplicated_batch() {
+        let (tx, rx) = channel();
+        tx.send(ev(EventKind::Any, &["/p/b.rs", "/p/a.rs"])).unwrap();
+        tx.send(ev(EventKind::Any, &["/p/a.rs"])).unwrap(); // repeat
+        tx.send(ev(EventKind::Any, &["/p/node_modules/x.js"])).unwrap(); // ignored
+        let (paths, reroot) = drain_window(
+            ev(EventKind::Any, &["/p/a.rs"]),
+            &rx,
+            Duration::from_millis(20),
+            |_| {},
+        );
+        assert_eq!(paths, vec!["/p/a.rs".to_string(), "/p/b.rs".to_string()]);
+        assert!(reroot.is_none());
+    }
+
+    // A reroot must not wait out the window, or the file browser visibly lags
+    // the terminal's `cd`. Paths gathered before it still come back.
+    #[test]
+    fn a_reroot_ends_the_window_immediately() {
+        let (tx, rx) = channel();
+        tx.send(WatchMsg::Reroot(PathBuf::from("/new"))).unwrap();
+        let start = Instant::now();
+        let (paths, reroot) = drain_window(
+            ev(EventKind::Any, &["/p/a.rs"]),
+            &rx,
+            Duration::from_secs(5),
+            |_| {},
+        );
+        assert!(start.elapsed() < Duration::from_secs(1), "must not wait out the window");
+        assert_eq!(reroot, Some(PathBuf::from("/new")));
+        assert_eq!(paths, vec!["/p/a.rs".to_string()]);
+    }
+
+    // Linux/inotify watches new directories through this hook, and it must fire
+    // per EVENT — the batch is strings and has lost the event kinds.
+    #[test]
+    fn create_events_report_every_path_to_the_hook() {
+        let (tx, rx) = channel();
+        tx.send(ev(EventKind::Create(notify::event::CreateKind::Folder), &["/p/two"]))
+            .unwrap();
+        let mut seen: Vec<String> = Vec::new();
+        drain_window(
+            ev(EventKind::Create(notify::event::CreateKind::Folder), &["/p/one"]),
+            &rx,
+            Duration::from_millis(20),
+            |p| seen.push(p.to_string_lossy().into_owned()),
+        );
+        assert_eq!(seen, vec!["/p/one".to_string(), "/p/two".to_string()]);
+    }
+
+    // An all-ignored burst must yield NO batch — never an empty one, which the
+    // frontend reads as "everything changed" and which bypasses path filters.
+    #[test]
+    fn an_all_ignored_burst_yields_no_paths() {
+        let (_tx, rx) = channel();
+        let (paths, reroot) = drain_window(
+            ev(EventKind::Any, &["/p/.git/HEAD"]),
+            &rx,
+            Duration::from_millis(20),
+            |_| {},
+        );
+        assert!(paths.is_empty());
+        assert!(reroot.is_none());
     }
 
     #[test]

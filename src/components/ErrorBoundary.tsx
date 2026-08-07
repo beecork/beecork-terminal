@@ -6,6 +6,10 @@ interface Props {
   what: string;
   /** render inline (inside a panel) instead of as a full-window card */
   inline?: boolean;
+  /** This boundary sits ABOVE the terminals, so by the time it renders React has
+   *  already unmounted them — and each TerminalPane's cleanup kills its shell.
+   *  Both buttons therefore cost the running processes, and the card must say so. */
+  remountsTerminals?: boolean;
 }
 
 interface State {
@@ -24,9 +28,17 @@ interface State {
  *     terminal down with it;
  *   • around the whole app, as the last resort.
  *
- * "Try again" simply re-renders, which fully recovers from a transient bad
- * state and keeps every shell attached. Reloading is the bigger hammer, and the
- * label says what it costs: the webview restarts, so the shells are respawned.
+ * The two placements recover very differently, and the card says which:
+ *
+ *   • panel-level (`inline`) — the terminals are OUTSIDE this boundary, so "Try
+ *     again" re-renders the panel alone and every shell stays attached.
+ *   • app-level (`remountsTerminals`) — catching has already unmounted the
+ *     subtree and each pane's cleanup has run `pty_kill`, so "Try again" brings
+ *     up FRESH shells and whatever was running in them is gone. This placement
+ *     exists to get the window back, not to save the session.
+ *
+ * "Reload window" restarts the webview from either placement, so it always costs
+ * the shells.
  */
 export default class ErrorBoundary extends Component<Props, State> {
   state: State = { error: null };
@@ -56,7 +68,9 @@ export default class ErrorBoundary extends Component<Props, State> {
             </button>
           </div>
           <div className="crash-note">
-            Reloading restarts the webview, so each session opens a fresh shell.
+            {this.props.remountsTerminals
+              ? "Either option rebuilds the terminals, so each session opens a fresh shell — anything running in them stops."
+              : "“Try again” rebuilds only this panel; the terminals keep running. Reloading restarts the webview, so each session opens a fresh shell."}
           </div>
         </div>
       </div>

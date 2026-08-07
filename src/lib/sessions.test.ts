@@ -3,6 +3,7 @@ import {
   displayName,
   wantsAttention,
   resumeCommand,
+  isResumableAgent,
   isDivider,
   moveBefore,
   type RailItem,
@@ -113,15 +114,24 @@ describe("resumeCommand", () => {
     expect(resumeCommand("codex")).toBe("codex resume");
   });
 
-  it("falls back to <agent> --continue for anything else", () => {
-    expect(resumeCommand("aider")).toBe("aider --continue");
+  // The pill's command is typed into the shell WITH a trailing Enter, and `agent`
+  // is just the foreground process basename — so anything not on the allowlist
+  // gets no pill at all rather than a command that doesn't exist. `aider
+  // --continue` was never a real flag; the old fallback was already broken.
+  it("offers nothing for an agent we don't know how to resume", () => {
+    expect(resumeCommand("aider")).toBeNull();
+    expect(resumeCommand("vim")).toBeNull();
+    expect(resumeCommand("vim", "21c89373-22e7-4064-8ef4-543836557a64")).toBeNull();
+    expect(isResumableAgent("claude")).toBe(true);
+    expect(isResumableAgent("codex")).toBe(true);
+    expect(isResumableAgent("vim")).toBe(false);
+    expect(isResumableAgent(undefined)).toBe(false);
   });
 
   it("resumes a SPECIFIC conversation when given its id (per-tab resume)", () => {
     const id = "21c89373-22e7-4064-8ef4-543836557a64";
     expect(resumeCommand("claude", id)).toBe(`claude --resume ${id}`);
     expect(resumeCommand("codex", id)).toBe(`codex resume ${id}`);
-    expect(resumeCommand("aider", id)).toBe(`aider --resume ${id}`);
   });
 });
 

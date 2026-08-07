@@ -24,18 +24,86 @@ pub struct FileStatus {
     status: String,
 }
 
-/// A `git` invocation hardened against a hostile repository's local config:
-/// `-c` overrides repo config, neutralizing the `core.fsmonitor` hook and
-/// `core.pager` RCE vectors that a malicious `.git/config` could otherwise use.
+/// A `git` invocation hardened against a hostile repository's config.
+///
+/// What this covers, precisely — the previous comment here overclaimed:
+///   • `core.fsmonitor` and `core.pager`, both command-valued and both RCE
+///     vectors a malicious `.git/config` could otherwise use — disabled by `-c`,
+///     which beats `include.path`/`includeIf` on the command line.
+///   • `--no-optional-locks` keeps us from taking `.git/index.lock` (we run
+///     `git status` in the background on every fs change, which would race the
+///     agent's own git commands) and, verified, additionally blocks the index
+///     write that would fire a `post-index-change` hook — so `core.hooksPath` is
+///     not a live vector here. Don't re-chase it.
+///
+/// What this does NOT cover: `filter.<name>.clean|.process`, which `git status`
+/// runs when it re-hashes a worktree file. Those are neutralized per-invocation
+/// by `filter_neutralizers` below, applied where they matter (`git_status`).
+/// `git_file_original` needs none — `cat-file -s` and `show HEAD:<path>` do not
+/// apply filters.
 fn git() -> Command {
     let mut c = Command::new("git");
-    // `--no-optional-locks`: we run `git status` in the background on every fs
-    // change, so never take `.git/index.lock` — that would race the agent's own
-    // git commands running in the terminal. `-c` overrides neutralize the
-    // `core.fsmonitor` hook and `core.pager` RCE vectors a hostile repo could use.
     c.arg("--no-optional-locks");
     c.args(["-c", "core.fsmonitor=false", "-c", "core.pager=cat"]);
     c
+}
+
+/// `-c` overrides that disable every `filter.<name>.*` driver visible to this
+/// repository.
+///
+/// `git status` re-hashes any worktree file whose stat data differs from the
+/// index, and hashing runs the `filter.<name>.clean`/`.process` command that an
+/// in-tree `.gitattributes` selects. `.gitattributes` alone cannot define that
+/// command — but a repo delivered with its `.git/` intact (a zip or tarball, a
+/// synced folder, a restored backup; `git clone` never transfers config) carries
+/// the local config that can, and our background `git status` then runs it with
+/// no click and no visible git command. Listing config executes nothing, and an
+/// empty override makes git treat the driver as absent while `status` still
+/// reports the file correctly.
+///
+/// ALL scopes, deliberately NOT `--local`: `--local` does not expand
+/// `include.path`, so a hostile `.git/config` can hide the driver in an included
+/// file and list clean — verified, `--local` misses exactly that. Overriding the
+/// user's own global drivers is the accepted cost.
+fn filter_neutralizers(dir: &Path) -> Vec<String> {
+    let Ok(out) = git().arg("-C").arg(dir).args(["config", "--list", "-z"]).output() else {
+        return Vec::new();
+    };
+    if !out.status.success() {
+        return Vec::new();
+    }
+    neutralizers_from_config(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// Pure half of [`filter_neutralizers`], split out so it can be unit-tested
+/// without a repository (same shape as `parse_status`). In `config --list -z`
+/// each record is `key\nvalue`, or a bare `key` when the line has no `=`.
+fn neutralizers_from_config(text: &str) -> Vec<String> {
+    let mut names: Vec<&str> = Vec::new();
+    for record in text.split('\0') {
+        let key = record.split('\n').next().unwrap_or("");
+        let Some(rest) = key.strip_prefix("filter.") else {
+            continue;
+        };
+        // `filter.<name>.<setting>` — <name> may itself contain dots, so it is
+        // everything between the first and the LAST dot.
+        let Some((name, _setting)) = rest.rsplit_once('.') else {
+            continue;
+        };
+        if !name.is_empty() && !names.contains(&name) {
+            names.push(name);
+        }
+    }
+    names
+        .iter()
+        .flat_map(|n| {
+            [
+                format!("filter.{n}.clean="),
+                format!("filter.{n}.smudge="),
+                format!("filter.{n}.process="),
+            ]
+        })
+        .collect()
 }
 
 /// Resolve the actual repository root (git emits repo-root-relative paths), so
@@ -106,9 +174,17 @@ pub fn git_status(root: Option<String>) -> Result<Vec<FileStatus>, String> {
     let start = root.map(PathBuf::from).unwrap_or_else(project_root);
     let dir = repo_root(&start);
 
-    let out = git()
-        .arg("-C")
-        .arg(&dir)
+    let mut cmd = git();
+    cmd.arg("-C").arg(&dir);
+    // Hostile-repo hardening — see `filter_neutralizers`. Side effect accepted
+    // deliberately: this also disables git-lfs's clean filter, so LFS-tracked
+    // files show as modified in the tree tint. Nothing that works today breaks —
+    // the diff view is ALREADY wrong for LFS (`show HEAD:<path>` yields the
+    // pointer file, not the content) and LFS blobs exceed `read_file`'s 2 MB cap.
+    for n in filter_neutralizers(&dir) {
+        cmd.arg("-c").arg(n);
+    }
+    let out = cmd
         .args(["status", "--porcelain=v1", "-z", "--untracked-files=all"])
         .output()
         .map_err(|e| e.to_string())?;
@@ -139,9 +215,10 @@ pub fn git_file_original(path: String, root: Option<String>) -> Result<String, S
     let spec = format!("HEAD:{}", rel_str);
 
     // Check the blob size BEFORE reading it. `git show` via .output() buffers the
-    // WHOLE committed blob into memory on the (sync, main-thread) command, so a
-    // hostile repo that commits a giant file could freeze the UI / OOM us just by
-    // having it clicked. `git cat-file -s <spec>` prints only the object size.
+    // WHOLE committed blob into memory, so a hostile repo that commits a giant
+    // file could OOM us just by having it clicked. (This command is `async` now,
+    // so it no longer blocks the UI thread — the memory ceiling is why the guard
+    // stays.) `git cat-file -s <spec>` prints only the object size.
     let size_out = git()
         .arg("-C")
         .arg(&dir)
@@ -216,6 +293,30 @@ mod tests {
         assert_eq!(out[0].status, "renamed");
         assert_eq!(out[1].path, "/repo/other.rs");
         assert_eq!(out[1].status, "modified");
+    }
+
+    // A hostile repo's `filter.<name>.clean` runs during `git status`'s re-hash.
+    // Every configured driver must be neutralized — including one whose name
+    // contains dots, and one listed with no value.
+    #[test]
+    fn neutralizes_every_configured_filter_driver() {
+        let text = "core.bare\nfalse\0filter.lfs.clean\ngit-lfs clean -- %f\0\
+                    filter.bare.clean\0filter.dotted.name.process\n/bin/sh\0";
+        let out = neutralizers_from_config(text);
+        for n in ["lfs", "bare", "dotted.name"] {
+            for k in ["clean", "smudge", "process"] {
+                assert!(out.contains(&format!("filter.{n}.{k}=")), "missing filter.{n}.{k}");
+            }
+        }
+        assert_eq!(out.len(), 9, "3 settings for each of 3 drivers, no duplicates");
+    }
+
+    #[test]
+    fn ignores_config_that_is_not_a_filter_driver() {
+        assert!(neutralizers_from_config("core.pager\nless\0user.name\nx\0").is_empty());
+        // `filter.foo` has no setting segment — not a driver key.
+        assert!(neutralizers_from_config("filter.foo\nbar\0").is_empty());
+        assert!(neutralizers_from_config("").is_empty());
     }
 
     #[test]

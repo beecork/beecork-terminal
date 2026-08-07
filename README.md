@@ -10,8 +10,9 @@ small, fast, native app for macOS, Windows, and Linux.
 
 ## Features
 
-- **Terminal-first** — a real GPU-rendered terminal (xterm.js + a Rust
-  `portable-pty` backend) running your login shell.
+- **Terminal-first** — a real terminal (xterm.js + a Rust `portable-pty`
+  backend) running your login shell, GPU-rendered on macOS and Linux (Windows
+  uses the DOM renderer, which WebView2 draws correctly).
 - **Live diff view** — the file tree colors changed folders/files, and each
   file shows a line-level diff against git as the agent edits.
 - **File browser + editor** — expandable side panel; open, edit (CodeMirror),
@@ -29,6 +30,9 @@ Grab an installer from [**beecork.com/terminal**](https://beecork.com/terminal)
 or the [releases page](https://github.com/beecork/beecork-terminal/releases/latest).
 
 ## Development
+
+Requires **Node ≥ 22.22.2** (jsdom's bundled undici needs APIs Node 20 lacks, so
+the test worker won't start there) and a Rust toolchain.
 
 ```bash
 npm install

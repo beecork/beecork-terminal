@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror";
 import { EditorView } from "@codemirror/view";
 import { oneDark } from "@codemirror/theme-one-dark";
 import { unifiedMergeView } from "@codemirror/merge";
 import type { Extension } from "@codemirror/state";
-import { readFile, writeFile, gitFileOriginal } from "../lib/api";
+import { readFile, writeFile, gitFileOriginal, isDiskConflict } from "../lib/api";
 import { basename } from "../lib/paths";
 import { languageFor } from "../lib/language";
 import { onFsChanged } from "../lib/events";
@@ -39,13 +39,23 @@ export default function FileEditor({
   const mtimeRef = useRef(0);
   const dirtyRef = useRef(false);
   dirtyRef.current = dirty;
+  // The terminal's cwd is READ by `load`, never depended on: it selects nothing
+  // but the git repo the diff baseline comes from. Holding it in a ref pins
+  // `load`'s identity to `path`, so a `cd` can no longer re-fire the mount load —
+  // which ran with `initial: true`, skipped the dirty guard below, and silently
+  // replaced unsaved edits with the version on disk.
+  const rootRef = useRef(root);
+  rootRef.current = root;
   const cmRef = useRef<ReactCodeMirrorRef>(null);
 
   const load = useCallback(
     (initial: boolean, force = false) => {
       if (initial) setStatus("loading");
       setError("");
-      Promise.all([readFile(path), gitFileOriginal(path, root ?? undefined).catch(() => "")])
+      Promise.all([
+        readFile(path),
+        gitFileOriginal(path, rootRef.current ?? undefined).catch(() => ""),
+      ])
         .then(([data, orig]) => {
           // Don't clobber unsaved edits made during an in-flight reload — unless
           // the user explicitly asked to reload (force), discarding their edits.
@@ -66,12 +76,34 @@ export default function FileEditor({
           }
         });
     },
-    [path, root]
+    [path]
   );
 
   useEffect(() => {
     load(true);
   }, [load]);
+
+  // A `cd` in the terminal changes which repository the diff baseline comes from
+  // — and nothing else. This file's path is absolute, so its CONTENTS don't
+  // depend on the terminal's cwd; re-reading it here (which is what used to
+  // happen) threw away unsaved edits. Refresh `original` alone and leave content,
+  // dirty, mtime and the Diff/Edit mode untouched. `showDiff` already requires a
+  // non-empty baseline, so if a new root has none the diff collapses on its own.
+  const baselineRoot = useRef(root);
+  useEffect(() => {
+    if (baselineRoot.current === root) return; // the mount load already fetched this one
+    baselineRoot.current = root;
+    let cancelled = false;
+    gitFileOriginal(path, root ?? undefined)
+      .catch(() => "")
+      .then((orig) => {
+        // Two fast `cd`s would otherwise race and the slower reply could win.
+        if (!cancelled) setOriginal(orig);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [path, root]);
 
   // Live-refresh when the agent edits this file — unless the user has unsaved
   // edits. Filtered to this file's path so an unrelated change elsewhere doesn't
@@ -116,7 +148,7 @@ export default function FileEditor({
         const msg = String(e).replace(/^Error:\s*/, "");
         // A disk-conflict is recoverable (Overwrite / Reload); other write errors
         // aren't, so only offer the escape hatch for the conflict case.
-        setConflict(/changed on disk/i.test(msg));
+        setConflict(isDiskConflict(msg));
         setSaveMsg(msg);
       }
     },
@@ -136,10 +168,25 @@ export default function FileEditor({
   const showDiff =
     settings.editorDiff && mode === "diff" && original != null && original !== "";
 
-  const extensions: Extension[] = [
-    ...languageFor(path),
-    ...(showDiff ? [unifiedMergeView({ original: original!, mergeControls: false })] : []),
-  ];
+  // Memoised because @uiw/react-codemirror dispatches a full
+  // StateEffect.reconfigure whenever this array's identity changes — and
+  // reconfiguring re-inits unifiedMergeView's chunk field, i.e. re-diffs the
+  // whole file. Built inline, that happened on every render, and typing
+  // re-renders, so it was once per keystroke. `showDiff` deliberately does not
+  // depend on `content`, so typing never invalidates this.
+  const extensions = useMemo<Extension[]>(
+    () => [
+      ...languageFor(path),
+      ...(showDiff ? [unifiedMergeView({ original: original!, mergeControls: false })] : []),
+    ],
+    [path, showDiff, original]
+  );
+
+  // Stable for the same reason — `onChange` sits in that same reconfigure's deps.
+  const onChange = useCallback((val: string) => {
+    setContent(val);
+    setDirty(true);
+  }, []);
 
   const name = basename(path);
 
@@ -201,10 +248,7 @@ export default function FileEditor({
             height="100%"
             theme={theme.editor === "light" ? "light" : oneDark}
             extensions={extensions}
-            onChange={(val) => {
-              setContent(val);
-              setDirty(true);
-            }}
+            onChange={onChange}
           />
         )}
       </div>

@@ -8,7 +8,8 @@ interface Props {
   selectTo?: number;
   confirmLabel?: string;
   placeholder?: string;
-  onSubmit: (value: string) => void;
+  /** May reject: the dialog then stays open and shows the message. */
+  onSubmit: (value: string) => void | Promise<void>;
   onCancel: () => void;
 }
 
@@ -24,6 +25,8 @@ export default function PromptModal({
   onCancel,
 }: Props) {
   const [value, setValue] = useState(initialValue);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -35,9 +38,20 @@ export default function PromptModal({
     // yank the caret back while the user is typing.
   }, []);
 
-  const submit = () => {
+  const submit = async () => {
     const v = value.trim();
-    if (v) onSubmit(v);
+    if (!v || busy) return;
+    setError("");
+    setBusy(true);
+    try {
+      await onSubmit(v); // resolves → the caller closes the dialog
+    } catch (e) {
+      // Show the backend's own message ("“x.ts” already exists", "Permission
+      // denied") and stay open so the name can be corrected. setBusy(false) only
+      // on this path — the success path unmounts, so it must not set state.
+      setError(String(e).replace(/^Error:\s*/, ""));
+      setBusy(false);
+    }
   };
 
   return (
@@ -53,18 +67,27 @@ export default function PromptModal({
             className="setting-text"
             value={value}
             placeholder={placeholder}
-            onChange={(e) => setValue(e.target.value)}
+            disabled={busy}
+            onChange={(e) => {
+              setValue(e.target.value);
+              if (error) setError("");
+            }}
             onKeyDown={(e) => {
-              if (e.key === "Enter") submit();
+              if (e.key === "Enter") void submit();
               else if (e.key === "Escape") onCancel();
             }}
           />
+          {error && <p className="modal-error">{error}</p>}
         </div>
         <div className="modal-actions">
           <button className="btn ghost" onClick={onCancel}>
             Cancel
           </button>
-          <button className="btn primary" onClick={submit} disabled={!value.trim()}>
+          <button
+            className="btn primary"
+            onClick={() => void submit()}
+            disabled={!value.trim() || busy}
+          >
             {confirmLabel}
           </button>
         </div>
