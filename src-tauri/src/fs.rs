@@ -9,7 +9,7 @@
 // lookups and stay sync — the hop would cost more than the work.
 
 use std::cmp::Ordering;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
 use serde::Serialize;
@@ -35,13 +35,45 @@ pub struct FileData {
 
 /// The folder the app is "opened in". In dev, `tauri dev` runs the binary from
 /// `src-tauri/`, so step up one level to the real project root.
+///
+/// An AppImage launch has no usable cwd at all, so it is answered first. Its
+/// AppRun chdirs into `$APPDIR/usr` before exec — it has to, because the bundled
+/// libwebkit2gtk is byte-patched from `/usr` to `././` (same length, so the
+/// patch fits in place) and its helper-process path only resolves from there.
+/// That leaves us started inside a read-only squashfs mount, so cwd names the
+/// app's own guts: the file browser would open on `/tmp/.mount_XXXXXX/usr` and
+/// `git_status` would run there. The AppImage runtime records the real launch
+/// directory in `OWD`.
 pub fn project_root() -> PathBuf {
+    if let Some(p) = appimage_root(
+        std::env::var_os("APPDIR").is_some(),
+        std::env::var_os("OWD").map(PathBuf::from),
+        home(),
+    ) {
+        return p;
+    }
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
     if cwd.file_name().map(|n| n == "src-tauri").unwrap_or(false) {
         cwd.parent().map(|p| p.to_path_buf()).unwrap_or(cwd)
     } else {
         cwd
     }
+}
+
+/// Pure core of the AppImage branch of [`project_root`], split out so it is
+/// unit-testable without touching the process environment (same reason as
+/// `watcher::is_broad_root`). `None` means "not an AppImage — use cwd".
+///
+/// `OWD` is whatever directory the user launched from, so it can be `/` (a
+/// launcher/`.desktop` start) — no better than the mount we're escaping, and the
+/// watcher refuses it anyway. Home is the honest answer there.
+fn appimage_root(in_appimage: bool, owd: Option<PathBuf>, home: Option<PathBuf>) -> Option<PathBuf> {
+    if !in_appimage {
+        return None;
+    }
+    owd.filter(|p| p.is_absolute() && p != Path::new("/"))
+        .or(home)
+        .or_else(|| Some(PathBuf::from("/")))
 }
 
 fn mtime_ms(meta: &std::fs::Metadata) -> f64 {
@@ -291,6 +323,31 @@ mod tests {
     // These guards are the fixes for previously-reported hostile-repo findings,
     // and until now each was signed off with "cargo check green" rather than a
     // test that pins it. A refactor that dropped one would have passed CI.
+
+    // A Linux AppImage starts us inside its own read-only squashfs mount
+    // (AppRun chdirs to `$APPDIR/usr` so the byte-patched libwebkit can find its
+    // helper processes), so cwd must never be taken at face value there.
+    #[test]
+    fn appimage_launch_never_roots_on_the_mount() {
+        let home = Some(PathBuf::from("/home/me"));
+        let owd = Some(PathBuf::from("/home/me/Coding/app"));
+
+        // Not an AppImage: fall through to the normal cwd logic.
+        assert_eq!(appimage_root(false, owd.clone(), home.clone()), None);
+        // Launched from a real folder: that folder wins.
+        assert_eq!(
+            appimage_root(true, owd.clone(), home.clone()),
+            Some(PathBuf::from("/home/me/Coding/app"))
+        );
+        // A `.desktop`/launcher start gives `/` (or nothing) as OWD — no better
+        // than the mount, and the watcher refuses it. Home is the honest answer.
+        assert_eq!(appimage_root(true, Some(PathBuf::from("/")), home.clone()), home);
+        assert_eq!(appimage_root(true, None, home.clone()), home);
+        // Relative OWD is not a usable root either — we've already chdir'd away.
+        assert_eq!(appimage_root(true, Some(PathBuf::from("sub")), home.clone()), home);
+        // No HOME at all: still never the mount.
+        assert_eq!(appimage_root(true, None, None), Some(PathBuf::from("/")));
+    }
 
     #[test]
     #[cfg(unix)] // CI runs ubuntu-22.04; Windows symlinks need Developer Mode.

@@ -8,8 +8,37 @@ mod watcher;
 use pty::PtyState;
 use tauri::{Manager, WindowEvent};
 
+/// WebKitGTK 2.42+ renders through a DMA-BUF backing store by default, and where
+/// it can't negotiate one it produces NO FRAMES AT ALL — the GTK window opens,
+/// the web process is alive, and the content area stays blank forever. That is
+/// the single most common way a Tauri app "doesn't load" on Linux, and it is
+/// what our own AppImage hits: it bundles Ubuntu 22.04's GTK + WebKit but NOT
+/// libEGL/libgbm/libdrm, so a mismatched host driver (NVIDIA's proprietary
+/// stack, a VM with no GPU passthrough, a remote desktop) is negotiating with a
+/// two-year-old WebKit. There is no error — just a grey window.
+///
+/// Falling back costs us the DMA-BUF path only. On WebKitGTK versions that still
+/// have the older accelerated backing store we keep GPU compositing (and so
+/// xterm's WebGL renderer); on newer ones that dropped it, compositing goes and
+/// xterm falls back to its DOM renderer — which `TerminalPane` already handles,
+/// because it wraps `new WebglAddon()` in a try/catch for exactly this. A
+/// slower terminal beats a blank window.
+///
+/// Only set when the environment hasn't already spoken, so a user whose driver
+/// is fine can hand the DMA-BUF path back with `WEBKIT_DISABLE_DMABUF_RENDERER=0`.
+/// MUST run before GTK/WebKit initialise — i.e. before `Builder::run`.
+#[cfg(target_os = "linux")]
+fn prefer_working_webkit_renderer() {
+    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(target_os = "linux")]
+    prefer_working_webkit_renderer();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_notification::init())

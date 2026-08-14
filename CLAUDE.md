@@ -119,6 +119,30 @@ repo's config is attacker-controlled input.
   env lookups (`get_root`, `home_dir`), where the hop costs more than the work,
   and `pty_write` (see above).
 
+## Linux (`src-tauri/src/lib.rs`, `src-tauri/src/fs.rs`)
+
+Linux fails *silently* — no crash, no log line, just a window that never fills in.
+Both rules below are the fixes for exactly that.
+
+- **Set `WEBKIT_DISABLE_DMABUF_RENDERER=1` before `Builder::run`.** WebKitGTK
+  2.42+ defaults to a DMA-BUF backing store and, where it can't negotiate one,
+  emits no frames at all — the window opens, the web process lives, the content
+  area stays grey forever. Our AppImage guarantees the mismatch: it bundles
+  Ubuntu 22.04's GTK + WebKit but *not* libEGL/libgbm/libdrm, so an old WebKit
+  negotiates with the host's driver. Only set when unset, so a user can hand the
+  path back. It must run before GTK initialises, not in `setup()`.
+- **An AppImage's cwd is the app's own read-only mount, never a project.** Its
+  AppRun chdirs into `$APPDIR/usr` because the bundled libwebkit2gtk is
+  byte-patched `/usr` → `././` (same length, patches in place) and only resolves
+  its helper processes from there. So `project_root` answers the AppImage case
+  FIRST, from `OWD` (the runtime records the real launch dir) then `HOME` —
+  otherwise the file browser opens on `/tmp/.mount_XXXXXX/usr` and `git_status`
+  runs there. Pinned by `appimage_launch_never_roots_on_the_mount`.
+- **The `.deb`/`.rpm` use the *system* WebKitGTK; only the AppImage bundles its
+  own.** When a Linux user reports a blank window, the first question is which
+  artifact — they are different failure surfaces, and the site currently offers
+  the AppImage by default (`site/terminal/index.html`).
+
 ## Paths (`src/lib/paths.ts`)
 
 - **Every path helper is separator-agnostic.** The backend hands us *native*
