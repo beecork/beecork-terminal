@@ -54,6 +54,41 @@ function resetStuckModes(term: Terminal) {
   term.write(STUCK_MODE_RESET);
 }
 
+/** How long after a pane reappears to repaint it a second time. Long enough to
+ *  be a different compositing pass than the first, short enough that a pane that
+ *  did lose its picture is never blank for a noticeable beat. */
+const REDRAW_SETTLE_MS = 250;
+
+/** Force xterm to redraw the whole viewport.
+ *
+ *  xterm draws only when something asks it to, and coming back on screen is not
+ *  one of those things. Its RenderService parks the renderer on an
+ *  IntersectionObserver while the pane is `display:none`, and on resume repaints
+ *  only if a refresh was REQUESTED while it was away (`_needsFullRefresh`). A
+ *  pane that sat idle in the background — no output, no resize — therefore gets
+ *  zero draw calls when it reappears; xterm is trusting its canvas to still hold
+ *  the frame it last drew. `fit()` does not cover this: with the geometry
+ *  unchanged it returns without touching the renderer.
+ *
+ *  That trust is misplaced in a webview. This is the same hazard already called
+ *  out for pane reordering in App's `terminalOrder` — a WebGL canvas here loses
+ *  what it was showing when its layer is torn down, and nothing tells us it
+ *  happened, so it stays blank until the next draw. `display:none` for a long
+ *  stretch is exactly such a teardown.
+ *
+ *  The focused pane is usually saved by accident: `term.focus()` on the pane you
+ *  switch to fires xterm's focus handler, which requests a redraw. A pane that
+ *  comes back WITHOUT focus gets nothing — the unfocused half of a split, or a
+ *  session swapped into it from the pane header. Repainting costs one frame. */
+function redrawViewport(term: Terminal | null) {
+  if (!term) return;
+  try {
+    term.refresh(0, term.rows - 1);
+  } catch {
+    /* a terminal being torn down is not worth a crash */
+  }
+}
+
 /** Build xterm's theme from the app theme, including its built-in scrollbar. The
  *  slider is drawn from the themed `muted`/`accent` colors with alpha (8-digit
  *  hex) so it's a subtle-but-visible, draggable bar that brightens on hover/drag —
@@ -568,8 +603,8 @@ export default function TerminalPane({
     cbRef.current.onSeen(sessionId);
   }, [visible, sessionId]);
 
-  // On becoming visible (either split pane), refit. (A width change while
-  // already visible is handled by the ResizeObserver.)
+  // On becoming visible (either split pane), refit and repaint. (A width change
+  // while already visible is handled by the ResizeObserver.)
   useEffect(() => {
     if (!visible || !rendered) return;
     const raf = requestAnimationFrame(() => {
@@ -578,6 +613,11 @@ export default function TerminalPane({
       } catch {
         /* ignore */
       }
+      // Never trust the canvas to have kept its picture while it was hidden —
+      // see redrawViewport. Safe to call before the IntersectionObserver has
+      // reported the pane visible again: xterm queues the request and flushes it
+      // on resume.
+      redrawViewport(termRef.current);
       // First time this pane is shown, start its shell — now that it's laid out
       // and fitted, so the pty opens at the real size. Deferring the spawn to
       // here (rather than on mount) means restored background sessions don't all
@@ -590,8 +630,37 @@ export default function TerminalPane({
         restartRef.current?.();
       }
     });
-    return () => cancelAnimationFrame(raf);
+    // And once more, a moment later. The repaint above goes out on the frame the
+    // pane reappears, which is also the frame the webview may still be rebuilding
+    // its compositing layer on — a draw that lands mid-rebuild is wiped, and
+    // because nothing asks xterm to draw again, the pane keeps whatever it had:
+    // background, plus only the rows something happened to repaint afterwards (a
+    // TUI's status line, the blinking cursor row). That is the reported symptom.
+    // A second frame costs nothing and cannot land in the same window.
+    const settle = setTimeout(() => redrawViewport(termRef.current), REDRAW_SETTLE_MS);
+    return () => {
+      cancelAnimationFrame(raf);
+      clearTimeout(settle);
+    };
   }, [visible, sessionId, rendered]);
+
+  // The same repaint for the case where the PANE never changed but the WINDOW
+  // did — minimised, buried behind another app, or the display slept. The
+  // webview marks the page hidden and can drop the canvas layer then too, but no
+  // prop changes, so the effect above never runs. Only on-screen panes bother.
+  useEffect(() => {
+    if (!visible || !rendered) return;
+    function onWake() {
+      if (document.visibilityState !== "visible") return;
+      requestAnimationFrame(() => redrawViewport(termRef.current));
+    }
+    document.addEventListener("visibilitychange", onWake);
+    window.addEventListener("focus", onWake);
+    return () => {
+      document.removeEventListener("visibilitychange", onWake);
+      window.removeEventListener("focus", onWake);
+    };
+  }, [visible, rendered]);
 
   // Only the focused pane grabs the keyboard. `focusSignal` bumps when an overlay
   // (settings, confirm, file panel) closes, so the terminal refocuses without a click.

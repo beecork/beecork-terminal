@@ -79,6 +79,16 @@ read it before changing that mechanism.
   provider's `activate` and `spawn` closures are built ONCE, so a prop read
   directly in them freezes at first-visible — the change looks right and does
   nothing.
+- **Repaint a pane when it comes back on screen** (`redrawViewport`). xterm parks
+  its renderer on an IntersectionObserver while a pane is `display:none` and, on
+  resume, redraws only if a refresh was REQUESTED while it was away — an idle
+  background tab requests nothing, so it comes back with zero draw calls, and
+  `fit()` is a no-op when the geometry hasn't changed. The canvas is not
+  guaranteed to have kept its picture that long (same hazard as moving a pane's
+  DOM node — see `terminalOrder`), so the pane shows background plus only the rows
+  something redrew afterwards. Repaint on show, again after `REDRAW_SETTLE_MS`
+  (the first can share a frame with the layer rebuild that wipes it), and on
+  window wake. Pinned by the two repaint tests in `TerminalPane.test.tsx`.
 
 ## CSS (`src/App.css`) — these overrides are load-bearing
 

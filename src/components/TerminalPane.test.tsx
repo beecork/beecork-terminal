@@ -6,7 +6,7 @@ import { render, act } from "@testing-library/react";
 // wants a real canvas/GPU, the other a Rust backend. Both are mocked to the
 // smallest surface this component actually touches, so the test is about OUR
 // ordering logic and nothing else.
-const terminals: { opened: number; disposed: number }[] = [];
+const terminals: { opened: number; disposed: number; refreshed: number }[] = [];
 
 type TermLink = { text: string; activate: (e: { metaKey: boolean; ctrlKey: boolean }) => void };
 type LinkProvider = { provideLinks(y: number, cb: (links?: TermLink[]) => void): void };
@@ -29,9 +29,9 @@ vi.mock("@xterm/xterm", () => {
       active: { type: "normal", getLine: () => ({ translateToString: () => lineText }) },
     };
     parser = { registerOscHandler: () => ({ dispose: () => {} }) };
-    private rec: { opened: number; disposed: number };
+    private rec: { opened: number; disposed: number; refreshed: number };
     constructor() {
-      this.rec = { opened: 0, disposed: 0 };
+      this.rec = { opened: 0, disposed: 0, refreshed: 0 };
       terminals.push(this.rec);
     }
     open() {
@@ -39,6 +39,9 @@ vi.mock("@xterm/xterm", () => {
     }
     dispose() {
       this.rec.disposed++;
+    }
+    refresh() {
+      this.rec.refreshed++;
     }
     loadAddon() {}
     focus() {}
@@ -176,6 +179,52 @@ describe("TerminalPane lazy build", () => {
     render(view(true));
     await flushFrame();
     expect(spawns()).toHaveLength(1);
+  });
+
+  // Coming back on screen must force a repaint. xterm parks its renderer while
+  // the pane is display:none and, on resume, redraws only if a refresh was
+  // requested while it was away — an idle background pane gets none, and the
+  // canvas is not guaranteed to have kept its picture across the hide. Without
+  // this the pane comes back blank until something else happens to draw.
+  // `fit()` does not stand in for it: unchanged geometry means it does nothing.
+  it("repaints the viewport when a hidden pane comes back on screen", async () => {
+    const { rerender } = render(view(true));
+    await flushFrame();
+    const term = terminals[0];
+    const atFirstShow = term.refreshed;
+
+    await act(async () => rerender(view(false)));
+    await flushFrame();
+    expect(term.refreshed).toBe(atFirstShow); // hidden: nothing to draw
+
+    await act(async () => rerender(view(true)));
+    await flushFrame();
+    const atShow = term.refreshed;
+    expect(atShow).toBeGreaterThan(atFirstShow);
+
+    // …and again once the webview has settled: the first repaint shares a frame
+    // with the layer being rebuilt and can be wiped by it, which is what leaves
+    // the pane showing only the rows redrawn afterwards.
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 400));
+    });
+    expect(term.refreshed).toBeGreaterThan(atShow);
+  });
+
+  // The window, not the pane, can be what was hidden (minimised, buried, display
+  // asleep) — same lost canvas, but no prop changes, so the show path never runs.
+  it("repaints an on-screen pane when the window itself wakes up", async () => {
+    render(view(true));
+    await flushFrame();
+    const term = terminals[0];
+    const before = term.refreshed;
+
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    await flushFrame();
+
+    expect(term.refreshed).toBeGreaterThan(before);
   });
 });
 
