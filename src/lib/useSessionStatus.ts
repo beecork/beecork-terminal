@@ -24,6 +24,11 @@ const WORK_MIN_MS = 2500;
 // window. The amber dot still lights; only the repeat sound is suppressed.
 // Precise signals (bell, command exit) are exempt and always chime.
 const INFER_RECHIME_MS = 60_000;
+// Slack allowed between when a quiet timer was due and when it actually ran.
+// Beyond this the app was SUSPENDED, not merely busy: macOS freezes a
+// backgrounded / minimised / display-asleep window's timers and releases them all
+// at once when you come back, so a 1.5s timer can fire hours late.
+const STALE_TIMER_MS = 5000;
 // How often the batched status poll runs.
 const POLL_MS = 2000;
 // …and how many of those ticks also resolve each running agent's conversation
@@ -40,6 +45,25 @@ const AGENT_EVERY = 15;
 // Grant a short window of eager ticks instead, ended early once every running
 // agent has its id.
 const AGENT_EAGER_TICKS = 15;
+
+/**
+ * Did this timer fire so late that the app must have been suspended in between?
+ *
+ * The quiet inference is a statement about the RECENT past — "output stopped
+ * ATTN_QUIET_MS ago, so the agent is finished and waiting for you". A suspension
+ * invalidates it twice over: the silence it measured is just the app being
+ * frozen, and any output that did arrive is still sitting in the channel, about
+ * to flush the moment we resume. Acting on it lights the amber dot and chimes for
+ * a turn that ended hours ago, which reads as the tab going off at random.
+ *
+ * So when a quiet timer comes back from the dead, drop the inference and let the
+ * queued output re-arm it. Nothing real is lost: the two PRECISE producers — a
+ * bell, and a command going running → idle — are untouched, and both still fire
+ * on resume if that is what actually happened.
+ */
+function firedLate(armedAt: number, delayMs: number): boolean {
+  return Date.now() - armedAt > delayMs + STALE_TIMER_MS;
+}
 
 function addId(set: Set<string>, id: string): Set<string> {
   if (set.has(id)) return set;
@@ -166,6 +190,13 @@ export function useSessionStatus(
       // status commands are async now, so completion order is not call order.
       if (!latest.accept(id, ticket)) return;
       if (st.cwd) applyCwd(id, st.cwd);
+      // A tick that could not READ the foreground command answers `running: null`
+      // — the same shape as "the shell is idle at its prompt", and the opposite
+      // meaning. Acting on it announces a completion that never happened: amber
+      // dot + chime on a session whose agent is still sitting there, and it
+      // clears the agent id that "Resume" needs. Hold everything running-related
+      // and let the next tick (2s) answer for real. See running_known in pty.rs.
+      if (st.running_known === false) return;
       const nowRunning = st.running ?? undefined;
       const was = prevRunning.current[id];
       // Two producers feed wantsYou, deliberately complementary: this process-
@@ -226,10 +257,14 @@ export function useSessionStatus(
       clearTimeout(idleTimers.current[id]);
       clearTimeout(attnTimers.current[id]);
       delete attnTimers.current[id];
+      const armedAt = Date.now();
       idleTimers.current[id] = setTimeout(() => {
         const workedMs = now - (busySince.current[id] ?? now);
         delete busySince.current[id];
         setBusy((prev) => delId(prev, id));
+        // Came back from a suspension — the silence below is an artifact of the
+        // app being frozen, not of the agent finishing. See firedLate.
+        if (firedLate(armedAt, QUIET_MS)) return;
         // Only nag when a *real* turn of work ended. A brief blip (spinner tick,
         // statusline repaint) isn't a completion, so it must never flip an idle
         // background agent to blinking amber. Genuine "come look" signals — a
@@ -237,8 +272,12 @@ export function useSessionStatus(
         // two producers and are unaffected by this gate. Visibility is checked
         // when the timer FIRES: a pane you can see never nags.
         if (workedMs >= WORK_MIN_MS) {
+          const attnArmedAt = Date.now();
           attnTimers.current[id] = setTimeout(() => {
             delete attnTimers.current[id];
+            // …and again for a suspension that began inside THIS window, after
+            // the busy dot went off but before the quiet window completed.
+            if (firedLate(attnArmedAt, ATTN_QUIET_MS - QUIET_MS)) return;
             if (!visibleIdsRef.current.includes(id)) flagWants(id, true);
           }, ATTN_QUIET_MS - QUIET_MS);
         }

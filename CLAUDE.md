@@ -49,6 +49,19 @@ read it before changing that mechanism.
   `QUIET_MS` chimed in the *middle* of agent turns. `INFER_RECHIME_MS` (60s)
   rate-limits **inferred** chimes only; bell and command-exit are precise signals
   and always chime. All of this is pinned by `useSessionStatus.test.ts`.
+- **A quiet timer that fired late proves nothing** (`firedLate`). macOS freezes a
+  backgrounded / minimised / display-asleep window's timers and releases them all
+  on resume, so a 1.5s timer can land hours later. The silence it measured is the
+  app being frozen — and the output it "missed" is still queued in the channel.
+  Both quiet stages check their own arming time; the precise producers (bell,
+  command exit) are untouched and still fire on resume.
+- **`running: null` is two different answers, so the backend labels which**
+  (`running_known` in `pty.rs`). The shell being idle at its prompt reads as "your
+  command finished — come look" and always chimes; a tick that could not READ the
+  foreground command must never say that. The UI holds the previous value instead
+  — including the agent id "Resume" needs. Every no-answer path is `false`: an
+  unreadable foreground pid, `tcgetpgrp` returning nothing, Windows (no such
+  concept), and `ptyStatus`'s missing-session fallback in `api.ts`.
 - **Status replies need a per-session ordering guard** (`lib/latest.ts`). The
   commands are `command(async)`, so replies arrive in completion order, not call
   order. The key is the SESSION, not the call — one `pty_status_all` reply carries

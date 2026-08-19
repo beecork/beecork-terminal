@@ -233,3 +233,91 @@ describe("out-of-order status replies", () => {
     expect(result.current.wantsYou.has("b")).toBe(false); // no phantom "finished"
   });
 });
+
+describe("a status tick that could not read the foreground command", () => {
+  // `running: null` has two causes with opposite meanings: the shell really is
+  // idle at its prompt (= "your command finished, come look" — it chimes), or the
+  // backend could not read the foreground command this tick. Acting on the second
+  // is a phantom completion: amber dot + chime on a tab whose agent is still
+  // sitting there, which is exactly what it looked like from the outside.
+  it("never reads as a finished command, and holds the running label", async () => {
+    ptyStatusAll.mockReturnValue(
+      Promise.resolve({ b: { cwd: null, running: "claude", agent_session: "conv-1" } })
+    );
+    const { result, setRunning, setAgentId } = setup({ activeId: "a", visibleIds: ["a"] });
+    await tick(2100);
+    expect(setRunning).toHaveBeenCalledWith("b", "claude");
+    setRunning.mockClear();
+    setAgentId.mockClear();
+
+    // Now a tick that simply couldn't tell.
+    ptyStatusAll.mockReturnValue(
+      Promise.resolve({
+        b: { cwd: null, running: null, running_known: false, agent_session: null },
+      })
+    );
+    await tick(2100);
+
+    expect(result.current.wantsYou.has("b")).toBe(false);
+    expect(attention).not.toHaveBeenCalled();
+    expect(setRunning).not.toHaveBeenCalled(); // label held, not wiped
+    expect(setAgentId).not.toHaveBeenCalled(); // resume id held too
+
+    // A tick that CAN tell, and says idle, is the real signal — it still fires.
+    ptyStatusAll.mockReturnValue(
+      Promise.resolve({
+        b: { cwd: null, running: null, running_known: true, agent_session: null },
+      })
+    );
+    await tick(2100);
+    expect(result.current.wantsYou.has("b")).toBe(true);
+    expect(attention).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("quiet timers that fire after the app was suspended", () => {
+  // macOS freezes a backgrounded / asleep window's timers and releases them all
+  // when you come back, so the 1.5s + 4.5s quiet timers can land hours late. The
+  // silence they measured is the app being frozen, not the agent finishing —
+  // inferring "needs you" from it lights a tab amber and chimes for a turn that
+  // ended long ago, at a moment when nothing happened at all.
+  it("does not infer 'needs you' from silence measured across a suspension", async () => {
+    const { result } = setup({ activeId: "a", visibleIds: ["a"] });
+    await workStreak(result.current.onActivity, "b");
+
+    // The app is frozen for an hour with the quiet timers armed, then resumes:
+    // the wall clock jumped, the timers did not run.
+    vi.setSystemTime(Date.now() + 3_600_000);
+    await tick(ATTN_QUIET_MS + 1000);
+
+    expect(result.current.wantsYou.has("b")).toBe(false);
+    expect(attention).not.toHaveBeenCalled();
+    expect(result.current.busy.has("b")).toBe(false); // the dot still goes out
+  });
+
+  // The suspension can also begin in the SECOND window — after the busy dot went
+  // off and the attention timer was armed, but before the quiet window completed.
+  // That timer needs its own guard; the one on the first cannot see this.
+  it("does not infer it when the suspension begins inside the attention window", async () => {
+    const { result } = setup({ activeId: "a", visibleIds: ["a"] });
+    await workStreak(result.current.onActivity, "b");
+    await tick(QUIET_MS + 100); // busy dot off, attention timer armed
+    expect(result.current.wantsYou.has("b")).toBe(false);
+
+    vi.setSystemTime(Date.now() + 3_600_000); // frozen here, resumed an hour later
+    await tick(ATTN_QUIET_MS);
+
+    expect(result.current.wantsYou.has("b")).toBe(false);
+    expect(attention).not.toHaveBeenCalled();
+  });
+
+  // Only the guessed signal is dropped. A bell is the agent explicitly asking for
+  // you and must survive the same resume.
+  it("still flags a bell that arrives after a suspension", async () => {
+    const { result } = setup({ activeId: "a", visibleIds: ["a"] });
+    vi.setSystemTime(Date.now() + 3_600_000);
+    act(() => result.current.onBell("b"));
+    expect(result.current.wantsYou.has("b")).toBe(true);
+    expect(attention).toHaveBeenCalledTimes(1);
+  });
+});

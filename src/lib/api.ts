@@ -44,6 +44,12 @@ export interface PtyStatus {
   cwd: string | null;
   /** the command running at the prompt, e.g. "claude" (null when idle) */
   running: string | null;
+  /** Whether `running` is an answer or the absence of one. False means this tick
+   *  could not read the session's foreground command at all — NOT that the shell
+   *  is idle. The two look identical (`running: null`) and mean opposite things:
+   *  a genuine idle is "your command finished, come look" and chimes for it.
+   *  Absent (an older backend) counts as known. See `running_known` in pty.rs. */
+  running_known?: boolean;
   /** the running agent's conversation id, so resume reopens *this* tab's own
    *  chat rather than the last one used (null when unknown/not an agent) */
   agent_session: string | null;
@@ -60,7 +66,11 @@ export const ptyStatusAll = (ids: string[], withAgents = false) =>
 /** A single session's live status — a thin convenience over the batched command. */
 export const ptyStatus = (id: string, withAgents = false): Promise<PtyStatus> =>
   ptyStatusAll([id], withAgents).then(
-    (m) => m[id] ?? { cwd: null, running: null, agent_session: null }
+    // No entry means the backend had nothing to report for this session (no live
+    // pty — never spawned, or its shell is gone). That is an absent reading, not
+    // an idle prompt: `running_known: false` keeps it from reading as a command
+    // that just finished.
+    (m) => m[id] ?? { cwd: null, running: null, running_known: false, agent_session: null }
   );
 
 /**

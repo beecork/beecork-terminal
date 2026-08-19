@@ -460,6 +460,15 @@ pub struct PtyStatus {
     cwd: Option<String>,
     /// the foreground command running at the prompt (e.g. "claude"), if any
     running: Option<String>,
+    /// Whether `running` is an ANSWER or the absence of one. `running: None` has
+    /// two very different causes: the shell owns the terminal again (genuinely
+    /// idle at its prompt — `true`), or this tick could not read the foreground
+    /// command at all (`false`). The UI reads a true idle as "your command
+    /// finished — come look" and chimes for it, so a single unreadable tick
+    /// reported as idle is a phantom completion for a session whose agent is
+    /// still sitting right there. Always `false` on Windows, which has no
+    /// foreground-group concept to read.
+    running_known: bool,
     /// the running agent's conversation id, so a relaunch can resume *this* tab's
     /// own chat (`claude --resume <id>`) instead of whichever ran last. Only set
     /// for agents whose transcript we can locate (claude/codex); None otherwise.
@@ -552,6 +561,7 @@ fn statuses_for(
         id: String,
         cwd: Option<String>,
         running: Option<String>,
+        running_known: bool,
         fg_cmd: Option<u32>,
     }
     let rows: Vec<Row> = targets
@@ -561,14 +571,25 @@ fn statuses_for(
                 .process(Pid::from_u32(shell))
                 .and_then(|p| p.cwd())
                 .map(|c| c.to_string_lossy().into_owned());
-            // fg == shell → shell owns the terminal → idle prompt.
-            let (running, fg_cmd) = match fg {
-                Some(f) if f != shell => {
-                    (sys.process(Pid::from_u32(f)).and_then(command_label), Some(f))
-                }
-                _ => (None, None),
+            // Three outcomes, and only two of them are answers — see
+            // `running_known`. Reporting the third as "idle" is what makes the UI
+            // announce a completion that never happened.
+            let (running, running_known, fg_cmd) = match fg {
+                // The shell owns the terminal: positively at its prompt.
+                Some(f) if f == shell => (None, true, None),
+                // A command owns it. Its group leader is normally readable; when
+                // it isn't, the command is mid-exit or the pid went stale between
+                // tcgetpgrp and this refresh — either way we don't know yet, and
+                // the next tick (2s) answers properly.
+                Some(f) => match sys.process(Pid::from_u32(f)).and_then(command_label) {
+                    Some(label) => (Some(label), true, Some(f)),
+                    None => (None, false, None),
+                },
+                // No foreground group to read (tcgetpgrp failed; always on
+                // Windows). Absence of a reading, not a reading of absence.
+                None => (None, false, None),
             };
-            Row { id, cwd, running, fg_cmd }
+            Row { id, cwd, running, running_known, fg_cmd }
         })
         .collect();
 
@@ -578,7 +599,15 @@ fn statuses_for(
         return rows
             .into_iter()
             .map(|r| {
-                (r.id, PtyStatus { cwd: r.cwd, running: r.running, agent_session: None })
+                (
+                    r.id,
+                    PtyStatus {
+                        cwd: r.cwd,
+                        running: r.running,
+                        running_known: r.running_known,
+                        agent_session: None,
+                    },
+                )
             })
             .collect();
     }
@@ -610,7 +639,15 @@ fn statuses_for(
                 }
                 _ => None,
             };
-            (r.id, PtyStatus { cwd: r.cwd, running: r.running, agent_session })
+            (
+                r.id,
+                PtyStatus {
+                    cwd: r.cwd,
+                    running: r.running,
+                    running_known: r.running_known,
+                    agent_session,
+                },
+            )
         })
         .collect()
 }
@@ -682,6 +719,43 @@ mod tests {
         let cheap = super::statuses_for(vec![(id.clone(), std::process::id(), None)], false);
         assert!(cheap.get(&id).unwrap().agent_session.is_none());
         assert!(cheap.get(&id).unwrap().cwd.is_some());
+    }
+
+    // The UI reads a genuine idle prompt as "your command finished — come look"
+    // and chimes for it. So "nothing is running" and "I could not tell what is
+    // running" must never arrive as the same answer: one unreadable tick reported
+    // as idle is a phantom completion for a session whose agent is still there.
+    #[test]
+    fn an_unreadable_foreground_command_is_not_reported_as_an_idle_prompt() {
+        let me = std::process::id();
+
+        // fg == shell: the shell owns the terminal. A real answer — idle.
+        let idle = super::statuses_for(vec![("s".into(), me, Some(me))], false);
+        let idle = idle.get("s").unwrap();
+        assert!(idle.running.is_none());
+        assert!(idle.running_known, "an idle prompt is a reading, not a gap");
+
+        // fg is a command we CAN read: a real answer — running.
+        let child = std::process::Command::new("sleep").arg("30").spawn().unwrap();
+        let run = super::statuses_for(vec![("s".into(), me, Some(child.id()))], false);
+        let run = run.get("s").unwrap();
+        assert_eq!(run.running.as_deref(), Some("sleep"));
+        assert!(run.running_known);
+
+        // fg points at a pid we cannot read (it is gone). Not an idle prompt —
+        // no reading at all, so the UI must hold what it had.
+        let mut child = child;
+        child.kill().unwrap();
+        child.wait().unwrap();
+        let gap = super::statuses_for(vec![("s".into(), me, Some(child.id()))], false);
+        let gap = gap.get("s").unwrap();
+        assert!(gap.running.is_none());
+        assert!(!gap.running_known, "an unreadable foreground pid must not read as idle");
+
+        // No foreground group at all (tcgetpgrp gave nothing; always so on
+        // Windows) — also a gap, not an idle prompt.
+        let none = super::statuses_for(vec![("s".into(), me, None)], false);
+        assert!(!none.get("s").unwrap().running_known);
     }
 
     fn argv(parts: &[&str]) -> Vec<String> {
