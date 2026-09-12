@@ -38,16 +38,21 @@ jobs:
             artifact: appimage
           - os: ubuntu-24.04
             artifact: deb
-          # Diagnostic legs. The system WebKitGTK on 24.04 has hung at webview
-          # creation in this headless environment (alive, no window, no
-          # `[ready]`); these tell a runner artifact from a real 24.04 problem.
+          # Diagnostic legs. The system WebKitGTK on 24.04 hangs at webview
+          # creation here (alive, no window mapped, no `[ready]`), while the
+          # AppImage's bundled 22.04 WebKit on the SAME runner comes up fine.
+          # Neither WEBKIT_DISABLE_DMABUF_RENDERER=0 nor
+          # WEBKIT_DISABLE_COMPOSITING_MODE=1 changed it (tried). The suspect is
+          # 24.04's AppArmor restriction on unprivileged user namespaces, which
+          # breaks WebKit's bubblewrap web-process sandbox — so: the same .deb
+          # with the sandbox off (diagnostic ONLY, never a user instruction),
+          # and the .deb on 22.04, which has no such restriction.
           # `extra_env` is applied to the app's environment only.
           - os: ubuntu-24.04
             artifact: deb
-            extra_env: WEBKIT_DISABLE_DMABUF_RENDERER=0
-          - os: ubuntu-24.04
+            extra_env: WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1
+          - os: ubuntu-22.04
             artifact: deb
-            extra_env: WEBKIT_DISABLE_COMPOSITING_MODE=1
     runs-on: ${{ matrix.os }}
     name: ${{ matrix.os }} ${{ matrix.artifact }} ${{ matrix.extra_env }}
     steps:
@@ -125,6 +130,12 @@ jobs:
           env | grep -E '^(HOME|XDG_[A-Z_]+)=' || true
           find "$HOME" -maxdepth 6 -name 'beecork-terminal.log*' 2>/dev/null || true
           ls -la "$HOME/.local/share" 2>/dev/null || echo "(no ~/.local/share)"
+          echo "::endgroup::"
+          echo "::group::processes, sandbox and AppArmor evidence"
+          ps -eo pid,ppid,stat,etimes,cmd --forest | grep -i -E "beecork|WebKit|bwrap|xdg-dbus" | grep -v grep || echo "(no matching processes)"
+          sysctl kernel.apparmor_restrict_unprivileged_userns 2>/dev/null || echo "(sysctl not present — older kernel/AppArmor)"
+          sudo dmesg 2>/dev/null | grep -i -E "apparmor|bwrap|userns" | tail -n 8 || true
+          dpkg-query -W -f='${Package} ${Version}\n' libwebkit2gtk-4.1-0 2>/dev/null || echo "(system webkit not installed — AppImage leg)"
           echo "::endgroup::"
           kill "$APP" 2>/dev/null || true
           if [ "$alive" != 1 ]; then
