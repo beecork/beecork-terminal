@@ -89,6 +89,45 @@ function redrawViewport(term: Terminal | null) {
   }
 }
 
+/** Force the WebGL renderer to re-upload every texture-atlas page.
+ *
+ *  xterm's GlyphRenderer decides whether a texture unit still matches its atlas
+ *  page by comparing `page.version` — a PER-PAGE counter — against the version it
+ *  recorded for that texture SLOT. Sound only while a page keeps its slot, and it
+ *  doesn't: once the atlas reaches `maxAtlasPages` (`MAX_TEXTURE_IMAGE_UNITS`, 16
+ *  on WebKit) xterm merges four pages into one and SPLICES them out, so every
+ *  page above them shifts down a slot. Slot i now holds a different page, and its
+ *  counter is being compared against the counter of the page that used to live
+ *  there — two unrelated numbers. Equal by chance means the upload is skipped and
+ *  the pane keeps drawing the old page's picture with the new page's
+ *  coordinates: letters rendered as fragments of OTHER letters, in those letters'
+ *  colours. Rare glyphs go first (bold/italic/coloured runs live on the late
+ *  pages; plain body text sits on page 0 and looks fine), and it is permanent —
+ *  the same character is wrong everywhere it appears on screen.
+ *
+ *  Nothing self-heals it. `GlyphRenderer.setAtlas()` is what resets every slot to
+ *  version -1 and forces a full re-upload, and the only thing that reaches it is
+ *  `WebglRenderer._refreshCharAtlas()` — resize, DPR change, theme change, and
+ *  nothing else. That is exactly why resizing the window repairs it, and why it
+ *  comes back: the next merge is another chance to collide.
+ *
+ *  So take the cheapest of those three triggers. Re-assigning `options.theme`
+ *  with the SAME colours runs the identical path a resize does — reacquire the
+ *  atlas, reset the slots, clear the model, repaint the viewport — without
+ *  touching geometry or the buffer. It must be a fresh object: xterm's option
+ *  setter compares by identity and ignores a write of the same reference.
+ *
+ *  Fixed upstream in @xterm/addon-webgl 0.20.0 by making the counter globally
+ *  monotonic (`AtlasPage.nextVersion`); drop this when that ships stable. */
+function resyncAtlasTextures(term: Terminal | null, theme: Theme) {
+  if (!term) return;
+  try {
+    term.options.theme = xtermTheme(theme);
+  } catch {
+    /* a terminal being torn down is not worth a crash */
+  }
+}
+
 /** Build xterm's theme from the app theme, including its built-in scrollbar. The
  *  slider is drawn from the themed `muted`/`accent` colors with alpha (8-digit
  *  hex) so it's a subtle-but-visible, draggable bar that brightens on hover/drag —
@@ -331,6 +370,7 @@ export default function TerminalPane({
     if (!hostRef.current || !mountRef.current) return;
     let disposed = false;
     let cwdHintTimer: ReturnType<typeof setTimeout> | undefined;
+    let atlasResync: ReturnType<typeof setTimeout> | undefined;
 
     const { theme, settings } = lookRef.current;
     const term = new Terminal({
@@ -376,6 +416,39 @@ export default function TerminalPane({
         // context is ever lost, drop the addon so xterm falls back to DOM
         // rather than drawing into a dead context (a blank/frozen terminal).
         webgl.onContextLoss(() => webgl.dispose());
+
+        // Re-sync the atlas textures whenever xterm reshapes its page array —
+        // see resyncAtlasTextures for what goes wrong if we don't.
+        //
+        // Only a REMOVE can make a texture slot ambiguous, and only merging
+        // removes: until the first one the array has only ever grown, so page i
+        // is the first page ever to occupy slot i and that slot is still at
+        // version -1, which always uploads. After a merge the array has holes
+        // that later pages fall into, so from then on an ADD can land in a slot
+        // some other page was uploaded from, and both events need the re-sync.
+        // Hence `merged` — before it, this costs nothing at all.
+        //
+        // Deferred, because both events fire from INSIDE xterm's model update,
+        // mid-frame; re-entering the renderer there would clear the vertex array
+        // it is halfway through filling. The timer also collapses a merge's five
+        // events (four removes, one add) into a single re-sync.
+        let merged = false;
+        const resync = () => {
+          if (disposed || atlasResync) return;
+          atlasResync = setTimeout(() => {
+            atlasResync = undefined;
+            if (disposed) return;
+            resyncAtlasTextures(termRef.current, lookRef.current.theme);
+          }, 0);
+        };
+        webgl.onAddTextureAtlasCanvas(() => {
+          if (merged) resync();
+        });
+        webgl.onRemoveTextureAtlasCanvas(() => {
+          merged = true;
+          resync();
+        });
+
         term.loadAddon(webgl);
       } catch (e) {
         console.warn("WebGL renderer unavailable, using default", e);
@@ -579,6 +652,7 @@ export default function TerminalPane({
     return () => {
       disposed = true;
       clearTimeout(cwdHintTimer);
+      clearTimeout(atlasResync);
       cancelAnimationFrame(roRaf);
       ro.disconnect();
       linkProvider.dispose();

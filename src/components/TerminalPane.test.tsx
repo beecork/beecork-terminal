@@ -6,7 +6,7 @@ import { render, act } from "@testing-library/react";
 // wants a real canvas/GPU, the other a Rust backend. Both are mocked to the
 // smallest surface this component actually touches, so the test is about OUR
 // ordering logic and nothing else.
-const terminals: { opened: number; disposed: number; refreshed: number }[] = [];
+const terminals: { opened: number; disposed: number; refreshed: number; themeWrites: number }[] = [];
 
 type TermLink = { text: string; activate: (e: { metaKey: boolean; ctrlKey: boolean }) => void };
 type LinkProvider = { provideLinks(y: number, cb: (links?: TermLink[]) => void): void };
@@ -29,10 +29,21 @@ vi.mock("@xterm/xterm", () => {
       active: { type: "normal", getLine: () => ({ translateToString: () => lineText }) },
     };
     parser = { registerOscHandler: () => ({ dispose: () => {} }) };
-    private rec: { opened: number; disposed: number; refreshed: number };
+    private rec: { opened: number; disposed: number; refreshed: number; themeWrites: number };
     constructor() {
-      this.rec = { opened: 0, disposed: 0, refreshed: 0 };
+      this.rec = { opened: 0, disposed: 0, refreshed: 0, themeWrites: 0 };
       terminals.push(this.rec);
+      // Writing `options.theme` is how the pane forces the WebGL renderer to
+      // re-upload its atlas pages, so count the writes rather than the value.
+      const rec = this.rec;
+      Object.defineProperty(this.options, "theme", {
+        get: () => undefined,
+        set: () => {
+          rec.themeWrites++;
+        },
+        configurable: true,
+        enumerable: true,
+      });
     }
     open() {
       this.rec.opened++;
@@ -68,9 +79,19 @@ vi.mock("@xterm/xterm", () => {
 });
 vi.mock("@xterm/addon-fit", () => ({ FitAddon: class { fit() {} } }));
 vi.mock("@xterm/addon-search", () => ({ SearchAddon: class {} }));
+// The WebGL addon is where the texture-atlas events come from. The mock lets a
+// test fire them, which is the only way to reach the re-sync path from jsdom.
+let atlasPageAdded: (() => void) | null = null;
+let atlasPageRemoved: (() => void) | null = null;
 vi.mock("@xterm/addon-webgl", () => ({
   WebglAddon: class {
     onContextLoss() {}
+    onAddTextureAtlasCanvas(cb: () => void) {
+      atlasPageAdded = cb;
+    }
+    onRemoveTextureAtlasCanvas(cb: () => void) {
+      atlasPageRemoved = cb;
+    }
     dispose() {}
   },
 }));
@@ -225,6 +246,94 @@ describe("TerminalPane lazy build", () => {
     await flushFrame();
 
     expect(term.refreshed).toBeGreaterThan(before);
+  });
+});
+
+// A page merge renumbers xterm's texture slots, and its GlyphRenderer keys
+// "does this slot still hold what I uploaded?" off a PER-PAGE counter — so a
+// page that lands in a slot whose recorded counter happens to match is never
+// re-uploaded, and every glyph on it draws from the previous page's picture.
+// That is the garbled-letters-in-other-letters'-colours report, and the reason
+// resizing the window (the only thing that otherwise resets the slots) fixes it.
+describe("WebGL texture atlas re-sync", () => {
+  beforeEach(() => {
+    invoke.mockClear();
+    terminals.length = 0;
+    atlasPageAdded = null;
+    atlasPageRemoved = null;
+  });
+  afterEach(() => vi.clearAllMocks());
+
+  /** Run the pending re-sync timer. */
+  async function flushResync() {
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+  }
+
+  it("costs nothing while the atlas has only ever grown", async () => {
+    render(view(true));
+    await flushFrame();
+    const term = terminals[0];
+    const before = term.themeWrites;
+
+    // Pages 2..N of a fresh atlas: each one is the first ever to occupy its
+    // slot, which is still at version -1 and therefore always uploads. Nothing
+    // to repair, so nothing should happen.
+    await act(async () => atlasPageAdded?.());
+    await act(async () => atlasPageAdded?.());
+    await flushResync();
+
+    expect(term.themeWrites).toBe(before);
+  });
+
+  it("re-syncs once for a merge, not once per page it removed", async () => {
+    render(view(true));
+    await flushFrame();
+    const term = terminals[0];
+    const before = term.themeWrites;
+
+    // What a merge actually emits: four pages spliced out, one merged page in.
+    await act(async () => {
+      atlasPageRemoved?.();
+      atlasPageRemoved?.();
+      atlasPageRemoved?.();
+      atlasPageRemoved?.();
+      atlasPageAdded?.();
+    });
+    await flushResync();
+
+    expect(term.themeWrites).toBe(before + 1);
+  });
+
+  it("keeps re-syncing on later adds, which can now land in a reused slot", async () => {
+    render(view(true));
+    await flushFrame();
+    const term = terminals[0];
+
+    await act(async () => atlasPageRemoved?.());
+    await flushResync();
+    const afterMerge = term.themeWrites;
+
+    // Same event as the first test, but the array has holes in it now.
+    await act(async () => atlasPageAdded?.());
+    await flushResync();
+
+    expect(term.themeWrites).toBe(afterMerge + 1);
+  });
+
+  // The events fire from inside xterm's own model update, mid-frame. Re-entering
+  // the renderer there clears the vertex array it is halfway through filling.
+  it("defers the re-sync out of the frame the event fires in", async () => {
+    render(view(true));
+    await flushFrame();
+    const term = terminals[0];
+
+    await act(async () => atlasPageRemoved?.());
+    const during = term.themeWrites;
+    await flushResync();
+
+    expect(term.themeWrites).toBe(during + 1);
   });
 });
 

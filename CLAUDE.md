@@ -103,6 +103,23 @@ read it before changing that mechanism.
   (the first can share a frame with the layer rebuild that wipes it), and on
   window wake. Pinned by the two repaint tests in `TerminalPane.test.tsx`.
 
+- **Re-upload the WebGL texture atlas whenever xterm reshapes its page array**
+  (`resyncAtlasTextures`). Every pane shares ONE atlas — `acquireTextureAtlas`
+  matches on font/size/theme/DPR — but each holds its own GPU copy and decides a
+  slot is current by comparing `page.version`, a PER-PAGE counter, against the
+  version it recorded for that SLOT. Merging (at `MAX_TEXTURE_IMAGE_UNITS` pages)
+  splices pages out, so a slot ends up holding a different page whose counter is
+  compared with the previous occupant's: equal by chance skips the upload and the
+  pane draws the old page's picture with the new page's coordinates — letters as
+  fragments of OTHER letters, in those letters' colours, permanently and
+  identically everywhere that character appears. Only resize/DPR/theme reach
+  `setAtlas()`, which is why resizing the window was the only cure. Re-assigning
+  `options.theme` is that same path minus the geometry; it must be a FRESH object
+  (the option setter compares identity) and deferred out of the frame (the events
+  fire from inside xterm's model update). Fixed upstream in addon-webgl 0.20.0 by
+  making the counter globally monotonic — drop this when that ships stable.
+  Pinned by the four atlas re-sync tests in `TerminalPane.test.tsx`.
+
 ## CSS (`src/App.css`) — these overrides are load-bearing
 
 - **The terminal's scrollbar is xterm 6's own.** Don't hide it, reimplement it, or
