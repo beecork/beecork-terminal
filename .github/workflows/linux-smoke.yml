@@ -38,21 +38,9 @@ jobs:
             artifact: appimage
           - os: ubuntu-24.04
             artifact: deb
-          # Diagnostic legs. The system WebKitGTK on 24.04 hangs at webview
-          # creation here (alive, no window mapped, no `[ready]`), while the
-          # AppImage's bundled 22.04 WebKit on the SAME runner comes up fine.
-          # Neither WEBKIT_DISABLE_DMABUF_RENDERER=0 nor
-          # WEBKIT_DISABLE_COMPOSITING_MODE=1 changed it (tried). The suspect is
-          # 24.04's AppArmor restriction on unprivileged user namespaces, which
-          # breaks WebKit's bubblewrap web-process sandbox — so: the same .deb
-          # with the sandbox off (diagnostic ONLY, never a user instruction),
-          # and the .deb on 22.04, which has no such restriction.
-          # `extra_env` is applied to the app's environment only.
-          - os: ubuntu-24.04
-            artifact: deb
-            extra_env: WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1
           - os: ubuntu-22.04
             artifact: deb
+          # `extra_env` (diagnostic only) is applied to the app's environment.
     runs-on: ${{ matrix.os }}
     name: ${{ matrix.os }} ${{ matrix.artifact }} ${{ matrix.extra_env }}
     steps:
@@ -95,7 +83,13 @@ jobs:
           # libEGL the binary itself fails to load ("libEGL.so.1: cannot open
           # shared object file"). mesa-dri adds llvmpipe, a software GL, so
           # WebKit has SOMETHING to composite with under Xvfb.
-          sudo apt-get install -y xvfb x11-apps fuse3 imagemagick \
+          # dbus: a desktop session always has a session bus; the system GTK
+          # (the .deb) reaches for it through dconf before it opens a window,
+          # and on a headless runner with no bus the app sat blocked forever
+          # with no window and no WebKit child processes — every .deb leg,
+          # 22.04 and 24.04, sandbox on or off — while the AppImage, whose
+          # bundled GIO never touches D-Bus, came up fine on the same runner.
+          sudo apt-get install -y xvfb x11-apps fuse3 imagemagick dbus \
             libegl1 libgl1 libgles2 libgbm1 libgl1-mesa-dri
           if [ "$ARTIFACT" = deb ]; then
             # apt (not dpkg) so the package's own dependencies — the system
@@ -115,14 +109,17 @@ jobs:
           # Launch from a scratch project folder, the way a user would from a
           # file manager: not from `/`, not from the AppImage's own mount.
           mkdir -p "$HOME/demo-project" && cd "$HOME/demo-project"
+          # Under a session bus, like a desktop (see "Install a desktop").
+          # `dbus-run-session` wraps the app, so find the app's own pid by name
+          # for the liveness check rather than trusting `$!`.
           case "$ARTIFACT" in
-            appimage) env $EXTRA_ENV "$GITHUB_WORKSPACE/app.AppImage" >"$GITHUB_WORKSPACE/app.out" 2>&1 & ;;
-            deb)      env $EXTRA_ENV beecork-terminal               >"$GITHUB_WORKSPACE/app.out" 2>&1 & ;;
+            appimage) dbus-run-session -- env $EXTRA_ENV "$GITHUB_WORKSPACE/app.AppImage" >"$GITHUB_WORKSPACE/app.out" 2>&1 & ;;
+            deb)      dbus-run-session -- env $EXTRA_ENV beecork-terminal               >"$GITHUB_WORKSPACE/app.out" 2>&1 & ;;
           esac
-          APP=$!
+          WRAPPER=$!
           sleep 20
           xwd -root -silent | convert xwd:- "$GITHUB_WORKSPACE/screenshot.png" || true
-          alive=0; kill -0 "$APP" 2>/dev/null && alive=1
+          alive=0; pgrep -x beecork-terminal >/dev/null && alive=1
           LOG="$HOME/.local/share/com.beecork.terminal/logs/beecork-terminal.log"
           echo "::group::stdout / stderr"; cat "$GITHUB_WORKSPACE/app.out" || true; echo "::endgroup::"
           echo "::group::crash log ($LOG)"; cat "$LOG" 2>/dev/null || echo "(no log file)"; echo "::endgroup::"
@@ -137,7 +134,8 @@ jobs:
           sudo dmesg 2>/dev/null | grep -i -E "apparmor|bwrap|userns" | tail -n 8 || true
           dpkg-query -W -f='${Package} ${Version}\n' libwebkit2gtk-4.1-0 2>/dev/null || echo "(system webkit not installed — AppImage leg)"
           echo "::endgroup::"
-          kill "$APP" 2>/dev/null || true
+          pkill -x beecork-terminal 2>/dev/null || true
+          kill "$WRAPPER" 2>/dev/null || true
           if [ "$alive" != 1 ]; then
             echo "::error::the app exited within 20 s — see stdout/stderr above"
             exit 1
