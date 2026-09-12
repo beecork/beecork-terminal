@@ -736,8 +736,22 @@ mod tests {
         assert!(idle.running_known, "an idle prompt is a reading, not a gap");
 
         // fg is a command we CAN read: a real answer — running.
+        //
+        // `spawn` returns between fork and exec: for a moment the child still
+        // carries THIS process's name (the test thread's, cut to the kernel's 15
+        // chars: "pty::tests::an_"), and one CI run read exactly that. Poll until
+        // the exec has landed — it is a real reading either way, so the test is
+        // about the label, not the timing.
         let child = std::process::Command::new("sleep").arg("30").spawn().unwrap();
-        let run = super::statuses_for(vec![("s".into(), me, Some(child.id()))], false);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let run = loop {
+            let m = super::statuses_for(vec![("s".into(), me, Some(child.id()))], false);
+            let landed = m.get("s").unwrap().running.as_deref() == Some("sleep");
+            if landed || std::time::Instant::now() > deadline {
+                break m;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        };
         let run = run.get("s").unwrap();
         assert_eq!(run.running.as_deref(), Some("sleep"));
         assert!(run.running_known);

@@ -134,6 +134,23 @@ git push --follow-tags
 > fine, so the trigger event, not the org setting, is what differs. If a release job
 > ever fails this way again, re-run it via `workflow run` rather than chasing the
 > permission.
+>
+> **And when a dispatched run is denied too** — v0.1.30 (2026-09-13) hit
+> `Resource not accessible by integration` on create-a-release on two dispatched
+> runs in a row, with the job log showing `Contents: write` on the token, an hour
+> after v0.1.29 had published fine — don't chase it. Create the release yourself
+> first, as a **prerelease** (the action finds an existing release by tag and only
+> uploads; a draft would NOT be found with `releaseDraft: false`, and a full
+> release would move `releases/latest` — and every stable download link — to an
+> empty release for the length of the build):
+> ```bash
+> gh release create v0.1.30 --verify-tag --prerelease \
+>   --title "Beecork Terminal v0.1.30" \
+>   --notes "Download the installer for your platform below. See the assets."
+> gh workflow run release.yml --ref v0.1.30
+> # …green, assets confirmed, then promote it:
+> gh release edit v0.1.30 --prerelease=false --latest
+> ```
 
 Once the run is dispatched, ~10–15 min later a **GitHub Release** appears with:
 `.dmg` (arm64 + x64), `.msi` + `.exe` (Windows), `.AppImage` + `.deb` (Linux) —
