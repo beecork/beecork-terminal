@@ -156,10 +156,15 @@ repo's config is attacker-controlled input.
 The app sends nothing anywhere, and an installed copy has no console, no stderr
 and no devtools — so without this file a crash report is the words "it crashed".
 
-- **`diag::init` is the first line of `setup()`.** The panic hook is
-  process-global, so it covers the pty threads, the watcher and the async runtime
-  — but only from the moment it is installed. Anything registered above it
-  (a plugin, a thread) panics unrecorded.
+- **`diag::init()` is the first line of `run()`, before GTK/WebKit/WebView2
+  exist; `diag::ready()` is the first line of `setup()`.** Tauri creates the
+  config windows BEFORE calling setup, so `[launch]` without `[ready]` in the
+  log means the window/webview never came up — the Linux blank-window family
+  and a Mac launch kill both land there. That is why the log dir is resolved
+  with `dirs` (already Tauri's own dependency) and not through an `AppHandle`.
+  The panic hook is process-global, so it covers the pty threads, the watcher
+  and the async runtime — from the moment it is installed, and nothing may be
+  installed above it.
 - **Nothing in `diag.rs` may panic** — it runs inside the panic hook. No
   `unwrap`/`expect`; every I/O error is dropped. Same contract for `logEvent` in
   `diag.ts`: it is called from `componentDidCatch` and the global error handlers,
@@ -169,7 +174,7 @@ and no devtools — so without this file a crash report is the words "it crashed
   in `app_log_dir()` (macOS `~/Library/Logs/<id>/`, Windows
   `%LOCALAPPDATA%\<id>\logs\`, Linux `~/.local/share/<id>/logs/`); Settings →
   Diagnostics shows the path and reveals it. `linux-smoke.yml` asserts on the
-  `[launch]` / `[PANIC]` tags, so those strings are an interface.
+  `[launch]` / `[ready]` / `[PANIC]` tags, so those strings are an interface.
 - **It cannot see a crash below Rust** (WebKit/WebView2, a stack overflow,
   Gatekeeper). Those live only in the OS crash reporter — Console.app → Crash
   Reports, Reliability Monitor. A `[launch]` line with nothing after it, at the
@@ -206,6 +211,12 @@ Both rules below are the fixes for exactly that.
   own.** When a Linux user reports a blank window, the first question is which
   artifact — they are different failure surfaces, and the site currently offers
   the AppImage by default (`site/terminal/index.html`).
+- **The AppImage needs the host's Mesa** — `libegl1`, `libgl1`, `libgbm1` are
+  exactly what the bundle omits so it can negotiate with the host's driver.
+  Without libEGL the binary does not even load (`libEGL.so.1: cannot open shared
+  object file`) — a "does nothing" on a minimal install or an old WSL. Every
+  desktop has them; `linux-smoke.yml` installs them to stand in for one, and the
+  download page names the fix.
 
 ## Paths (`src/lib/paths.ts`)
 

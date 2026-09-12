@@ -13,19 +13,29 @@
 //!   Windows  %LOCALAPPDATA%\com.beecork.terminal\logs\beecork-terminal.log
 //!   Linux    ~/.local/share/com.beecork.terminal/logs/beecork-terminal.log
 //!
-//! (all `app_log_dir()`; Settings shows the path and reveals the file). It holds
-//! one line per launch (version, OS, arch), every Rust panic on ANY thread with
-//! its location and backtrace — `set_hook` is process-global, so the pty writer
-//! and reader threads, the watcher and the async runtime are all covered — and
-//! whatever the webview reports through `log_event`: uncaught JS errors,
-//! unhandled promise rejections, and React render crashes caught by
-//! `ErrorBoundary` (`src/lib/diag.ts`).
+//! (the same directories Tauri's `app_log_dir()` names; Settings shows the path
+//! and reveals the file). It holds, per run, a `[launch]` line (version, OS,
+//! arch) and a `[ready]` line; every Rust panic on ANY thread with its location
+//! and backtrace — `set_hook` is process-global, so the pty writer and reader
+//! threads, the watcher and the async runtime are all covered — and whatever
+//! the webview reports through `log_event`: uncaught JS errors, unhandled
+//! promise rejections, and React render crashes caught by `ErrorBoundary`
+//! (`src/lib/diag.ts`).
+//!
+//! `[launch]` is written by `init`, the FIRST line of `run()` — before GTK,
+//! WebKit or WebView2 initialise — and `[ready]` by `ready`, from `setup`,
+//! which Tauri calls only AFTER the config windows and their webviews exist.
+//! That ordering is the point: window creation is exactly where Linux hangs
+//! (a process that is alive with a window that never fills in — CLAUDE.md
+//! "Linux") and where a signature or architecture problem kills a Mac launch.
+//! So a `[launch]` with no `[ready]` after it means "the window never came
+//! up", and the log dir is resolved here with `dirs` rather than through an
+//! `AppHandle` precisely so the launch line can predate all of that.
 //!
 //! What it cannot see: a native crash below Rust — a segfault inside WebKit or
 //! WebView2, a stack overflow, a kill by Gatekeeper. Those reach only the OS
 //! crash reporter (Console.app → Crash Reports on macOS; Reliability Monitor /
-//! Event Viewer on Windows). Even then the launch line helps: a launch with no
-//! later entry, at the time of the report, says the process died outside Rust.
+//! Event Viewer on Windows). Even then the two markers place the death.
 //!
 //! Everything in here runs INSIDE the panic hook, so nothing in here may panic:
 //! no `unwrap`, no `expect`, every I/O error dropped on the floor.
@@ -37,8 +47,11 @@ use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
-use tauri::{AppHandle, Manager};
 
+/// Must equal `identifier` in tauri.conf.json — it names the log directory the
+/// same way Tauri names every other per-app directory. Pinned by a test that
+/// reads the config file.
+const APP_ID: &str = "com.beecork.terminal";
 const LOG_NAME: &str = "beecork-terminal.log";
 /// Roll the file to `.log.1` past this size so it never grows without bound and
 /// stays small enough to attach to a message.
@@ -49,11 +62,26 @@ const MAX_EVENT_BYTES: usize = 16 * 1024;
 
 static LOG_PATH: OnceLock<PathBuf> = OnceLock::new();
 
-/// Wire the log file and the panic hook. Call once, first thing in `setup` — a
-/// panic in anything registered after it (the updater plugin, the watcher
-/// thread) is then on record.
-pub fn init(app: &AppHandle) {
-    let Ok(dir) = app.path().app_log_dir() else {
+/// Where the log directory is: what Tauri's `app_log_dir()` resolves to on each
+/// OS (macOS `~/Library/Logs/<id>`, elsewhere `<local data dir>/<id>/logs`),
+/// computed without Tauri so it is available before anything else exists.
+fn log_dir() -> Option<PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        dirs::home_dir().map(|h| h.join("Library/Logs").join(APP_ID))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        dirs::data_local_dir().map(|d| d.join(APP_ID).join("logs"))
+    }
+}
+
+/// Open the log and install the panic hook. Call once, as the FIRST line of
+/// `run()`: everything after it — GTK/WebKit init, window creation, plugins,
+/// the watcher thread — is then on record, and the `[launch]` line predates
+/// the step that hangs or dies on the platforms we cannot see.
+pub fn init() {
+    let Some(dir) = log_dir() else {
         return;
     };
     if std::fs::create_dir_all(&dir).is_err() {
@@ -85,6 +113,13 @@ pub fn init(app: &AppHandle) {
             std::env::consts::ARCH
         ),
     );
+}
+
+/// The window and its webview exist. Call from `setup`, which Tauri runs only
+/// after creating the config windows — so `[launch]` without `[ready]` is the
+/// signature of a window that never came up.
+pub fn ready() {
+    append("ready", "window and webview created");
 }
 
 /// Where the log lives — `None` before `init`, or when no log directory could be
@@ -205,6 +240,27 @@ pub fn diag_info() -> DiagInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn app_id_matches_the_tauri_config() {
+        let conf = include_str!("../tauri.conf.json");
+        assert!(
+            conf.contains(&format!("\"identifier\": \"{APP_ID}\"")),
+            "APP_ID must equal tauri.conf.json's identifier — the log directory is named by it"
+        );
+    }
+
+    #[test]
+    fn log_dir_is_where_tauri_would_put_it() {
+        let d = log_dir().expect("a home directory exists on the test machine");
+        let s = d.to_string_lossy();
+        assert!(s.contains(APP_ID), "{s}");
+        if cfg!(target_os = "macos") {
+            assert!(s.contains("Library/Logs"), "{s}");
+        } else {
+            assert!(s.ends_with("logs"), "{s}");
+        }
+    }
 
     #[test]
     fn timestamps_are_utc_civil_dates() {

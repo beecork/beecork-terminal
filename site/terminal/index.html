@@ -321,7 +321,8 @@
       <p class="download-notes">
         <strong>Mac:</strong> not sure which? Apple menu → About This Mac — “Apple M…” is Apple Silicon, “Intel” is Intel.<br>
         <strong>Linux:</strong> after downloading, make the AppImage executable — <code>chmod +x Beecork-Terminal-Linux-x86_64.AppImage</code> — then run it (needs glibc 2.35+, i.e. Ubuntu 22.04 / Debian 12 / Fedora 36 or newer).
-        On Ubuntu or Debian the <a href="https://github.com/beecork/beecork-terminal/releases/latest/download/Beecork-Terminal-Linux-amd64.deb">.deb package</a> is the more reliable choice — it uses the system's own WebKit.<br>
+        On Ubuntu or Debian the <a href="https://github.com/beecork/beecork-terminal/releases/latest/download/Beecork-Terminal-Linux-amd64.deb">.deb package</a> is the more reliable choice — it uses the system's own WebKit.
+        If the AppImage prints <code>libEGL.so.1: cannot open shared object file</code>, install Mesa: <code>sudo apt install libegl1 libgl1 libgles2</code>.<br>
         Every build, including <code>.rpm</code> and <code>.msi</code>, is on <a href="https://github.com/beecork/beecork-terminal/releases/latest" target="_blank" rel="noopener noreferrer">GitHub Releases</a>.
       </p>
     </section>

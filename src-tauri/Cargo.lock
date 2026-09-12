@@ -261,6 +261,7 @@ name = "beecork-terminal"
 version = "0.1.29"
 dependencies = [
  "base64 0.22.1",
+ "dirs",
  "notify",
  "portable-pty",
  "rodio",

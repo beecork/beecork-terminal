@@ -37,6 +37,10 @@ fn prefer_working_webkit_renderer() {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // First: the crash log and panic hook, before GTK/WebKit/WebView2 exist
+    // (see diag.rs for why the order matters).
+    diag::init();
+
     #[cfg(target_os = "linux")]
     prefer_working_webkit_renderer();
 
@@ -54,8 +58,9 @@ pub fn run() {
             }
         })
         .setup(|app| {
-            // First, so a panic in anything below is on record (see diag.rs).
-            diag::init(app.handle());
+            // Tauri creates the config windows BEFORE calling setup, so this
+            // line in the log means the window and webview exist (diag.rs).
+            diag::ready();
             #[cfg(desktop)]
             app.handle()
                 .plugin(tauri_plugin_updater::Builder::new().build())?;

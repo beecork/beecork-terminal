@@ -24,6 +24,11 @@ serde_json = "1"
 portable-pty = "0.8"
 base64 = "0.22"
 notify = "6"
+# For the crash log's directory, resolved BEFORE Tauri exists (diag.rs): the
+# log must be open before GTK/WebKit initialise, because window creation is
+# where Linux hangs and the launch line has to predate it. Already a
+# dependency of tauri itself at this version, so no new crate enters the tree.
+dirs = "6"
 tauri-plugin-updater = "2.10.1"
 tauri-plugin-process = "2.3.1"
 tauri-plugin-notification = "2"

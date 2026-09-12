@@ -38,7 +38,18 @@ jobs:
             artifact: appimage
           - os: ubuntu-24.04
             artifact: deb
+          # Diagnostic legs. The system WebKitGTK on 24.04 has hung at webview
+          # creation in this headless environment (alive, no window, no
+          # `[ready]`); these tell a runner artifact from a real 24.04 problem.
+          # `extra_env` is applied to the app's environment only.
+          - os: ubuntu-24.04
+            artifact: deb
+            extra_env: WEBKIT_DISABLE_DMABUF_RENDERER=0
+          - os: ubuntu-24.04
+            artifact: deb
+            extra_env: WEBKIT_DISABLE_COMPOSITING_MODE=1
     runs-on: ${{ matrix.os }}
+    name: ${{ matrix.os }} ${{ matrix.artifact }} ${{ matrix.extra_env }}
     steps:
       - name: Download the build
         env:
@@ -71,13 +82,16 @@ jobs:
           set -euo pipefail
           sudo apt-get update
           # xvfb: the display. x11-apps: xwd for the screenshot. fuse3: what the
-          # AppImage runtime mounts with. imagemagick: xwd → png. libegl1/libgl1/
-          # libgbm1: the GPU-facing libraries the AppImage deliberately does NOT
-          # bundle (it must negotiate with the host's driver — lib.rs), so the
-          # host has to provide them; every desktop install has them via Mesa,
-          # a headless runner does not, and without them the binary itself
-          # fails to load ("libEGL.so.1: cannot open shared object file").
-          sudo apt-get install -y xvfb x11-apps fuse3 imagemagick libegl1 libgl1 libgbm1
+          # AppImage runtime mounts with. imagemagick: xwd → png. The Mesa set
+          # (libegl1 libgl1 libgles2 libgbm1 libgl1-mesa-dri) is what the
+          # AppImage deliberately does NOT bundle — it must negotiate with the
+          # host's driver (lib.rs) — so the host has to provide it; every
+          # desktop install has it, a headless runner does not, and without
+          # libEGL the binary itself fails to load ("libEGL.so.1: cannot open
+          # shared object file"). mesa-dri adds llvmpipe, a software GL, so
+          # WebKit has SOMETHING to composite with under Xvfb.
+          sudo apt-get install -y xvfb x11-apps fuse3 imagemagick \
+            libegl1 libgl1 libgles2 libgbm1 libgl1-mesa-dri
           if [ "$ARTIFACT" = deb ]; then
             # apt (not dpkg) so the package's own dependencies — the system
             # WebKitGTK — resolve exactly as they would for a user.
@@ -87,6 +101,7 @@ jobs:
       - name: Launch and observe
         env:
           ARTIFACT: ${{ matrix.artifact }}
+          EXTRA_ENV: ${{ matrix.extra_env }}
         run: |
           set -uo pipefail
           export DISPLAY=:99
@@ -96,8 +111,8 @@ jobs:
           # file manager: not from `/`, not from the AppImage's own mount.
           mkdir -p "$HOME/demo-project" && cd "$HOME/demo-project"
           case "$ARTIFACT" in
-            appimage) "$GITHUB_WORKSPACE/app.AppImage" >"$GITHUB_WORKSPACE/app.out" 2>&1 & ;;
-            deb)      beecork-terminal               >"$GITHUB_WORKSPACE/app.out" 2>&1 & ;;
+            appimage) env $EXTRA_ENV "$GITHUB_WORKSPACE/app.AppImage" >"$GITHUB_WORKSPACE/app.out" 2>&1 & ;;
+            deb)      env $EXTRA_ENV beecork-terminal               >"$GITHUB_WORKSPACE/app.out" 2>&1 & ;;
           esac
           APP=$!
           sleep 20
@@ -116,11 +131,26 @@ jobs:
             echo "::error::the app exited within 20 s — see stdout/stderr above"
             exit 1
           fi
+          # What the log must contain depends on the build (diag.rs):
+          #   v0.1.29         [launch] written from setup, i.e. after the window exists
+          #   v0.1.30+        [launch] written before GTK/WebKit init, [ready] from setup
+          # So on 0.1.30+ a missing file is a failure, and a [launch] without a
+          # [ready] is THE blank-window signature — alive, but the webview never
+          # came up.
+          newer_than_0_1_29=0
+          [ "$(printf '%s\n' v0.1.30 "$TAG" | sort -V | head -n1)" = v0.1.30 ] && newer_than_0_1_29=1
           if [ -f "$LOG" ]; then
-            grep -q '\[launch\]' "$LOG" || { echo "::error::no launch line in the crash log — setup() never ran"; exit 1; }
+            grep -q '\[launch\]' "$LOG" || { echo "::error::no [launch] line in the crash log"; exit 1; }
             if grep -q '\[PANIC\]' "$LOG"; then echo "::error::a panic was logged"; exit 1; fi
+            if [ "$newer_than_0_1_29" = 1 ] && ! grep -q '\[ready\]' "$LOG"; then
+              echo "::error::[launch] but no [ready] — the process is alive but the window/webview never came up"
+              exit 1
+            fi
+          elif [ "$newer_than_0_1_29" = 1 ]; then
+            echo "::error::no crash log at all on a build that writes it before anything else — the log dir could not be created"
+            exit 1
           else
-            echo "::warning::no crash log — a build older than the log (v0.1.29) or the log dir could not be created"
+            echo "::warning::no crash log — on v0.1.29 that means setup() never ran: alive, but the window never came up"
           fi
           echo "alive after 20 s; no panic logged. Open the screenshot artifact to see the window."
 
@@ -128,7 +158,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: smoke-${{ matrix.os }}-${{ matrix.artifact }}
+          name: smoke-${{ matrix.os }}-${{ matrix.artifact }}-${{ strategy.job-index }}
           path: |
             screenshot.png
             app.out
