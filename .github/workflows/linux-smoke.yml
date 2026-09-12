@@ -119,7 +119,11 @@ jobs:
           WRAPPER=$!
           sleep 20
           xwd -root -silent | convert xwd:- "$GITHUB_WORKSPACE/screenshot.png" || true
-          alive=0; pgrep -x beecork-terminal >/dev/null && alive=1
+          # -f on the full command line, anchored: the kernel's process NAME is
+          # cut at 15 chars and "beecork-terminal" is 16, so `pgrep -x` never
+          # matches. The anchor keeps the dbus-run-session wrapper (whose
+          # command line merely ENDS in the name) out of the match.
+          alive=0; pgrep -f '^(/.*/)?beecork-terminal$' >/dev/null && alive=1
           LOG="$HOME/.local/share/com.beecork.terminal/logs/beecork-terminal.log"
           echo "::group::stdout / stderr"; cat "$GITHUB_WORKSPACE/app.out" || true; echo "::endgroup::"
           echo "::group::crash log ($LOG)"; cat "$LOG" 2>/dev/null || echo "(no log file)"; echo "::endgroup::"
@@ -134,7 +138,7 @@ jobs:
           sudo dmesg 2>/dev/null | grep -i -E "apparmor|bwrap|userns" | tail -n 8 || true
           dpkg-query -W -f='${Package} ${Version}\n' libwebkit2gtk-4.1-0 2>/dev/null || echo "(system webkit not installed — AppImage leg)"
           echo "::endgroup::"
-          pkill -x beecork-terminal 2>/dev/null || true
+          pkill -f '^(/.*/)?beecork-terminal$' 2>/dev/null || true
           kill "$WRAPPER" 2>/dev/null || true
           if [ "$alive" != 1 ]; then
             echo "::error::the app exited within 20 s — see stdout/stderr above"
