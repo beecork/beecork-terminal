@@ -1,4 +1,5 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
+import { logEvent } from "../lib/diag";
 
 interface Props {
   children: ReactNode;
@@ -49,6 +50,12 @@ export default class ErrorBoundary extends Component<Props, State> {
 
   componentDidCatch(error: Error, info: ErrorInfo) {
     console.error(`${this.props.what} crashed`, error, info.componentStack);
+    // The card below shows the message; the log keeps the stacks, which are what
+    // actually locate the bug once the user has clicked "Try again".
+    logEvent(
+      "react-crash",
+      `${this.props.what}: ${error.message}\n${error.stack ?? ""}\n${info.componentStack ?? ""}`
+    );
   }
 
   render() {

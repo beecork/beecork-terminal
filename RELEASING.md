@@ -18,7 +18,8 @@ touching the live site). Everything else is already wired in this repo.
 |---|---|
 | `.github/workflows/release.yml` | Matrix build (mac arm64+x64, Windows, Linux) via `tauri-apps/tauri-action`, publishes a GitHub Release on tag `v*`. |
 | `src-tauri/tauri.conf.json` | Release-ready bundle metadata (product name, publisher, category, icons, targets `all`). |
-| `site/terminal/index.html` | The `beecork.com/terminal/` download page — detects OS + fetches the latest GitHub release. **Copy to the beecork-site repo** (see below). |
+| `site/terminal/index.html` | The `beecork.com/terminal/` download page — static links to the **stable-named** assets (below), the GitHub API only adds the version label. **Copy to the beecork-site repo** (see below). |
+| `.github/workflows/linux-smoke.yml` | On-demand: launches a published Linux build on Ubuntu 22.04/24.04 under Xvfb (AppImage and .deb), checks it stays up and logged no panic, attaches a screenshot. The only Linux desktop we have. |
 
 ---
 
@@ -135,7 +136,38 @@ git push --follow-tags
 > permission.
 
 Once the run is dispatched, ~10–15 min later a **GitHub Release** appears with:
-`.dmg` (arm64 + x64), `.msi` + `.exe` (Windows), `.AppImage` + `.deb` (Linux).
+`.dmg` (arm64 + x64), `.msi` + `.exe` (Windows), `.AppImage` + `.deb` (Linux) —
+plus **stable-named copies** of the installers, which the download page links:
+
+| Stable name (never changes) | Copy of |
+|---|---|
+| `Beecork-Terminal-macOS-AppleSilicon.dmg` | `…_aarch64.dmg` |
+| `Beecork-Terminal-macOS-Intel.dmg` | `…_x64.dmg` |
+| `Beecork-Terminal-Windows-x64-setup.exe` | `…_x64-setup.exe` |
+| `Beecork-Terminal-Linux-x86_64.AppImage` | `…_amd64.AppImage` |
+| `Beecork-Terminal-Linux-amd64.deb` | `…_amd64.deb` |
+
+`https://github.com/beecork/beecork-terminal/releases/latest/download/<stable name>`
+always resolves to the newest release, so the page works with no API call. The
+GitHub API path is what failed with a group in one room: 60 unauthenticated
+requests/hour **per IP**, shared by everyone behind the venue's Wi-Fi. Confirm
+the copies are there with the `gh release view … --jq '.assets[].name'` above
+before deploying a page that links them — and if you ever rename one, rename it
+in `release.yml` and `site/terminal/index.html` in the same commit.
+
+**Then prove Linux starts** — there is no Linux machine on the team, and Linux
+fails silently (a window that never fills in, an AppImage that exits at once):
+```bash
+gh workflow run linux-smoke.yml -f tag=v0.1.29
+gh run watch      # then download the run's `smoke-*` artifacts for the screenshots
+```
+
+**If a user reports a crash**, every install since v0.1.29 keeps a local log
+(Settings → Diagnostics → "Show log file"): every launch, every Rust panic with
+its backtrace, every uncaught webview error. Ask for that file first. What it
+cannot contain is a crash *below* Rust (WebKit/WebView2 itself, Gatekeeper); for
+those ask for Console.app → Crash Reports (macOS) or Reliability Monitor →
+"View technical details" (Windows, `perfmon /rel`).
 
 ---
 
@@ -220,5 +252,11 @@ The site's own workflow deploys to Cloudflare Pages automatically.
 - **Windows code signing** isn't set up → Windows SmartScreen shows an
   "unknown publisher" warning until an EV/OV cert is added. (CozyPane has the
   same gap.)
-- **Linux** builds on `ubuntu-22.04` (WebKitGTK 4.1). This is the platform to
-  smoke-test first, per the original stack decision.
+- **Linux** builds on `ubuntu-22.04` (WebKitGTK 4.1), so the AppImage needs
+  glibc ≥ 2.35 (Ubuntu 22.04 / Debian 12 / Fedora 36 or newer); older distros
+  fail to start it with a `GLIBC_2.35 not found` message. `linux-smoke.yml`
+  covers Ubuntu 22.04 and 24.04; nothing covers Fedora/Arch or Wayland+NVIDIA.
+- **No crash telemetry.** The crash log is local-only by design (the app watches
+  people's source trees); an opt-in reporter (`tauri-plugin-sentry`, which also
+  captures native minidumps the log can't see) is the next step if local logs
+  prove too slow to collect.

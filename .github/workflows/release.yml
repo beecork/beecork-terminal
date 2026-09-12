@@ -185,3 +185,41 @@ jobs:
           releaseDraft: false
           prerelease: false
           args: ${{ matrix.args }}
+
+      # The download page links STABLE names — `releases/latest/download/<name>`
+      # always resolves to the newest release — so it works with no GitHub API
+      # call and no knowledge of the version. The API path failed in a room: the
+      # unauthenticated limit is 60 requests/hour PER IP, and a group on one
+      # Wi-Fi shares one IP, so the page went dead exactly when everyone was
+      # asked to download at once. These are byte-identical copies of the
+      # versioned assets above; the updater keeps using those via latest.json.
+      # The names are part of the site — change site/terminal/index.html too.
+      - name: Publish stable-named installer copies
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          # `--target` legs bundle under target/<triple>/; the others under target/.
+          bundle="src-tauri/target/${TARGET:+$TARGET/}release/bundle"
+          publish() { # publish <stable-name> <the one file the glob matched>
+            local name="$1"; shift
+            if [ "$#" -ne 1 ]; then
+              echo "::error::expected exactly one artifact for $name, found $#: $*"
+              exit 1
+            fi
+            cp "$1" "$name"
+            gh release upload "$TAG" "$name" --clobber
+            echo "published $name  <-  $1"
+          }
+          case "$RUNNER_OS:$TARGET" in
+            macOS:aarch64-apple-darwin) publish Beecork-Terminal-macOS-AppleSilicon.dmg "$bundle"/dmg/*.dmg ;;
+            macOS:x86_64-apple-darwin)  publish Beecork-Terminal-macOS-Intel.dmg        "$bundle"/dmg/*.dmg ;;
+            Windows:*)                  publish Beecork-Terminal-Windows-x64-setup.exe  "$bundle"/nsis/*-setup.exe ;;
+            Linux:*)                    publish Beecork-Terminal-Linux-x86_64.AppImage  "$bundle"/appimage/*.AppImage
+                                        publish Beecork-Terminal-Linux-amd64.deb        "$bundle"/deb/*.deb ;;
+            *) echo "::error::unexpected matrix leg $RUNNER_OS:$TARGET"; exit 1 ;;
+          esac

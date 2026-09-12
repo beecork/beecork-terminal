@@ -1,4 +1,5 @@
 mod agents;
+mod diag;
 mod fs;
 mod git;
 mod pty;
@@ -53,6 +54,8 @@ pub fn run() {
             }
         })
         .setup(|app| {
+            // First, so a panic in anything below is on record (see diag.rs).
+            diag::init(app.handle());
             #[cfg(desktop)]
             app.handle()
                 .plugin(tauri_plugin_updater::Builder::new().build())?;
@@ -84,6 +87,8 @@ pub fn run() {
             git::git_status,
             git::git_file_original,
             watcher::set_watch_root,
+            diag::log_event,
+            diag::diag_info,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

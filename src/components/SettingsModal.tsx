@@ -1,4 +1,7 @@
+import { useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
+import { revealPath } from "../lib/api";
+import { diagInfo, type DiagInfo } from "../lib/diag";
 import {
   useSettings,
   MIN_FONT,
@@ -10,6 +13,10 @@ import * as sound from "../lib/sound";
 
 export default function SettingsModal({ onClose }: { onClose: () => void }) {
   const { settings, themes, update } = useSettings();
+  const [diag, setDiag] = useState<DiagInfo | null>(null);
+  useEffect(() => {
+    diagInfo().then(setDiag).catch(() => {});
+  }, []);
 
   async function pickFolder() {
     const chosen = await open({ directory: true, defaultPath: settings.defaultCwd });
@@ -192,6 +199,39 @@ export default function SettingsModal({ onClose }: { onClose: () => void }) {
             >
               Test sound
             </button>
+          </div>
+
+          <div className="setting-section">Diagnostics</div>
+
+          <div className="setting-row">
+            <span className="setting-label">
+              {diag
+                ? `Beecork Terminal ${diag.version} · ${diag.os} ${diag.arch}`
+                : "Beecork Terminal"}
+            </span>
+            <span className="setting-label">
+              Crashes and errors are written to this local file — nothing is sent
+              anywhere. If something goes wrong, send us the file.
+            </span>
+            <div className="folder-row">
+              <input
+                type="text"
+                className="setting-text"
+                readOnly
+                value={diag?.log_path ?? "(no log file — the log folder could not be created)"}
+                onFocus={(e) => e.target.select()}
+              />
+              <button
+                className="btn ghost"
+                disabled={!diag?.log_path}
+                title="Reveal the log file in the file manager"
+                onClick={() => {
+                  if (diag?.log_path) void revealPath(diag.log_path).catch(() => {});
+                }}
+              >
+                Show log file
+              </button>
+            </div>
           </div>
         </div>
       </div>

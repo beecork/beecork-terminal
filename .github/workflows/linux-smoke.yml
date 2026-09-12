@@ -1,0 +1,125 @@
+name: Linux smoke test
+
+# Launches a PUBLISHED Linux build on a real Ubuntu desktop stack (Xvfb) and
+# checks that the app actually comes up: the process is still alive after 20 s,
+# the crash log (diag.rs) recorded the launch and no panic, and a screenshot is
+# attached to the run for a human look. Linux fails silently — a window that
+# never fills in, an AppImage that exits at once — and nobody on the team has a
+# Linux machine, so this runner is the only Linux desktop we can watch it on.
+#
+#   gh workflow run linux-smoke.yml -f tag=v0.1.29     # or no -f: latest release
+#   gh run watch                                        # then open the run's
+#                                                       # artifacts for the PNGs
+#
+# On demand only, and separate from release.yml on purpose: a flaky desktop
+# runner must never hold a release hostage. Runs both artifacts — the AppImage
+# (bundled WebKit) and the .deb (the system's WebKit) are different failure
+# surfaces (CLAUDE.md "Linux").
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to test (empty = the latest release)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            artifact: appimage
+          - os: ubuntu-24.04
+            artifact: appimage
+          - os: ubuntu-24.04
+            artifact: deb
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Download the build
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+          ARTIFACT: ${{ matrix.artifact }}
+        run: |
+          set -euo pipefail
+          if [ -z "$TAG" ]; then
+            TAG=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName)
+          fi
+          echo "testing $TAG ($ARTIFACT on $RUNNER_OS)"
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+          # The versioned names, so this also works for releases that predate
+          # the stable-named copies.
+          case "$ARTIFACT" in
+            appimage)
+              gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
+                --pattern 'Beecork.Terminal_*_amd64.AppImage' --output app.AppImage
+              chmod +x app.AppImage ;;
+            deb)
+              gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
+                --pattern 'Beecork.Terminal_*_amd64.deb' --output app.deb ;;
+          esac
+
+      - name: Install a desktop
+        env:
+          ARTIFACT: ${{ matrix.artifact }}
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          # xvfb: the display. x11-apps: xwd for the screenshot. fuse3: what the
+          # AppImage runtime mounts with. imagemagick: xwd → png.
+          sudo apt-get install -y xvfb x11-apps fuse3 imagemagick
+          if [ "$ARTIFACT" = deb ]; then
+            # apt (not dpkg) so the package's own dependencies — the system
+            # WebKitGTK — resolve exactly as they would for a user.
+            sudo apt-get install -y ./app.deb
+          fi
+
+      - name: Launch and observe
+        env:
+          ARTIFACT: ${{ matrix.artifact }}
+        run: |
+          set -uo pipefail
+          export DISPLAY=:99
+          Xvfb :99 -screen 0 1280x800x24 >/dev/null 2>&1 &
+          sleep 2
+          # Launch from a scratch project folder, the way a user would from a
+          # file manager: not from `/`, not from the AppImage's own mount.
+          mkdir -p "$HOME/demo-project" && cd "$HOME/demo-project"
+          case "$ARTIFACT" in
+            appimage) "$GITHUB_WORKSPACE/app.AppImage" >"$GITHUB_WORKSPACE/app.out" 2>&1 & ;;
+            deb)      beecork-terminal               >"$GITHUB_WORKSPACE/app.out" 2>&1 & ;;
+          esac
+          APP=$!
+          sleep 20
+          xwd -root -silent | convert xwd:- "$GITHUB_WORKSPACE/screenshot.png" || true
+          alive=0; kill -0 "$APP" 2>/dev/null && alive=1
+          LOG="$HOME/.local/share/com.beecork.terminal/logs/beecork-terminal.log"
+          echo "::group::stdout / stderr"; cat "$GITHUB_WORKSPACE/app.out" || true; echo "::endgroup::"
+          echo "::group::crash log ($LOG)"; cat "$LOG" 2>/dev/null || echo "(no log file)"; echo "::endgroup::"
+          kill "$APP" 2>/dev/null || true
+          if [ "$alive" != 1 ]; then
+            echo "::error::the app exited within 20 s — see stdout/stderr above"
+            exit 1
+          fi
+          if [ -f "$LOG" ]; then
+            grep -q '\[launch\]' "$LOG" || { echo "::error::no launch line in the crash log — setup() never ran"; exit 1; }
+            if grep -q '\[PANIC\]' "$LOG"; then echo "::error::a panic was logged"; exit 1; fi
+          else
+            echo "::warning::no crash log — a build older than the log (v0.1.29) or the log dir could not be created"
+          fi
+          echo "alive after 20 s; no panic logged. Open the screenshot artifact to see the window."
+
+      - name: Attach the screenshot and output
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: smoke-${{ matrix.os }}-${{ matrix.artifact }}
+          path: |
+            screenshot.png
+            app.out
+          if-no-files-found: warn

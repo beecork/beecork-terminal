@@ -79,7 +79,8 @@
   .download-card { display: flex; align-items: center; gap: 14px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; color: var(--text); transition: border-color 0.15s, transform 0.12s; text-align: left; }
   .download-card:hover { border-color: var(--accent); text-decoration: none; transform: translateY(-1px); }
   .download-card.highlighted { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
-  .download-card.disabled { opacity: 0.45; pointer-events: none; }
+  .download-notes { font-size: 13px; color: var(--text-dim); margin-top: 16px; line-height: 1.6; }
+  .download-notes code { font-family: var(--mono); color: var(--accent-2); }
   .download-icon { font-size: 26px; line-height: 1; }
   .download-info { display: flex; flex-direction: column; }
   .download-info strong { font-size: 15px; }
@@ -299,25 +300,28 @@
       <div class="section-label">Download</div>
       <h2>Pick your platform.</h2>
       <div class="download-grid">
-        <a href="#" class="download-card" data-os="mac-arm" data-pattern="aarch64.dmg">
+        <a href="https://github.com/beecork/beecork-terminal/releases/latest/download/Beecork-Terminal-macOS-AppleSilicon.dmg" class="download-card" data-os="mac-arm" data-pattern="aarch64.dmg">
           <span class="download-icon">&#63743;</span>
           <span class="download-info"><strong>macOS — Apple Silicon</strong><span>M1/M2/M3/M4 · .dmg</span></span>
         </a>
-        <a href="#" class="download-card" data-os="mac-intel" data-pattern="x64.dmg">
+        <a href="https://github.com/beecork/beecork-terminal/releases/latest/download/Beecork-Terminal-macOS-Intel.dmg" class="download-card" data-os="mac-intel" data-pattern="x64.dmg">
           <span class="download-icon">&#63743;</span>
           <span class="download-info"><strong>macOS — Intel</strong><span>Intel Macs · .dmg</span></span>
         </a>
-        <a href="#" class="download-card" data-os="windows" data-pattern="x64-setup.exe">
+        <a href="https://github.com/beecork/beecork-terminal/releases/latest/download/Beecork-Terminal-Windows-x64-setup.exe" class="download-card" data-os="windows" data-pattern="x64-setup.exe">
           <span class="download-icon">&#8862;</span>
           <span class="download-info"><strong>Windows</strong><span>64-bit · .exe installer</span></span>
         </a>
-        <a href="#" class="download-card" data-os="linux-appimage" data-pattern=".AppImage">
+        <a href="https://github.com/beecork/beecork-terminal/releases/latest/download/Beecork-Terminal-Linux-x86_64.AppImage" class="download-card" data-os="linux-appimage" data-pattern=".appimage">
           <span class="download-icon">&#128039;</span>
           <span class="download-info"><strong>Linux</strong><span>AppImage · portable</span></span>
         </a>
       </div>
-      <p style="font-size:13px;color:var(--text-dim);margin-top:16px;">
-        All builds live on <a href="https://github.com/beecork/beecork-terminal/releases/latest" target="_blank" rel="noopener noreferrer">GitHub Releases</a>. Also available: <code style="font-family:var(--mono);color:var(--accent-2)">.deb</code> and <code style="font-family:var(--mono);color:var(--accent-2)">.msi</code>.
+      <p class="download-notes">
+        <strong>Mac:</strong> not sure which? Apple menu → About This Mac — “Apple M…” is Apple Silicon, “Intel” is Intel.<br>
+        <strong>Linux:</strong> after downloading, make the AppImage executable — <code>chmod +x Beecork-Terminal-Linux-x86_64.AppImage</code> — then run it (needs glibc 2.35+, i.e. Ubuntu 22.04 / Debian 12 / Fedora 36 or newer).
+        On Ubuntu or Debian the <a href="https://github.com/beecork/beecork-terminal/releases/latest/download/Beecork-Terminal-Linux-amd64.deb">.deb package</a> is the more reliable choice — it uses the system's own WebKit.<br>
+        Every build, including <code>.rpm</code> and <code>.msi</code>, is on <a href="https://github.com/beecork/beecork-terminal/releases/latest" target="_blank" rel="noopener noreferrer">GitHub Releases</a>.
       </p>
     </section>
 
@@ -373,7 +377,16 @@
 </footer>
 
 <script>
-  // Detect OS, fetch the latest GitHub release, and wire the download buttons.
+  // Detect the OS, point the hero button at that platform's card, and — if the
+  // GitHub API answers — show the version and swap in the exact asset URLs.
+  //
+  // The links WORK WITHOUT THIS SCRIPT. Every card is a stable-named asset
+  // (`releases/latest/download/<name>`, uploaded by release.yml) that always
+  // resolves to the newest release. The API call is only an upgrade: the
+  // unauthenticated limit is 60 requests/hour PER IP, and a room of people on
+  // one Wi-Fi shares one IP — so it WILL fail exactly when a group is asked to
+  // download together. When it does (403, offline, a blocking proxy) the page
+  // must simply stay as it is; it must never disable a card or drop a link.
   (function () {
     var REPO = 'beecork/beecork-terminal';
     var API = 'https://api.github.com/repos/' + REPO + '/releases/latest';
@@ -391,8 +404,12 @@
     }
 
     var cards = document.querySelectorAll('.download-card[data-os]');
+    var highlighted = null;
     cards.forEach(function (card) {
-      if (card.dataset.os === os) card.classList.add('highlighted');
+      if (card.dataset.os === os) {
+        card.classList.add('highlighted');
+        highlighted = card;
+      }
     });
 
     var heroBtn = document.getElementById('hero-download');
@@ -403,9 +420,16 @@
       'linux-appimage': 'Download for Linux'
     };
     if (heroBtn && labels[os]) heroBtn.textContent = labels[os];
+    // The hero downloads directly, from the static link — no network needed.
+    if (heroBtn && highlighted) heroBtn.href = highlighted.href;
 
     fetch(API)
-      .then(function (r) { return r.json(); })
+      .then(function (r) {
+        // A 403 (rate limit) is a valid JSON body with no `assets`; without this
+        // check it used to be handled as a release with nothing in it.
+        if (!r.ok) throw new Error('GitHub API ' + r.status);
+        return r.json();
+      })
       .then(function (release) {
         var assets = release.assets || [];
         var version = release.tag_name || '';
@@ -419,26 +443,13 @@
             var name = a.name.toLowerCase();
             return name.indexOf(pattern) !== -1 && !name.endsWith('.sig');
           });
-          if (match) {
-            card.href = match.browser_download_url;
-            card.classList.remove('disabled');
-          } else {
-            card.classList.add('disabled');
-            card.removeAttribute('href');
-          }
+          // Only ever UPGRADE a link; a missing match leaves the stable one.
+          if (match) card.href = match.browser_download_url;
         });
-
-        if (heroBtn) {
-          var hi = document.querySelector('.download-card.highlighted');
-          if (hi && hi.href && hi.getAttribute('href') !== '#') heroBtn.href = hi.href;
-          else heroBtn.href = '#download';
-        }
+        if (heroBtn && highlighted) heroBtn.href = highlighted.href;
       })
       .catch(function () {
-        cards.forEach(function (card) {
-          card.href = 'https://github.com/' + REPO + '/releases/latest';
-        });
-        if (heroBtn) heroBtn.href = 'https://github.com/' + REPO + '/releases/latest';
+        /* rate-limited, offline, blocked — the static links stand */
       });
   })();
 </script>

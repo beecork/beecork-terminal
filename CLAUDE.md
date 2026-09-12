@@ -134,6 +134,30 @@ repo's config is attacker-controlled input.
   expands `%VAR%`, and URLs come from terminal output. Windows goes through
   `tauri_plugin_opener::open_url` (ShellExecuteExW).
 
+## Diagnostics (`src-tauri/src/diag.rs`, `src/lib/diag.ts`)
+
+The app sends nothing anywhere, and an installed copy has no console, no stderr
+and no devtools — so without this file a crash report is the words "it crashed".
+
+- **`diag::init` is the first line of `setup()`.** The panic hook is
+  process-global, so it covers the pty threads, the watcher and the async runtime
+  — but only from the moment it is installed. Anything registered above it
+  (a plugin, a thread) panics unrecorded.
+- **Nothing in `diag.rs` may panic** — it runs inside the panic hook. No
+  `unwrap`/`expect`; every I/O error is dropped. Same contract for `logEvent` in
+  `diag.ts`: it is called from `componentDidCatch` and the global error handlers,
+  so it must never throw or reject back into them.
+- **The log is local-only, by design.** The app watches people's source trees; a
+  reporter that phones home is an opt-in feature, not a default. The file lives
+  in `app_log_dir()` (macOS `~/Library/Logs/<id>/`, Windows
+  `%LOCALAPPDATA%\<id>\logs\`, Linux `~/.local/share/<id>/logs/`); Settings →
+  Diagnostics shows the path and reveals it. `linux-smoke.yml` asserts on the
+  `[launch]` / `[PANIC]` tags, so those strings are an interface.
+- **It cannot see a crash below Rust** (WebKit/WebView2, a stack overflow,
+  Gatekeeper). Those live only in the OS crash reporter — Console.app → Crash
+  Reports, Reliability Monitor. A `[launch]` line with nothing after it, at the
+  time of the report, is the tell.
+
 ## Backend command threading
 
 - **Anything that shells out, touches disk, or scans the process table is
@@ -174,6 +198,23 @@ Both rules below are the fixes for exactly that.
   at the drive root), and never matches an ancestor. Helpers that must agree with
   each other should compose (`isDirectChild` goes through `dirname`), not
   re-normalize by hand.
+
+## Download page (`site/terminal/index.html`, `release.yml`)
+
+- **Every card links a stable-named asset; the GitHub API is an upgrade, never a
+  dependency.** `releases/latest/download/<stable name>` always resolves to the
+  newest release, so the page works with no JavaScript at all. The API path went
+  dead in a room full of people: the unauthenticated limit is 60 requests/hour
+  **per IP**, everyone behind one Wi-Fi shares an IP, and a 403 is a valid JSON
+  body with no `assets` — the old script handled it as a release with nothing in
+  it and disabled every card. `r.ok` is checked; a failed lookup changes nothing.
+- **The stable names are shared between `release.yml` and the page.** Rename one
+  in both, in the same commit, and never before the release that carries the
+  new name exists.
+- **The Linux AppImage needs glibc ≥ 2.35** (it is built on Ubuntu 22.04) and the
+  executable bit the browser strips. The page says both; the `.deb` (system
+  WebKit) is the safer choice on Ubuntu/Debian. `linux-smoke.yml` is the only
+  Linux desktop the team has — run it against every release.
 
 ## Releasing (`RELEASING.md`)
 
