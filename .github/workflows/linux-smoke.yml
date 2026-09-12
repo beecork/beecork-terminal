@@ -71,8 +71,13 @@ jobs:
           set -euo pipefail
           sudo apt-get update
           # xvfb: the display. x11-apps: xwd for the screenshot. fuse3: what the
-          # AppImage runtime mounts with. imagemagick: xwd → png.
-          sudo apt-get install -y xvfb x11-apps fuse3 imagemagick
+          # AppImage runtime mounts with. imagemagick: xwd → png. libegl1/libgl1/
+          # libgbm1: the GPU-facing libraries the AppImage deliberately does NOT
+          # bundle (it must negotiate with the host's driver — lib.rs), so the
+          # host has to provide them; every desktop install has them via Mesa,
+          # a headless runner does not, and without them the binary itself
+          # fails to load ("libEGL.so.1: cannot open shared object file").
+          sudo apt-get install -y xvfb x11-apps fuse3 imagemagick libegl1 libgl1 libgbm1
           if [ "$ARTIFACT" = deb ]; then
             # apt (not dpkg) so the package's own dependencies — the system
             # WebKitGTK — resolve exactly as they would for a user.
@@ -101,6 +106,11 @@ jobs:
           LOG="$HOME/.local/share/com.beecork.terminal/logs/beecork-terminal.log"
           echo "::group::stdout / stderr"; cat "$GITHUB_WORKSPACE/app.out" || true; echo "::endgroup::"
           echo "::group::crash log ($LOG)"; cat "$LOG" 2>/dev/null || echo "(no log file)"; echo "::endgroup::"
+          echo "::group::where the log could be (env + search)"
+          env | grep -E '^(HOME|XDG_[A-Z_]+)=' || true
+          find "$HOME" -maxdepth 6 -name 'beecork-terminal.log*' 2>/dev/null || true
+          ls -la "$HOME/.local/share" 2>/dev/null || echo "(no ~/.local/share)"
+          echo "::endgroup::"
           kill "$APP" 2>/dev/null || true
           if [ "$alive" != 1 ]; then
             echo "::error::the app exited within 20 s — see stdout/stderr above"
