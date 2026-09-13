@@ -163,6 +163,7 @@ plus **stable-named copies** of the installers, which the download page links:
 | `Beecork-Terminal-Windows-x64-setup.exe` | `…_x64-setup.exe` |
 | `Beecork-Terminal-Linux-x86_64.AppImage` | `…_amd64.AppImage` |
 | `Beecork-Terminal-Linux-amd64.deb` | `…_amd64.deb` |
+| `Beecork-Terminal-Linux-x86_64.rpm` | `…-1.x86_64.rpm` |
 
 `https://github.com/beecork/beecork-terminal/releases/latest/download/<stable name>`
 always resolves to the newest release, so the page works with no API call. The

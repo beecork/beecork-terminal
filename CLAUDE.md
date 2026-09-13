@@ -218,8 +218,23 @@ Both rules below are the fixes for exactly that.
   runs there. Pinned by `appimage_launch_never_roots_on_the_mount`.
 - **The `.deb`/`.rpm` use the *system* WebKitGTK; only the AppImage bundles its
   own.** When a Linux user reports a blank window, the first question is which
-  artifact — they are different failure surfaces, and the site currently offers
-  the AppImage by default (`site/terminal/index.html`).
+  artifact — they are different failure surfaces.
+- **The AppImage's bundled WebKit cannot start against a modern Mesa, so the
+  distro package is the answer on Linux, not the AppImage.** On Fedora 44
+  (Mesa 26) the bundled Ubuntu-22.04-era WebKitGTK aborts inside its OWN EGL
+  init — `Could not create default EGL display: EGL_BAD_PARAMETER. Aborting...`,
+  string proven to live in the bundled `libwebkit2gtk-4.1.so.0` — and
+  WebKitWebProcess dies on SIGABRT, leaving a WHITE window (not the grey one the
+  DMABUF flag fixes; white means the page never rendered at all). The host's EGL
+  is healthy; only the bundle fails. NO environment variable helps — DMABUF,
+  compositing, llvmpipe, `GDK_BACKEND`, sandbox and `EGL_PLATFORM` were all tried
+  — because the bundle is an internally consistent OLD set: swapping just WebKit
+  cascades into GStreamer (`gst_pad_probe_info_set_buffer`) and then GLib
+  (`g_once_init_leave_pointer`). Running the same binary against the pure Fedora
+  system stack works, and all 166 of its direct deps resolve there, which is why
+  the `.rpm`/`.deb` are fine. The `fedora` job in `linux-smoke.yml` gates on the
+  rpm and probes the AppImage, so we learn the day a newer bundled WebKit fixes
+  it; until then `site/terminal/index.html` leads with `.deb`/`.rpm`.
 - **The AppImage needs the host's Mesa** — `libegl1`, `libgl1`, `libgbm1` are
   exactly what the bundle omits so it can negotiate with the host's driver.
   Without libEGL the binary does not even load (`libEGL.so.1: cannot open shared

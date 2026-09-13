@@ -220,6 +220,7 @@ jobs:
             macOS:x86_64-apple-darwin)  publish Beecork-Terminal-macOS-Intel.dmg        "$bundle"/dmg/*.dmg ;;
             Windows:*)                  publish Beecork-Terminal-Windows-x64-setup.exe  "$bundle"/nsis/*-setup.exe ;;
             Linux:*)                    publish Beecork-Terminal-Linux-x86_64.AppImage  "$bundle"/appimage/*.AppImage
-                                        publish Beecork-Terminal-Linux-amd64.deb        "$bundle"/deb/*.deb ;;
+                                        publish Beecork-Terminal-Linux-amd64.deb        "$bundle"/deb/*.deb
+                                        publish Beecork-Terminal-Linux-x86_64.rpm       "$bundle"/rpm/*.rpm ;;
             *) echo "::error::unexpected matrix leg $RUNNER_OS:$TARGET"; exit 1 ;;
           esac

@@ -176,3 +176,92 @@ jobs:
             screenshot.png
             app.out
           if-no-files-found: warn
+
+  # Fedora, in a container, because THIS is where the AppImage breaks and the
+  # Ubuntu legs above never will.
+  #
+  # A Fedora 44 user (Mesa 26, Wayland, Intel) got a white screen from the 0.1.30
+  # AppImage: the bundled WebKitGTK — an Ubuntu 22.04-era build — aborts in its own
+  # EGL init against a modern Mesa ("Could not create default EGL display:
+  # EGL_BAD_PARAMETER. Aborting..."), taking WebKitWebProcess down with SIGABRT.
+  # The machine's own EGL/GL was healthy; only the BUNDLED stack failed, and no env
+  # variable helped (DMABUF, compositing, llvmpipe, GDK_BACKEND, sandbox, EGL_PLATFORM
+  # all still aborted) because the bundle is an internally consistent OLD set —
+  # swapping one library cascades into GStreamer and GLib. The .rpm, which links the
+  # HOST's webkit2gtk4.1, works. So: the rpm is the supported Fedora artifact and is
+  # what this job gates on; the AppImage is probed too, reported but never fatal, so
+  # we notice the day a newer bundled WebKit fixes it.
+  #
+  # The container carries Fedora's own Mesa userspace, which is what the bundled
+  # WebKit negotiates against — that is what reproduces here without a Fedora runner.
+  fedora:
+    runs-on: ubuntu-24.04
+    container: fedora:44
+    steps:
+      - name: Download the builds
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          dnf -y install gh findutils >/dev/null
+          if [ -z "$TAG" ]; then
+            TAG=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName)
+          fi
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --pattern 'Beecork.Terminal-*.x86_64.rpm' --output app.rpm
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --pattern 'Beecork.Terminal_*_amd64.AppImage' --output app.AppImage
+          chmod +x app.AppImage
+
+      - name: Install the rpm against Fedora's own stack
+        run: |
+          set -euo pipefail
+          # No --nodeps: the point is that Fedora RESOLVES libwebkit2gtk-4.1.so.0
+          # itself. If this ever fails, the rpm's dependencies are wrong.
+          dnf -y install ./app.rpm
+          dnf -y install xorg-x11-server-Xvfb mesa-dri-drivers dbus-daemon procps-ng >/dev/null
+          rpm -q webkit2gtk4.1 mesa-dri-drivers || true
+
+      - name: Launch both and compare
+        run: |
+          set -uo pipefail
+          export DISPLAY=:99
+          Xvfb :99 -screen 0 1280x800x24 >/dev/null 2>&1 &
+          sleep 2
+          mkdir -p /tmp/demo && cd /tmp/demo
+          LOG="$HOME/.local/share/com.beecork.terminal/logs/beecork-terminal.log"
+
+          run_one() { # run_one <label> <command…>
+            local label="$1"; shift
+            rm -f "$LOG"
+            dbus-run-session -- "$@" >"/tmp/$label.out" 2>&1 &
+            sleep 15
+            local alive=0
+            pgrep -f '^(/.*/)?beecork-terminal$' >/dev/null && alive=1
+            echo "::group::$label (alive=$alive)"
+            cat "/tmp/$label.out" || true
+            echo "--- log ---"; cat "$LOG" 2>/dev/null || echo "(no log)"
+            echo "::endgroup::"
+            pkill -f '^(/.*/)?beecork-terminal$' 2>/dev/null || true
+            sleep 1
+            # "came up" = the window and webview were created (diag.rs [ready]).
+            [ "$alive" = 1 ] && grep -q '\[ready\]' "$LOG" 2>/dev/null
+          }
+
+          if run_one rpm beecork-terminal; then
+            echo "rpm: came up on Fedora's system WebKit"
+          else
+            echo "::error::the .rpm did not come up on Fedora — the supported Linux path is broken"
+            exit 1
+          fi
+
+          # Probe only. Expected to fail while we bundle an old WebKit; when this
+          # starts passing, the bundled stack has caught up with modern Mesa and
+          # the download page can stop steering Fedora users away from it.
+          if run_one appimage "$GITHUB_WORKSPACE/app.AppImage"; then
+            echo "::warning::the AppImage now works on Fedora — revisit the download page's Linux guidance"
+          else
+            echo "AppImage does not come up on Fedora, as expected (bundled WebKit vs modern Mesa)"
+          fi
