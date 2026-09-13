@@ -313,17 +313,20 @@
           <span class="download-icon">&#8862;</span>
           <span class="download-info"><strong>Windows</strong><span>64-bit · .exe installer</span></span>
         </a>
-        <a href="https://github.com/beecork/beecork-terminal/releases/latest/download/Beecork-Terminal-Linux-x86_64.AppImage" class="download-card" data-os="linux-appimage" data-pattern=".appimage">
+        <a href="https://github.com/beecork/beecork-terminal/releases/latest/download/Beecork-Terminal-Linux-amd64.deb" class="download-card" data-os="linux" data-pattern="amd64.deb">
           <span class="download-icon">&#128039;</span>
-          <span class="download-info"><strong>Linux</strong><span>AppImage · portable</span></span>
+          <span class="download-info"><strong>Linux — Ubuntu / Debian</strong><span>64-bit · .deb</span></span>
+        </a>
+        <a href="https://github.com/beecork/beecork-terminal/releases/latest/download/Beecork-Terminal-Linux-x86_64.rpm" class="download-card" data-os="linux" data-pattern="x86_64.rpm">
+          <span class="download-icon">&#128039;</span>
+          <span class="download-info"><strong>Linux — Fedora / RHEL</strong><span>64-bit · .rpm</span></span>
         </a>
       </div>
       <p class="download-notes">
         <strong>Windows:</strong> the installer isn’t code-signed yet, so Edge/Chrome flags it as “isn’t commonly downloaded” and SmartScreen shows a blue “Windows protected your PC” box. To keep it: in the browser’s download list, <strong>⋯ → Keep → Show more → Keep anyway</strong>; then when the installer runs, <strong>More info → Run anyway</strong>.<br>
         <strong>Mac:</strong> not sure which? Apple menu → About This Mac — “Apple M…” is Apple Silicon, “Intel” is Intel.<br>
-        <strong>Linux:</strong> after downloading, make the AppImage executable — <code>chmod +x Beecork-Terminal-Linux-x86_64.AppImage</code> — then run it (needs glibc 2.35+, i.e. Ubuntu 22.04 / Debian 12 / Fedora 36 or newer).
-        On Ubuntu or Debian the <a href="https://github.com/beecork/beecork-terminal/releases/latest/download/Beecork-Terminal-Linux-amd64.deb">.deb package</a> is the more reliable choice — it uses the system's own WebKit.
-        If the AppImage prints <code>libEGL.so.1: cannot open shared object file</code>, install Mesa: <code>sudo apt install libegl1 libgl1 libgles2</code>.<br>
+        <strong>Linux:</strong> install the package for your distribution — <code>sudo apt install ./Beecork-Terminal-Linux-amd64.deb</code> or <code>sudo dnf install ./Beecork-Terminal-Linux-x86_64.rpm</code>. Both use your system’s own WebKit, which is what makes them reliable.
+        There is also an <a href="https://github.com/beecork/beecork-terminal/releases/latest/download/Beecork-Terminal-Linux-x86_64.AppImage">AppImage</a> for other distributions (<code>chmod +x</code> it first, needs glibc 2.35+), but <strong>it will not start on Fedora 40+ or any system with Mesa 25+</strong> — its bundled WebKit aborts with <code>Could not create default EGL display</code> and you get a white window. Use the .rpm or .deb where you can. On a minimal install the AppImage also needs Mesa: <code>sudo apt install libegl1 libgl1 libgles2</code>.<br>
         Every build, including <code>.rpm</code> and <code>.msi</code>, is on <a href="https://github.com/beecork/beecork-terminal/releases/latest" target="_blank" rel="noopener noreferrer">GitHub Releases</a>.
       </p>
     </section>
@@ -404,7 +407,7 @@
     } else if (/Win/.test(ua)) {
       os = 'windows';
     } else if (/Linux/.test(ua)) {
-      os = 'linux-appimage';
+      os = 'linux';
     }
 
     var cards = document.querySelectorAll('.download-card[data-os]');
@@ -421,11 +424,16 @@
       'mac-arm': 'Download for Mac (Apple Silicon)',
       'mac-intel': 'Download for Mac (Intel)',
       'windows': 'Download for Windows',
-      'linux-appimage': 'Download for Linux'
+      // Not "Download …": on Linux this scrolls to the two distro cards rather
+      // than downloading, so the label must not promise a file.
+      'linux': 'Choose your Linux package'
     };
     if (heroBtn && labels[os]) heroBtn.textContent = labels[os];
     // The hero downloads directly, from the static link — no network needed.
-    if (heroBtn && highlighted) heroBtn.href = highlighted.href;
+    // EXCEPT on Linux: a user agent cannot tell Fedora from Ubuntu, and handing
+    // a Fedora user a .deb is a broken install. Send them to the cards to pick.
+    var heroTarget = os === 'linux' ? null : highlighted;
+    if (heroBtn && heroTarget) heroBtn.href = heroTarget.href;
 
     fetch(API)
       .then(function (r) {
@@ -450,7 +458,7 @@
           // Only ever UPGRADE a link; a missing match leaves the stable one.
           if (match) card.href = match.browser_download_url;
         });
-        if (heroBtn && highlighted) heroBtn.href = highlighted.href;
+        if (heroBtn && heroTarget) heroBtn.href = heroTarget.href;
       })
       .catch(function () {
         /* rate-limited, offline, blocked — the static links stand */
