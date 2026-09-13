@@ -1057,6 +1057,15 @@ body {
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
+  /* ALWAYS reserve the scrollbar gutter. Expanding a folder makes the list
+     taller, which makes the vertical scrollbar appear, which narrows the content
+     box — and every row is `white-space: nowrap`, so that can bring the
+     HORIZONTAL scrollbar in or out, which changes the height again. The two
+     scrollbars chase each other and the panel visibly flickers on every click.
+     Only on Windows: WebView2 uses classic scrollbars that occupy real layout
+     width, while macOS overlay scrollbars take zero width and reflow nothing —
+     which is why this was invisible to us for months. */
+  scrollbar-gutter: stable;
 }
 /* draggable Files/Editor divider */
 .tree-divider {
@@ -1553,13 +1562,16 @@ body {
   white-space: nowrap;
 }
 
-/* scrollbars */
-.file-tree::-webkit-scrollbar,
+/* scrollbars — target the element that actually SCROLLS.
+   `.file-tree` is the inner list (padding only); the scroll box around it is
+   `.tree-scroll` (see SidePanel), so these rules never reached the tree and it
+   drew the platform default: invisible on macOS, a fat classic bar on Windows. */
+.tree-scroll::-webkit-scrollbar,
 .cm-scroller::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
-.file-tree::-webkit-scrollbar-thumb,
+.tree-scroll::-webkit-scrollbar-thumb,
 .cm-scroller::-webkit-scrollbar-thumb {
   background: var(--selected);
   border-radius: 4px;

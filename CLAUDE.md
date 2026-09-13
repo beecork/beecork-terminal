@@ -127,6 +127,15 @@ read it before changing that mechanism.
 - **Do not force `.xterm-screen`'s height.** In xterm 6 the screen sits inside
   `.xterm-scrollable-element`; forcing 100% collapses that wrapper — and the
   scrollbar — to zero height.
+- **Scrollbar rules must name the element that actually SCROLLS, and every
+  scroll box reserves its gutter** (`scrollbar-gutter: stable`). The tree's rules
+  were written against `.file-tree`, which is the inner list — `.tree-scroll` is
+  the scroll box — so the tree drew the platform default. That is invisible on
+  macOS (overlay scrollbars, zero layout width) and a fat classic bar on Windows
+  that takes REAL width: expanding a folder toggled it, which reflowed every
+  `nowrap` row, which toggled the horizontal bar, which changed the height again.
+  The panel flickered on every click, on Windows only. Reserve the gutter and the
+  appearance of a scrollbar reflows nothing.
 - **`.xterm-viewport` must be transparent.** xterm 6 leaves it at its `#000`
   default, which reads as a black band in the scrollbar gutter.
 
