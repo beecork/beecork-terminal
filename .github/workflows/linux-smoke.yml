@@ -260,8 +260,22 @@ jobs:
           # Probe only. Expected to fail while we bundle an old WebKit; when this
           # starts passing, the bundled stack has caught up with modern Mesa and
           # the download page can stop steering Fedora users away from it.
+          #
+          # APPIMAGE_EXTRACT_AND_RUN: a container has no /dev/fuse, so the runtime
+          # cannot mount its own squashfs and dies with "fuse: device not found"
+          # LONG before it reaches the EGL init we are actually testing. Without
+          # this the probe always "fails as expected" and tells us nothing —
+          # it would still report failure the day the bundle starts working.
+          export APPIMAGE_EXTRACT_AND_RUN=1
           if run_one appimage "$GITHUB_WORKSPACE/app.AppImage"; then
             echo "::warning::the AppImage now works on Fedora — revisit the download page's Linux guidance"
           else
-            echo "AppImage does not come up on Fedora, as expected (bundled WebKit vs modern Mesa)"
+            # Say WHY, so a future reader can tell the real EGL abort from a
+            # broken probe. The reported failure is an abort inside the bundled
+            # WebKit's own EGL init; anything else here is the harness, not the bug.
+            if grep -q "Could not create default EGL display" /tmp/appimage.out; then
+              echo "AppImage aborts in bundled-WebKit EGL init, as reported (bundled WebKit vs modern Mesa)"
+            else
+              echo "::warning::AppImage did not come up, but NOT with the reported EGL error — check /tmp/appimage.out in the log above; the probe may be broken rather than the app"
+            fi
           fi
