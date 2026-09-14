@@ -1,5 +1,4 @@
 mod agents;
-mod control;
 mod diag;
 mod fs;
 mod git;
@@ -68,12 +67,6 @@ pub fn run() {
 
             let handle = app.handle().clone();
             std::thread::spawn(move || watcher::watch_project(handle));
-
-            // The local control socket: lets a CLI agent running inside a
-            // session ask the app to open another one (see control.rs for why
-            // it is a socket and not a terminal escape sequence).
-            let control = app.handle().clone();
-            std::thread::spawn(move || control::serve(control));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

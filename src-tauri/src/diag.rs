@@ -52,7 +52,7 @@ use serde::Serialize;
 /// Must equal `identifier` in tauri.conf.json — it names the log directory the
 /// same way Tauri names every other per-app directory. Pinned by a test that
 /// reads the config file.
-pub(crate) const APP_ID: &str = "com.beecork.terminal";
+const APP_ID: &str = "com.beecork.terminal";
 const LOG_NAME: &str = "beecork-terminal.log";
 /// Roll the file to `.log.1` past this size so it never grows without bound and
 /// stays small enough to attach to a message.

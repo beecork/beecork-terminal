@@ -63,11 +63,6 @@ export interface Session {
   /** the user's own colour marks — several at once, order-insensitive. Absent
    *  rather than `[]` when unmarked, so it costs nothing in storage. */
   marks?: Mark[];
-  /** A command the session should run once its shell is at a prompt — set by a
-   *  control-socket request (see `control.rs`). Live-only and deliberately NOT
-   *  persisted: a queued command that survived a restart would run at a moment
-   *  nobody asked for it. */
-  pendingCommand?: string;
 }
 
 /** Toggle one mark on a session's set. Pure and order-preserving (marks render
@@ -440,14 +435,6 @@ export function useSessions() {
     );
   }, []);
 
-  /** Queue a command for a session to run once its shell is ready, and clear it
-   *  once sent. Only the control socket sets this, and only to an allowlisted
-   *  slash command — the vetting happens in `control.rs`, at the trust boundary,
-   *  not here. */
-  const setPendingCommand = useCallback((id: string, pendingCommand: string | undefined) => {
-    setItems((prev) => patchSession(prev, id, { pendingCommand }));
-  }, []);
-
   /** Clear every mark on a session (the context menu's "Clear marks"). */
   const clearMarks = useCallback((id: string) => {
     setItems((prev) => patchSession(prev, id, { marks: undefined }));
@@ -547,7 +534,6 @@ export function useSessions() {
     rename,
     toggleMark,
     clearMarks,
-    setPendingCommand,
     setDynamic,
     setCwd,
     setRunning,

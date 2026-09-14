@@ -176,10 +176,6 @@ interface Props {
   onRequestClose?: () => void;
   /** on a restored session, the agent to offer resuming (e.g. "claude") */
   resumeAgent?: string;
-  /** A command queued by the control socket, to run once the shell is ready. */
-  pendingCommand?: string;
-  /** Called once the queued command has been sent, so it is never sent twice. */
-  onPendingConsumed?: (id: string) => void;
   /** that agent's specific conversation id, so Resume reopens this tab's own chat */
   resumeSessionId?: string;
   /** called when the resume offer is used or dismissed (they started typing) */
@@ -206,8 +202,6 @@ export default function TerminalPane({
   onCloseSession,
   onRequestClose,
   resumeAgent,
-  pendingCommand,
-  onPendingConsumed,
   resumeSessionId,
   onResumeConsumed,
 }: Props) {
@@ -226,19 +220,6 @@ export default function TerminalPane({
   activeRef.current = active;
   const resumeRef = useRef(resumeAgent);
   resumeRef.current = resumeAgent;
-  // Read inside the mount effect's channel handler, which is built ONCE — so it
-  // must come from a ref or it freezes at whatever it was on first visible.
-  const pendingRef = useRef(pendingCommand);
-  pendingRef.current = pendingCommand;
-  // What we have ALREADY sent. Never restored from props, unlike `pendingRef` —
-  // which is reassigned every render, so clearing it inside the handler is not
-  // enough: a render carrying the not-yet-cleared prop would put the command
-  // back and the next output byte would run it a second time. Keyed on the
-  // command's text rather than a boolean, so queueing a DIFFERENT command later
-  // still works.
-  const sentPendingRef = useRef<string | undefined>(undefined);
-  const onPendingRef = useRef(onPendingConsumed);
-  onPendingRef.current = onPendingConsumed;
   // Revive a pane whose shell exited: restartRef re-spawns, exitedRef gates input.
   const restartRef = useRef<(() => void) | null>(null);
   const exitedRef = useRef(false);
@@ -532,20 +513,6 @@ export default function TerminalPane({
         if (disposed) return;
         if (msg.event === "output") {
           term.write(decodeBase64(msg.data));
-          // A command queued by the control socket runs on the shell's FIRST
-          // output, which is in practice its first prompt — typing the instant
-          // the pty exists races the shell's own startup, which is how this app
-          // got "garbage typed at a fresh prompt" before. Not a perfect
-          // readiness signal: the exact one is the status poll's
-          // `running_known && running === null` ("idle at its prompt"), and that
-          // is the upgrade if this ever proves flaky. Even when early, the bytes
-          // queue in the tty and run when ZLE starts.
-          const queued = pendingRef.current;
-          if (queued && sentPendingRef.current !== queued) {
-            sentPendingRef.current = queued;
-            invoke("pty_write", { id: sessionId, data: queued + "\r" }).catch(() => {});
-            onPendingRef.current?.(sessionId);
-          }
           // Output = this session is actively working (drives the busy dot even
           // for TUI agents, which the OS foreground check can't see into).
           cbRef.current.onActivity(sessionId);

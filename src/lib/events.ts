@@ -47,25 +47,3 @@ export function onFsChanged(
     subs.delete(sub);
   };
 }
-
-/** A request that arrived on the local control socket (see `control.rs`). */
-export interface ControlRequest {
-  kind: string;
-  cwd?: string | null;
-  run?: string | null;
-}
-
-/**
- * Listen for control-socket requests.
- *
- * Its own `listen`, not folded into the shared `fs-changed` fan-out above: that
- * one exists because dozens of tree nodes subscribed to the SAME event, which is
- * not this. Exactly one subscriber (App) handles control requests, and it needs
- * the payload rather than a bare "something changed".
- */
-export function onControlRequest(cb: (req: ControlRequest) => void): () => void {
-  const un = listen<ControlRequest>("control-request", (e) => {
-    if (e.payload) cb(e.payload);
-  });
-  return () => void un.then((f) => f()).catch(() => {});
-}
