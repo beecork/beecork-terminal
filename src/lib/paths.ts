@@ -165,11 +165,27 @@ export function splitFileLine(token: string): { file: string; line?: number } {
 export function parseOsc7(data: string): string | null {
   const m = data.match(/^file:\/\/[^/]*(\/.*)$/);
   if (!m) return null;
+  let p: string;
   try {
-    return decodeURIComponent(m[1]);
+    p = decodeURIComponent(m[1]);
   } catch {
-    return m[1];
+    p = m[1];
   }
+  // Terminal output is hostile input — the `onTitleChange` handler in
+  // TerminalPane sanitizes for exactly this reason and so must this.
+  // `decodeURIComponent` can synthesise characters the OSC payload itself could
+  // not carry (it terminates at BEL/ST, but `%0A` decodes to a newline), and
+  // this value drives the watch root, the file browser's directory, a respawned
+  // shell's cwd, and the base that clicked relative path tokens resolve
+  // against. `null` is the existing "not an OSC 7 we understand" answer, so no
+  // caller changes.
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u001f\u007f]/.test(p)) return null;
+  // `isAbsolute`, not `startsWith("/")`: every helper here is separator-agnostic
+  // on purpose, and a POSIX-only check would reject `file:///C:/Users/me`.
+  // 4096 is a path ceiling, deliberately not the title's 120 — a cwd can be long.
+  if (p.length > 4096 || !isAbsolute(p)) return null;
+  return p;
 }
 
 export type MediaKind = "image" | "video" | "audio";

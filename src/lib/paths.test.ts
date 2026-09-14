@@ -217,6 +217,22 @@ describe("parseOsc7", () => {
   it("returns null for a non-file payload", () => {
     expect(parseOsc7("https://example.com")).toBeNull();
   });
+
+  // Terminal output is hostile input. The payload itself terminates at BEL/ST,
+  // but percent-decoding can SYNTHESISE characters it could not carry — and this
+  // value drives the watch root, the browser's directory and a respawned shell's
+  // cwd. The title handler beside it sanitizes for the same reason.
+  it("rejects control characters smuggled in by percent-decoding", () => {
+    expect(parseOsc7("file://host/tmp/%0Aevil")).toBeNull();
+    expect(parseOsc7("file://host/tmp/%00evil")).toBeNull();
+    expect(parseOsc7("file://host/tmp/%1bevil")).toBeNull();
+  });
+  it("rejects an absurdly long path", () => {
+    expect(parseOsc7(`file://host/${"a".repeat(5000)}`)).toBeNull();
+  });
+  it("still accepts a Windows path — the check is separator-agnostic", () => {
+    expect(parseOsc7("file:///C:/Users/me")).toBe("/C:/Users/me");
+  });
 });
 
 describe("changedAncestors", () => {

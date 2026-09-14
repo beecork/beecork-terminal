@@ -293,10 +293,17 @@ pub fn write_file(
     content: String,
     expected_mtime: Option<f64>,
 ) -> Result<f64, String> {
-    // Refuse to write THROUGH a symlink. A malicious repo can commit a symlink
-    // (e.g. `NOTES.md -> ~/.zshrc`) that the tree shows as an ordinary in-repo
-    // file; `std::fs::write` follows it, so a save would silently clobber the
-    // target outside the repo. `symlink_metadata` does not follow the leaf.
+    // Refuse to write through a symlink LEAF. A malicious repo can commit a
+    // symlink (e.g. `NOTES.md -> ~/.zshrc`) that the tree shows as an ordinary
+    // in-repo file; `std::fs::write` follows it, so a save would silently
+    // clobber the target outside the repo. `symlink_metadata` does not follow
+    // the leaf — but it DOES resolve every intermediate component, so a
+    // symlinked ANCESTOR (`notes -> ~/.ssh`, then `notes/config`) still lands
+    // the write outside, and the file tree cannot show that. Not closed on
+    // purpose: the only sound test is canonicalizing both the path and a project
+    // root and checking containment, and this editor is deliberately allowed to
+    // save outside the project — an absolute path clicked in terminal output
+    // opens and saves normally. The claim is narrowed here, not the behaviour.
     if let Ok(meta) = std::fs::symlink_metadata(&path) {
         if meta.file_type().is_symlink() {
             return Err("Refusing to write through a symlink (the file points elsewhere).".into());
