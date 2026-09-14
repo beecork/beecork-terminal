@@ -237,9 +237,12 @@ jobs:
           # No --nodeps: the point is that Fedora RESOLVES libwebkit2gtk-4.1.so.0
           # itself. If this ever fails, the rpm's dependencies are wrong.
           dnf -y install ./app.rpm
-          # xorg-x11-apps: xwd, ImageMagick: convert — for the per-case screenshot.
-          dnf -y install xorg-x11-server-Xvfb mesa-dri-drivers dbus-daemon procps-ng \
-                         xorg-x11-apps ImageMagick >/dev/null
+          dnf -y install xorg-x11-server-Xvfb mesa-dri-drivers dbus-daemon procps-ng >/dev/null
+          # The screenshot is a diagnostic aid, not a gate — install it separately
+          # and NEVER let it fail the job. It already did once: `xorg-x11-apps`
+          # does not exist on Fedora 44, and a missing optional package took down
+          # the run that proves the .rpm starts.
+          dnf -y install ImageMagick >/dev/null 2>&1 || echo "::warning::no ImageMagick — screenshots will be skipped"
           rpm -q webkit2gtk4.1 mesa-dri-drivers || true
 
       - name: Launch both and compare
@@ -261,8 +264,10 @@ jobs:
             # A screenshot per case, like the `smoke` job has. This job gates on
             # `[painted]`, and when that assertion fails the picture is the first
             # thing a human wants — a grey window and a white one are the same
-            # log line but two different bugs.
-            xwd -root -silent | convert xwd:- "/tmp/$label.png" || true
+            # log line but two different bugs. ImageMagick 7 renamed the tools, so
+            # try `magick import` then plain `import`; either way, best-effort.
+            { magick import -window root "/tmp/$label.png" \
+              || import -window root "/tmp/$label.png"; } 2>/dev/null || true
             echo "::group::$label (alive=$alive)"
             cat "/tmp/$label.out" || true
             echo "--- log ---"; cat "$LOG" 2>/dev/null || echo "(no log)"
