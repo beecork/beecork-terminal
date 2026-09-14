@@ -7,6 +7,7 @@
 // change while an agent edits, and `git_file_original` runs twice per file
 // opened. Off the main thread, a slow repo stalls the diff, not the window.
 
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -62,7 +63,8 @@ fn git() -> Command {
 }
 
 /// `-c` overrides that disable every `filter.<name>.*` driver visible to this
-/// repository.
+/// repository — or `None` when we could not establish them, which `git_status`
+/// treats as "do not run git here at all".
 ///
 /// `git status` re-hashes any worktree file whose stat data differs from the
 /// index, and hashing runs the `filter.<name>.clean`/`.process` command that an
@@ -78,45 +80,119 @@ fn git() -> Command {
 /// `include.path`, so a hostile `.git/config` can hide the driver in an included
 /// file and list clean — verified, `--local` misses exactly that. Overriding the
 /// user's own global drivers is the accepted cost.
-fn filter_neutralizers(dir: &Path) -> Vec<String> {
-    let Ok(out) = git().arg("-C").arg(dir).args(["config", "--list", "-z"]).output() else {
-        return Vec::new();
-    };
+///
+/// FOUR ways this guard was bypassed, every one proven by execution against a
+/// real repository. Do not "simplify" any of them away:
+///
+///  1. `-c key=value` splits at the FIRST `=` — git's own source says a
+///     subsection containing `=` is not representable that way. A driver named
+///     `a=b` turned our `filter.a=b.clean=` into the inert key `filter.a`, and
+///     the real driver ran.
+///  2. Worse, the discarded tail is ATTACKER-CONTROLLED. A repo whose entire
+///     config is `[filter "z"] required=false` plus a section NAMED
+///     `z.process=<command> #` makes our own override parse as
+///     `filter.z.process = <command> #.clean=` — and git SPAWNS it. The guard
+///     assembled the filter command out of a section name; for that repo,
+///     running with no guard at all was SAFER than running with this one. So a
+///     name containing `=` is not expressible here at any price: refuse the whole
+///     status (`None`) rather than emit an argument git will re-split.
+///  3. The listing was decoded with `String::from_utf8_lossy`, so a driver named
+///     with a non-UTF-8 byte became U+FFFD and the override named a DIFFERENT
+///     driver. Parsed from raw bytes now — unix argv is bytes, so `-c` carries
+///     the real name verbatim (verified). Windows argv is WTF-16 and cannot, so
+///     a non-UTF-8 name is a refusal there.
+///  4. An EMPTY driver name — `[filter ""]`, selected by a `.gitattributes` line
+///     `* filter=` — lists as the key `filter..clean`, and a `!name.is_empty()`
+///     condition dropped it, emitting no override at all. `-c 'filter..process='`
+///     neutralizes it perfectly well; the code just declined to try.
+///
+/// `filter.<name>.process=` is the setting that does the actual blocking — it
+/// beats even a non-empty `clean` set afterwards. All three are emitted anyway.
+fn filter_neutralizers(dir: &Path) -> Option<Vec<OsString>> {
+    let out = git()
+        .arg("-C")
+        .arg(dir)
+        .args(["config", "--list", "-z"])
+        .output()
+        .ok()?;
     if !out.status.success() {
-        return Vec::new();
+        // Fails CLOSED. "I could not find out what to neutralize" is not "there
+        // is nothing to neutralize" — the same distinction `running_known` draws
+        // in pty.rs, except here the permissive answer sits directly in front of
+        // remote code execution.
+        return None;
     }
-    neutralizers_from_config(&String::from_utf8_lossy(&out.stdout))
+    neutralizers_from_config(&out.stdout)
 }
 
 /// Pure half of [`filter_neutralizers`], split out so it can be unit-tested
-/// without a repository (same shape as `parse_status`). In `config --list -z`
-/// each record is `key\nvalue`, or a bare `key` when the line has no `=`.
-fn neutralizers_from_config(text: &str) -> Vec<String> {
-    let mut names: Vec<&str> = Vec::new();
-    for record in text.split('\0') {
-        let key = record.split('\n').next().unwrap_or("");
-        let Some(rest) = key.strip_prefix("filter.") else {
+/// without a repository (same shape as `parse_status`). Operates on the RAW
+/// bytes of `config --list -z` — not `&str`: a lossy decode was bypass 3.
+/// Records are NUL-separated and each is `key\nvalue`, or a bare `key` when the
+/// entry has no value.
+///
+/// Splitting on those two bytes is safe because a driver name can contain
+/// neither: git turns `\n` inside a subsection into a literal `n` and rejects a
+/// real newline outright, and a NUL truncates git's OWN key (a `[filter "x\0y"]`
+/// section lists as `filter.x` and never runs). So this parser sees exactly what
+/// git sees.
+///
+/// `None` means "a name I cannot express as a `-c` override"; the caller must
+/// then not run git at all.
+fn neutralizers_from_config(bytes: &[u8]) -> Option<Vec<OsString>> {
+    let mut names: Vec<&[u8]> = Vec::new();
+    for record in bytes.split(|&b| b == 0) {
+        let key = match record.iter().position(|&b| b == b'\n') {
+            Some(i) => &record[..i],
+            None => record,
+        };
+        let Some(rest) = key.strip_prefix(&b"filter."[..]) else {
             continue;
         };
         // `filter.<name>.<setting>` — <name> may itself contain dots, so it is
-        // everything between the first and the LAST dot.
-        let Some((name, _setting)) = rest.rsplit_once('.') else {
+        // everything between the first and the LAST dot. It may also be EMPTY,
+        // which is a real and exploitable driver (bypass 4).
+        let Some(dot) = rest.iter().rposition(|&b| b == b'.') else {
             continue;
         };
-        if !name.is_empty() && !names.contains(&name) {
+        let name = &rest[..dot];
+        // Bypasses 1 and 2 — inexpressible AND an injection vector. Refuse the
+        // whole repository rather than emit an argument git will re-split.
+        if name.contains(&b'=') {
+            return None;
+        }
+        if !names.contains(&name) {
             names.push(name);
         }
     }
-    names
-        .iter()
-        .flat_map(|n| {
-            [
-                format!("filter.{n}.clean="),
-                format!("filter.{n}.smudge="),
-                format!("filter.{n}.process="),
-            ]
-        })
-        .collect()
+    let mut out = Vec::with_capacity(names.len() * 3);
+    for name in names {
+        for setting in [&b".clean="[..], &b".smudge="[..], &b".process="[..]] {
+            let mut arg = Vec::with_capacity(7 + name.len() + setting.len());
+            arg.extend_from_slice(b"filter.");
+            arg.extend_from_slice(name);
+            arg.extend_from_slice(setting);
+            out.push(arg_from_bytes(arg)?);
+        }
+    }
+    Some(out)
+}
+
+/// unix argv is bytes, so a driver name survives verbatim however it is spelled.
+#[cfg(unix)]
+fn arg_from_bytes(b: Vec<u8>) -> Option<OsString> {
+    use std::os::unix::ffi::OsStringExt;
+    Some(OsString::from_vec(b))
+}
+
+/// Windows argv is WTF-16: a non-UTF-8 name cannot be carried through it at all
+/// — the bytes would be re-encoded and the override would name a DIFFERENT
+/// driver, which is exactly the failure that made `from_utf8_lossy` a bypass.
+/// Refuse rather than pretend. (There is no raw-byte environment there either,
+/// so an env-var transport is no help; this is a platform limit, not a choice.)
+#[cfg(not(unix))]
+fn arg_from_bytes(b: Vec<u8>) -> Option<OsString> {
+    String::from_utf8(b).ok().map(OsString::from)
 }
 
 /// Resolve the actual repository root (git emits repo-root-relative paths), so
@@ -189,12 +265,22 @@ pub fn git_status(root: Option<String>) -> Result<Vec<FileStatus>, String> {
 
     let mut cmd = git();
     cmd.arg("-C").arg(&dir);
-    // Hostile-repo hardening — see `filter_neutralizers`. Side effect accepted
-    // deliberately: this also disables git-lfs's clean filter, so LFS-tracked
-    // files show as modified in the tree tint. Nothing that works today breaks —
-    // the diff view is ALREADY wrong for LFS (`show HEAD:<path>` yields the
-    // pointer file, not the content) and LFS blobs exceed `read_file`'s 2 MB cap.
-    for n in filter_neutralizers(&dir) {
+    // Hostile-repo hardening — see `filter_neutralizers`. FAIL CLOSED: `None`
+    // means we could not establish the overrides (the config listing failed, or
+    // a driver name cannot be expressed as a `-c` argument). Running `git status`
+    // anyway is the one thing we must not do, because the re-hash is what runs
+    // `filter.<name>.clean`. Losing the tree's git tint is the same graceful
+    // degradation the not-a-git-repo path already gives.
+    //
+    // Side effect accepted deliberately: this also disables git-lfs's clean
+    // filter, so LFS-tracked files show as modified in the tree tint. Nothing
+    // that works today breaks — the diff view is ALREADY wrong for LFS
+    // (`show HEAD:<path>` yields the pointer file, not the content) and LFS
+    // blobs exceed `read_file`'s 2 MB cap.
+    let Some(neutralizers) = filter_neutralizers(&dir) else {
+        return Ok(vec![]);
+    };
+    for n in neutralizers {
         cmd.arg("-c").arg(n);
     }
     let out = cmd
@@ -308,14 +394,24 @@ mod tests {
         assert_eq!(out[1].status, "modified");
     }
 
+    /// The neutralizers as UTF-8, for assertions. Only valid where the test's own
+    /// fixture is UTF-8 — the non-UTF-8 case below compares raw bytes instead.
+    fn neuts(config: &[u8]) -> Vec<String> {
+        neutralizers_from_config(config)
+            .expect("expressible")
+            .iter()
+            .map(|o| o.to_string_lossy().into_owned())
+            .collect()
+    }
+
     // A hostile repo's `filter.<name>.clean` runs during `git status`'s re-hash.
     // Every configured driver must be neutralized — including one whose name
     // contains dots, and one listed with no value.
     #[test]
     fn neutralizes_every_configured_filter_driver() {
-        let text = "core.bare\nfalse\0filter.lfs.clean\ngit-lfs clean -- %f\0\
-                    filter.bare.clean\0filter.dotted.name.process\n/bin/sh\0";
-        let out = neutralizers_from_config(text);
+        let config = b"core.bare\nfalse\0filter.lfs.clean\ngit-lfs clean -- %f\0\
+                       filter.bare.clean\0filter.dotted.name.process\n/bin/sh\0";
+        let out = neuts(config);
         for n in ["lfs", "bare", "dotted.name"] {
             for k in ["clean", "smudge", "process"] {
                 assert!(out.contains(&format!("filter.{n}.{k}=")), "missing filter.{n}.{k}");
@@ -326,10 +422,58 @@ mod tests {
 
     #[test]
     fn ignores_config_that_is_not_a_filter_driver() {
-        assert!(neutralizers_from_config("core.pager\nless\0user.name\nx\0").is_empty());
+        assert!(neuts(b"core.pager\nless\0user.name\nx\0").is_empty());
         // `filter.foo` has no setting segment — not a driver key.
-        assert!(neutralizers_from_config("filter.foo\nbar\0").is_empty());
-        assert!(neutralizers_from_config("").is_empty());
+        assert!(neuts(b"filter.foo\nbar\0").is_empty());
+        assert!(neuts(b"").is_empty());
+    }
+
+    // ---- the four proven bypasses; each one executed code before the fix ------
+
+    // Bypass 1: git splits `-c key=value` at the FIRST `=`, so `filter.a=b.clean=`
+    // set the inert key `filter.a` and the real driver ran. Inexpressible → refuse.
+    #[test]
+    fn a_driver_name_containing_equals_refuses_the_whole_repository() {
+        assert!(neutralizers_from_config(b"filter.a=b.clean\n/bin/sh\0").is_none());
+    }
+
+    // Bypass 2, and the reason refusal is not merely conservative: the tail git
+    // discards is attacker-controlled. This config defines NO command anywhere —
+    // only a section NAME — and the old code emitted
+    // `-c filter.z.process=/bin/sh #.clean=`, which git parsed as
+    // `filter.z.process = /bin/sh #.clean=` and SPAWNED. For this input, running
+    // with no guard at all was safer than running with the guard.
+    #[test]
+    fn a_section_name_cannot_inject_a_filter_command() {
+        let config = b"filter.z.required\nfalse\0filter.z.process=/bin/sh #.required\nfalse\0";
+        assert!(neutralizers_from_config(config).is_none());
+    }
+
+    // Bypass 3: `String::from_utf8_lossy` turned a non-UTF-8 name into U+FFFD, so
+    // the override named a DIFFERENT driver. The bytes must survive verbatim.
+    #[cfg(unix)]
+    #[test]
+    fn a_non_utf8_driver_name_survives_as_raw_bytes() {
+        use std::os::unix::ffi::OsStrExt;
+        let out = neutralizers_from_config(b"filter.\xff.clean\n/bin/sh\0").expect("unix argv is bytes");
+        assert!(
+            out.iter().any(|o| o.as_bytes() == b"filter.\xff.process="),
+            "the real driver name must be carried through, not U+FFFD"
+        );
+        assert!(
+            !out.iter().any(|o| o.as_bytes().starts_with("filter.\u{FFFD}".as_bytes())),
+            "a lossy decode would name a driver that does not exist"
+        );
+    }
+
+    // Bypass 4: `[filter ""]`, selected by a `.gitattributes` line `* filter=`,
+    // lists as `filter..clean`. A `!name.is_empty()` condition dropped it and
+    // emitted nothing at all, though `-c 'filter..process='` neutralizes it fine.
+    #[test]
+    fn an_empty_driver_name_is_still_neutralized() {
+        let out = neuts(b"filter..clean\n/bin/sh\0");
+        assert!(out.contains(&"filter..process=".to_string()), "got {out:?}");
+        assert_eq!(out.len(), 3);
     }
 
     #[test]
