@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Sender};
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
 use std::thread;
 
 use base64::Engine;
@@ -38,6 +38,21 @@ pub enum PtyEvent {
 #[derive(Default)]
 pub struct PtyState {
     sessions: Mutex<HashMap<String, PtyHandle>>,
+}
+
+/// The session map, taken in a way that SURVIVES a poisoned mutex.
+///
+/// `Mutex::lock` returns `Err` forever once any thread panicked while holding
+/// the lock, so a plain `.unwrap()` here turns one bug into a dead window: the
+/// next `pty_write` — a sync command, running INLINE on the IPC thread — would
+/// panic, and with it goes every OTHER session's shell in that window, none of
+/// which did anything wrong. Nothing here warrants that. The map holds owned
+/// handles and every mutation is a single `insert`/`remove`, so a panic can
+/// leave it stale but never torn; taking the guard anyway is strictly safer
+/// than compounding the failure. The panic itself is not swallowed — it is
+/// already in the crash log with its backtrace (see `diag.rs`).
+fn sessions(state: &PtyState) -> MutexGuard<'_, HashMap<String, PtyHandle>> {
+    state.sessions.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 struct PtyHandle {
@@ -133,7 +148,7 @@ fn env_selects_utf8(lc_all: Option<&str>, lc_ctype: Option<&str>, lang: Option<&
 
 /// Remove a session under lock, then kill+reap it with the lock released.
 fn take_and_reap(state: &PtyState, id: &str) {
-    let removed = state.sessions.lock().unwrap().remove(id);
+    let removed = sessions(state).remove(id);
     if let Some(mut h) = removed {
         let _ = h.child.kill();
         let _ = h.child.wait();
@@ -143,7 +158,7 @@ fn take_and_reap(state: &PtyState, id: &str) {
 /// Kill every session owned by a given window label (called on window close).
 pub fn kill_by_owner(state: &PtyState, label: &str) {
     let removed: Vec<PtyHandle> = {
-        let mut g = state.sessions.lock().unwrap();
+        let mut g = sessions(state);
         let ids: Vec<String> = g
             .iter()
             .filter(|(_, h)| h.owner == label)
@@ -177,7 +192,7 @@ pub fn pty_spawn(
     // whatever's running (the ⌘N "lost Claude Code" bug). Refuse instead. The
     // frontend already keeps ids window-local, so this only ever guards a
     // regression, never normal use.
-    match state.sessions.lock().unwrap().get(&id).map(|h| h.owner.clone()) {
+    match sessions(&state).get(&id).map(|h| h.owner.clone()) {
         Some(existing) if existing != owner => {
             return Err(format!(
                 "session {id} is already open in another window ({existing})"
@@ -298,7 +313,7 @@ pub fn pty_spawn(
     // Insert the live handle BEFORE starting the reader thread, so that if the
     // child exits instantly the reader's token-guarded reap finds this entry
     // (otherwise it would miss and leave a zombie + stale map entry).
-    state.sessions.lock().unwrap().insert(
+    sessions(&state).insert(
         id.clone(),
         PtyHandle {
             master: pair.master,
@@ -336,7 +351,7 @@ pub fn pty_spawn(
         // Reap only if the map still holds THIS handle (not a respawn).
         if let Some(state) = app.try_state::<PtyState>() {
             let removed = {
-                let mut g = state.sessions.lock().unwrap();
+                let mut g = sessions(&state);
                 if g.get(&thread_id).map(|h| h.token) == Some(token) {
                     g.remove(&thread_id)
                 } else {
@@ -354,7 +369,7 @@ pub fn pty_spawn(
 /// The session's input channel plus the shell it's running, taken under one lock.
 /// `None` when there's no such session (a closed pane racing a late write).
 fn session_input(state: &PtyState, id: &str) -> Option<(Sender<Vec<u8>>, String)> {
-    let guard = state.sessions.lock().unwrap();
+    let guard = sessions(state);
     guard.get(id).map(|h| (h.input.clone(), h.shell.clone()))
 }
 
@@ -439,7 +454,7 @@ pub fn pty_resize(
     cols: u16,
     rows: u16,
 ) -> Result<(), String> {
-    let guard = state.sessions.lock().unwrap();
+    let guard = sessions(&state);
     if let Some(h) = guard.get(&id) {
         h.master
             .resize(size(cols, rows))
@@ -495,7 +510,7 @@ pub fn pty_status_all(
     with_agents: Option<bool>,
 ) -> HashMap<String, PtyStatus> {
     let targets: Vec<(String, u32, Option<u32>)> = {
-        let g = state.sessions.lock().unwrap();
+        let g = sessions(&state);
         ids.into_iter()
             .filter_map(|id| session_pids(g.get(&id)?).map(|(s, f)| (id, s, f)))
             .collect()

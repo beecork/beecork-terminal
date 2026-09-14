@@ -165,6 +165,14 @@ repo's config is attacker-controlled input.
 The app sends nothing anywhere, and an installed copy has no console, no stderr
 and no devtools — so without this file a crash report is the words "it crashed".
 
+- **Three markers, and only the third means the user saw anything.** `[launch]`
+  (before any UI exists) → `[ready]` (Tauri created the window and webview) →
+  `[painted]` (the webview composited a frame, `logPainted` in `diag.ts`). A
+  Fedora white window logged `[launch]` AND `[ready]` and then its WebKit web
+  process aborted, so anything asserting on `[ready]` calls that a clean start —
+  `linux-smoke.yml` did, and reported "the AppImage now works on Fedora" on the
+  very run whose log says `EGL_BAD_PARAMETER. Aborting...`. `[ready]` with no
+  `[painted]` IS the white-window signature; assert on `[painted]`.
 - **`diag::init()` is the first line of `run()`, before GTK/WebKit/WebView2
   exist; `diag::ready()` is the first line of `setup()`.** Tauri creates the
   config windows BEFORE calling setup, so `[launch]` without `[ready]` in the
@@ -188,6 +196,27 @@ and no devtools — so without this file a crash report is the words "it crashed
   Gatekeeper). Those live only in the OS crash reporter — Console.app → Crash
   Reports, Reliability Monitor. A `[launch]` line with nothing after it, at the
   time of the report, is the tell.
+
+## Subprocesses on Windows (`git.rs`)
+
+- **Every console program we spawn needs `CREATE_NO_WINDOW`.** `main.rs` builds a
+  GUI-subsystem binary, so the process owns no console and Windows allocates a
+  fresh one per spawn — a black box that flashes and steals focus. `git status`
+  runs on every filesystem event the watcher reports, so an agent editing files
+  made the screen strobe. The flag lives in `git()`, which is why every git call
+  must keep going through it. (`lsof` is `#[cfg(unix)]`; `explorer`/`open`/
+  `xdg-open` are GUI launchers and need nothing.)
+
+## Shared state must survive a panic
+
+- **Never `.lock().unwrap()` on state the UI depends on** — use
+  `unwrap_or_else(|e| e.into_inner())` (`sessions()` in `pty.rs`, the two sites in
+  `watcher.rs`). A `Mutex` stays poisoned forever once any thread panicked while
+  holding it, so a plain unwrap turns one bug into a dead window: the next
+  `pty_write` — sync, on the IPC thread — panics, taking every OTHER session's
+  shell with it. These maps hold owned values mutated by single
+  `insert`/`remove` calls, so a panic leaves them stale, never torn. Nothing is
+  swallowed: the panic is already in the crash log with its backtrace.
 
 ## Backend command threading
 

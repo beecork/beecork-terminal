@@ -45,6 +45,19 @@ fn git() -> Command {
     let mut c = Command::new("git");
     c.arg("--no-optional-locks");
     c.args(["-c", "core.fsmonitor=false", "-c", "core.pager=cat"]);
+    // Windows: we are a GUI-subsystem process (see the `windows_subsystem`
+    // attribute in main.rs), so we own no console — and spawning a console
+    // program without this flag allocates a NEW one, which flashes on screen as
+    // a black box and steals focus. `git status` runs on every filesystem event
+    // the watcher reports, so an agent editing files made the screen strobe.
+    // Must be on EVERY git spawn, which is the point of funnelling them here.
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // CREATE_NO_WINDOW — run the child with no console of its own.
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        c.creation_flags(CREATE_NO_WINDOW);
+    }
     c
 }
 

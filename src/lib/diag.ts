@@ -42,6 +42,29 @@ export function describeError(reason: unknown): string {
   }
 }
 
+/** Record that the UI actually reached the screen.
+ *
+ *  `[ready]` in the log means Tauri created the window and webview — NOT that
+ *  anything was drawn. A Fedora 44 user's white window logged `[ready]` and then
+ *  the WebKit web process aborted in its own EGL init, so the log looked like a
+ *  clean start while the user stared at nothing (see CLAUDE.md "Linux"). The
+ *  whole point of the log is to tell those apart, so the frontend says when it
+ *  has painted: `[ready]` with NO `[painted]` after it is the white-window
+ *  signature, and it is one grep for anyone reading a user's file.
+ *
+ *  Two frames, not one: the first fires before the browser has composited the
+ *  work React queued, the second only after a real paint has gone out. If the
+ *  web process dies, or the renderer never composites, neither fires and nothing
+ *  is logged — which is exactly the signal we want. Reports the viewport too, so
+ *  a window that came up 0×0 is visible in the log as well. */
+export function logPainted(): void {
+  requestAnimationFrame(() =>
+    requestAnimationFrame(() =>
+      logEvent("painted", `UI painted at ${window.innerWidth}×${window.innerHeight}`)
+    )
+  );
+}
+
 /** Route the two failures a webview has no other outlet for into the log: an
  *  uncaught exception and an unhandled promise rejection. Neither reaches
  *  `ErrorBoundary` (which sees only render/lifecycle throws), and an event

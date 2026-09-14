@@ -184,7 +184,11 @@ pub fn watch_project(app: AppHandle) {
     let (tx, rx) = channel();
     // Publish the sender so `set_watch_root` can reach this loop.
     if let Some(ctrl) = app.try_state::<WatchControl>() {
-        *ctrl.tx.lock().unwrap() = Some(tx.clone());
+        // Poison-tolerant, like the pty session map: a panic elsewhere must not
+        // permanently sever the UI's only way to re-root the watcher, which
+        // would leave the file browser and the live diff pointing at the old
+        // folder for the rest of the session with no error anywhere.
+        *ctrl.tx.lock().unwrap_or_else(|e| e.into_inner()) = Some(tx.clone());
     }
 
     let mut root = crate::fs::project_root();
@@ -243,7 +247,7 @@ pub fn watch_project(app: AppHandle) {
 /// Re-root the file watcher to follow the active terminal's working directory.
 #[tauri::command]
 pub fn set_watch_root(control: tauri::State<WatchControl>, root: String) {
-    if let Some(tx) = control.tx.lock().unwrap().as_ref() {
+    if let Some(tx) = control.tx.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
         let _ = tx.send(WatchMsg::Reroot(PathBuf::from(root)));
     }
 }

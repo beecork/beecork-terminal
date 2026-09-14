@@ -145,21 +145,26 @@ jobs:
             exit 1
           fi
           # What the log must contain depends on the build (diag.rs):
-          #   v0.1.29         [launch] written from setup, i.e. after the window exists
-          #   v0.1.30+        [launch] written before GTK/WebKit init, [ready] from setup
-          # So on 0.1.30+ a missing file is a failure, and a [launch] without a
-          # [ready] is THE blank-window signature — alive, but the webview never
-          # came up.
-          newer_than_0_1_29=0
-          [ "$(printf '%s\n' v0.1.30 "$TAG" | sort -V | head -n1)" = v0.1.30 ] && newer_than_0_1_29=1
+          #   v0.1.29    [launch] written from setup, i.e. after the window exists
+          #   v0.1.30+   [launch] before GTK/WebKit init, [ready] from setup
+          #   v0.1.32+   [painted] from the webview, after a composited frame
+          # [ready] means the window was CREATED, not drawn — a Fedora white
+          # window logged [ready] and then its web process aborted. [painted] is
+          # the only marker that means a user would see something, so assert it
+          # wherever the build has it.
+          at_least() { [ "$(printf '%s\n' "$1" "$TAG" | sort -V | head -n1)" = "$1" ]; }
           if [ -f "$LOG" ]; then
             grep -q '\[launch\]' "$LOG" || { echo "::error::no [launch] line in the crash log"; exit 1; }
             if grep -q '\[PANIC\]' "$LOG"; then echo "::error::a panic was logged"; exit 1; fi
-            if [ "$newer_than_0_1_29" = 1 ] && ! grep -q '\[ready\]' "$LOG"; then
-              echo "::error::[launch] but no [ready] — the process is alive but the window/webview never came up"
+            if at_least v0.1.30 && ! grep -q '\[ready\]' "$LOG"; then
+              echo "::error::[launch] but no [ready] — the process is alive but the window/webview was never created"
               exit 1
             fi
-          elif [ "$newer_than_0_1_29" = 1 ]; then
+            if at_least v0.1.32 && ! grep -q '\[painted\]' "$LOG"; then
+              echo "::error::[ready] but no [painted] — the window exists and NOTHING was drawn in it (the white-window failure)"
+              exit 1
+            fi
+          elif at_least v0.1.30; then
             echo "::error::no crash log at all on a build that writes it before anything else — the log dir could not be created"
             exit 1
           else
@@ -246,8 +251,19 @@ jobs:
             echo "::endgroup::"
             pkill -f '^(/.*/)?beecork-terminal$' 2>/dev/null || true
             sleep 1
-            # "came up" = the window and webview were created (diag.rs [ready]).
-            [ "$alive" = 1 ] && grep -q '\[ready\]' "$LOG" 2>/dev/null
+            # "came up" = something was actually DRAWN (diag.rs [painted]).
+            # [ready] alone is not enough and would have lied here: the AppImage
+            # on Fedora logs [launch] and [ready], stays alive, and then its web
+            # process aborts in EGL init — a white window this function once
+            # cheerfully called a success. Older builds have no [painted], so
+            # fall back to [ready] for them and say so.
+            [ "$alive" = 1 ] || return 1
+            if [ "$(printf '%s\n' v0.1.32 "$TAG" | sort -V | head -n1)" = v0.1.32 ]; then
+              grep -q '\[painted\]' "$LOG" 2>/dev/null
+            else
+              echo "note: $TAG predates [painted]; falling back to [ready], which cannot see a white window"
+              grep -q '\[ready\]' "$LOG" 2>/dev/null
+            fi
           }
 
           if run_one rpm beecork-terminal; then
