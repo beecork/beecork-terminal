@@ -1,0 +1,116 @@
+name: CI
+
+# Runs on every push and pull request, because until now NOTHING did: tests,
+# lint and typecheck existed only inside `release.yml`'s `checks` job, which
+# fires on a release dispatch. That meant no change could be verified before it
+# was tagged — the 2026-09-14 audit fix pass had to cut v0.1.33 purely to find
+# out whether it compiled.
+#
+# Deliberately NOT here: `npm audit` / `cargo audit` and the version-consistency
+# gate. The audits read LIVE advisory feeds, so a new upstream advisory would
+# turn `main` red with no change to this repo — that belongs on the release gate
+# (blocking) where it is actionable, not on every push. The version gate only
+# means anything on a tag.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A rapid series of pushes should not queue four full Rust builds.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  frontend:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          # 22 (LTS), not 20: jsdom's bundled undici calls
+          # `webidl.util.markAsUncloneable`, absent in Node 20, so the component
+          # tests cannot even start a worker there. Matches .nvmrc and engines.
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      # `tsc` is a pure typecheck here (tsconfig sets noEmit). It was previously
+      # reachable ONLY via `npm run build` inside the release matrix, so a type
+      # error passed the cheap gate and failed all four platform legs ~8 minutes
+      # later. This is the single cheapest signal in the pipeline; run it first.
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+
+  rust:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          components: clippy
+      - uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: "./src-tauri -> target"
+      # `cargo test` compiles the Tauri crate, which on Linux needs the
+      # WebKitGTK/glib system libs AND libasound2-dev (ALSA headers for
+      # rodio/cpal, the native sound engine).
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            build-essential \
+            libssl-dev \
+            libasound2-dev
+      - name: Rust tests
+        run: cd src-tauri && cargo test
+      # `too_many_arguments` is a known, accepted shape on `pty_spawn` — the
+      # audit of 2026-08-07 recorded it as deliberate. Everything else is an
+      # error, so the lint stays a real gate instead of advisory noise.
+      - name: Clippy
+        run: cd src-tauri && cargo clippy --all-targets -- -D warnings -A clippy::too_many_arguments
+
+  # Linux `cargo test` never compiles the `#[cfg(windows)]` / `#[cfg(not(unix))]`
+  # blocks, so platform-gated code used to reach a user without ever having been
+  # compiled by anything but a release build. `CREATE_NO_WINDOW` in git.rs and
+  # the non-unix `arg_from_bytes` are both exactly that shape. `--all-targets`
+  # so cfg-gated TEST code is checked too.
+  cross-compile:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+      - uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: "./src-tauri -> target"
+          key: ${{ matrix.os }}
+      - name: Type-check the platform-gated code
+        run: cd src-tauri && cargo check --all-targets
+
+  # Cheap, deterministic, and it catches a live 404 on the download page: the
+  # page links names only release.yml produces. Duplicated from the release gate
+  # on purpose — it is three lines, and finding this at push time beats finding
+  # it when a release is half-published.
+  consistency:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: The download page links exactly the names release.yml publishes
+        run: |
+          set -euo pipefail
+          diff <(grep -oE 'publish +Beecork-Terminal-[A-Za-z0-9._-]+' \
+                   .github/workflows/release.yml | awk '{print $2}' | sort -u) \
+               <(grep -oE 'releases/latest/download/[A-Za-z0-9._-]+' \
+                   site/terminal/index.html | sed 's|.*/||' | sort -u) \
+            || { echo "::error::release.yml and site/terminal/index.html disagree about the stable asset names. Rename in BOTH — see RELEASING.md."; exit 1; }

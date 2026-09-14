@@ -114,6 +114,11 @@ jobs:
             libasound2-dev
       - name: Install frontend dependencies
         run: npm ci
+      # `tsc` (a pure typecheck — tsconfig sets noEmit) previously ran ONLY via
+      # `npm run build` inside the matrix, so a type error passed this gate and
+      # failed all four platform legs ~8 minutes later. Cheapest signal first.
+      - name: Typecheck frontend
+        run: npm run typecheck
       - name: Frontend tests
         run: npm test
       # Blocking on ERRORS only. The config keeps the React-hooks rules and

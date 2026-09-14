@@ -19,6 +19,7 @@ touching the live site). Everything else is already wired in this repo.
 | `.github/workflows/release.yml` | Matrix build (mac arm64+x64, Windows, Linux) via `tauri-apps/tauri-action`, publishes a GitHub Release on tag `v*`. |
 | `src-tauri/tauri.conf.json` | Release-ready bundle metadata (product name, publisher, category, icons, targets `all`). |
 | `site/terminal/index.html` | The `beecork.com/terminal/` download page — static links to the **stable-named** assets (below), the GitHub API only adds the version label. **Copy to the beecork-site repo** (see below). |
+| `.github/workflows/ci.yml` | Push/PR gate: typecheck, lint, frontend tests, `cargo test` + clippy, and a `cargo check` on macOS and Windows so platform-gated code is compiled by something other than a release. The dependency audits are deliberately NOT here — they read live advisory feeds and belong on the release gate. |
 | `.github/workflows/verify-release.yml` | Asserts a release is WHOLE (six stable names + `latest.json` + all four platform keys) and, once promoted, that the public paths resolve to it. Called by `release.yml`; dispatch it by hand after promoting. |
 | `.github/workflows/linux-smoke.yml` | On-demand: launches a published Linux build on Ubuntu 22.04/24.04 under Xvfb (AppImage and .deb), checks it stays up and logged no panic, attaches a screenshot. The only Linux desktop we have. |
 
