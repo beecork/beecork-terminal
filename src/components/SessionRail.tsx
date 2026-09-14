@@ -1,5 +1,13 @@
 import { useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
-import { displayName, isDivider, type Divider, type RailItem, type Session } from "../lib/sessions";
+import {
+  displayName,
+  isDivider,
+  MARKS,
+  type Divider,
+  type Mark,
+  type RailItem,
+  type Session,
+} from "../lib/sessions";
 import { Plus, Close, Pencil, Chevron, Gear } from "./icons";
 import { noFocusSteal } from "../lib/keepFocus";
 import { useContextMenu } from "../lib/useContextMenu";
@@ -20,6 +28,10 @@ interface Props {
   onSelect: (id: string) => void;
   onCreate: () => void;
   onClose: (id: string) => void;
+  /** toggle one of the user's colour marks on a session */
+  onToggleMark: (id: string, mark: Mark) => void;
+  /** clear every mark on a session */
+  onClearMarks: (id: string) => void;
   onToggleExpand: () => void;
   onRename: (id: string, name: string) => void;
   onOpenSettings: () => void;
@@ -57,6 +69,8 @@ export default function SessionRail({
   onSelect,
   onCreate,
   onClose,
+  onToggleMark,
+  onClearMarks,
   onToggleExpand,
   onRename,
   onOpenSettings,
@@ -157,6 +171,14 @@ export default function SessionRail({
       { label: "Copy folder path", disabled: !s.cwd, onSelect: () => s.cwd && copyText(s.cwd) },
       { label: "Add divider above", onSelect: () => addDivider(s.id) },
       "separator",
+      // Also in the menu, not only on hover: the COLLAPSED rail shows no picker,
+      // and this is the only way to mark from there.
+      ...MARKS.map((m) => ({
+        label: s.marks?.includes(m) ? `Remove ${m} mark` : `Mark ${m}`,
+        onSelect: () => onToggleMark(s.id, m),
+      })),
+      ...(s.marks?.length ? [{ label: "Clear marks", onSelect: () => onClearMarks(s.id) }] : []),
+      "separator" as const,
       { label: "Close session", danger: true, onSelect: () => onClose(s.id) },
     ];
     if (sessionCount > 1) {
@@ -288,6 +310,18 @@ export default function SessionRail({
               onContextMenu={(e) => openMenu(e, s)}
               title={expanded ? name : `${n}. ${name}`}
             >
+              {/* The user's own marks, always visible — including in the
+                  collapsed rail, where they are the only thing distinguishing
+                  one row from another at a glance. Rendered in MARKS order, not
+                  click order, so a session's stripe looks the same every time
+                  you see it. */}
+              {s.marks?.length ? (
+                <span className="rail-marks" aria-hidden>
+                  {MARKS.filter((m) => s.marks?.includes(m)).map((m) => (
+                    <i key={m} className={`rail-mark mark-${m}`} />
+                  ))}
+                </span>
+              ) : null}
               <span className={dotClass(isBusy, wants)} />
               {expanded ? (
                 editing ? (
@@ -303,6 +337,26 @@ export default function SessionRail({
                 ) : (
                   <>
                     <span className="rail-name">{name}</span>
+                    {/* Revealed on hover (CSS), because the pointer is already
+                        on the row when you go to click. Four permanent buttons
+                        per row would crowd a narrow rail and compete with the
+                        status dot. */}
+                    <span className="rail-pick">
+                      {MARKS.map((m) => (
+                        <button
+                          key={m}
+                          className={`rail-mark-btn mark-${m}${
+                            s.marks?.includes(m) ? " on" : ""
+                          }`}
+                          title={s.marks?.includes(m) ? `Remove ${m} mark` : `Mark ${m}`}
+                          aria-pressed={s.marks?.includes(m) ?? false}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onToggleMark(s.id, m);
+                          }}
+                        />
+                      ))}
+                    </span>
                     <button
                       className="rail-close"
                       title="Rename"

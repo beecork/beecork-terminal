@@ -648,6 +648,74 @@ body {
 .rail-dot.dot-idle {
   background: #585b70;
 }
+/* ---- the user's own colour marks -------------------------------------------
+   Meaning is the user's ("waiting for merge", "waiting for deploy", …); the app
+   only carries them. Deliberately clear of the status dot's amber (needs you)
+   and blue (busy) — a mark that can be mistaken for the attention signal is
+   worse than no mark. */
+.rail-marks {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  align-self: stretch;
+  width: 3px;
+  flex: 0 0 auto;
+  border-radius: 2px;
+  overflow: hidden;
+  /* Pull it to the row's leading edge, inside the row padding, so the stripe
+     reads as a property OF the row rather than another item in it. */
+  margin-left: -6px;
+  margin-right: 3px;
+}
+.rail-marks > i {
+  flex: 1 1 0;
+  min-height: 3px;
+}
+/* One set of colours for both the stripe segments and the picker buttons. */
+.mark-red { background: #f38ba8; }
+.mark-green { background: #a6e3a1; }
+.mark-purple { background: #cba6f7; }
+.mark-teal { background: #94e2d5; }
+
+/* The picker: hidden until the pointer is on the row, because that is where it
+   already is when you go to click. Four permanent buttons per row would crowd a
+   narrow rail and compete with the status dot for attention. */
+.rail-pick {
+  display: none;
+  gap: 3px;
+  flex: 0 0 auto;
+  align-items: center;
+}
+.rail-item:hover .rail-pick,
+.rail-item:focus-within .rail-pick {
+  display: flex;
+}
+.rail-mark-btn {
+  width: 10px;
+  height: 10px;
+  padding: 0;
+  border-radius: 50%;
+  cursor: pointer;
+  flex: 0 0 auto;
+  /* Unset reads as an outline of its own colour — you can see WHICH colour each
+     button is without setting it. Set fills in. */
+  border: 1.5px solid currentColor;
+  background: transparent !important;
+  opacity: 0.55;
+}
+.rail-mark-btn.mark-red { color: #f38ba8; }
+.rail-mark-btn.mark-green { color: #a6e3a1; }
+.rail-mark-btn.mark-purple { color: #cba6f7; }
+.rail-mark-btn.mark-teal { color: #94e2d5; }
+.rail-mark-btn:hover {
+  opacity: 1;
+  transform: scale(1.15);
+}
+.rail-mark-btn.on {
+  background: currentColor !important;
+  opacity: 1;
+}
+
 @keyframes rail-pulse {
   0%,
   100% {

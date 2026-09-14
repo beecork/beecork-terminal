@@ -71,6 +71,25 @@ describe("session layout restore", () => {
     expect(s.resumeSessionId).toBeUndefined();
   });
 
+  it("restores the user's colour marks, and drops any it does not know", () => {
+    // Same rule as the saved agent above: storage is untrusted, and restore runs
+    // BEFORE any write — so a value this build does not recognise must be
+    // dropped on the way in, not merely refused on the way out.
+    save({
+      sessions: [
+        { id: "a", name: "Session 1", marks: ["red", "teal"] },
+        { id: "b", name: "Session 2", marks: ["amber", "not-a-colour", 7] },
+        { id: "c", name: "Session 3", marks: [] },
+      ],
+      activeId: "a",
+      nextNum: 4,
+    });
+    const [a, b, c] = sessionsOf(renderHook(() => useSessions()).result.current.items);
+    expect(a.marks).toEqual(["red", "teal"]);
+    expect(b.marks).toBeUndefined(); // every value was junk — absent, not []
+    expect(c.marks).toBeUndefined(); // empty stays absent
+  });
+
   it("keeps dividers, in order, alongside the sessions", () => {
     save({
       sessions: [

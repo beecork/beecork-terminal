@@ -19,6 +19,24 @@ const IS_MAIN_WINDOW: boolean = (() => {
   }
 })();
 
+/** The user's own colour marks. Their MEANING is the user's — "waiting for
+ *  merge", "waiting for deploy", "want to close this" — so the app never names
+ *  them, only carries them.
+ *
+ *  Deliberately NOT amber or blue: the rail's status dot already uses amber for
+ *  "needs you" (pulsing — the most important signal in the app) and blue for
+ *  "busy". A user mark in either colour would be misread at a glance, which is
+ *  the one thing a marking system must not do. */
+export const MARKS = ["red", "green", "purple", "teal"] as const;
+export type Mark = (typeof MARKS)[number];
+
+/** Storage is untrusted input, exactly like `resumeAgent` below: validate on
+ *  READ, not only on write. Guarding the write alone would still surface a bad
+ *  value on the very next launch, because restore runs first. */
+export function isMark(v: unknown): v is Mark {
+  return typeof v === "string" && (MARKS as readonly string[]).includes(v);
+}
+
 export interface Session {
   id: string;
   /** default base name, e.g. "Session 1" */
@@ -42,6 +60,18 @@ export interface Session {
   resumeAgent?: string;
   /** on a restored session, that agent's specific conversation id to resume */
   resumeSessionId?: string;
+  /** the user's own colour marks — several at once, order-insensitive. Absent
+   *  rather than `[]` when unmarked, so it costs nothing in storage. */
+  marks?: Mark[];
+}
+
+/** Toggle one mark on a session's set. Pure and order-preserving (marks render
+ *  in `MARKS` order regardless, but a stable array keeps React keys stable). */
+export function toggleMarkIn(marks: Mark[] | undefined, mark: Mark): Mark[] | undefined {
+  const had = marks?.includes(mark) ?? false;
+  const next = had ? (marks ?? []).filter((m) => m !== mark) : [...(marks ?? []), mark];
+  // Absent, not empty — see the field's doc.
+  return next.length ? next : undefined;
 }
 
 /** A named section divider in the rail — a `── name ──` line between sessions. */
@@ -235,6 +265,8 @@ interface PersistedSession {
   agent?: string;
   /** that agent's conversation id when we saved — so Resume reopens this chat. */
   agentSession?: string;
+  /** the user's colour marks. Filtered through `isMark` on read. */
+  marks?: string[];
 }
 interface PersistedDivider {
   kind: "divider";
@@ -297,6 +329,10 @@ export function useSessions() {
           // like "vim" — and guarding only the WRITE would leave those offering a
           // bogus pill on the very next launch, since restore runs first. The
           // conversation id goes with it: it means nothing without its agent.
+          // Same rule as `resumeAgent`: storage is untrusted, so keep only marks
+          // this build knows. A value from a future build (or a hand-edited
+          // localStorage) is dropped rather than rendered as a stray colour.
+          marks: s.marks?.filter(isMark).length ? s.marks.filter(isMark) : undefined,
           resumeAgent: isResumableAgent(s.agent) ? s.agent : undefined,
           resumeSessionId: isResumableAgent(s.agent) ? s.agentSession : undefined,
         };
@@ -349,6 +385,7 @@ export function useSessions() {
                   ? (i.running ?? i.resumeAgent)
                   : undefined,
                 agentSession: i.agentId ?? i.resumeSessionId,
+                marks: i.marks,
               }
         ),
         activeId,
@@ -386,6 +423,21 @@ export function useSessions() {
 
   const rename = useCallback((id: string, custom: string) => {
     setItems((prev) => patchSession(prev, id, { custom: custom.trim() || undefined }));
+  }, []);
+
+  /** Toggle one of the user's colour marks on a session. Several can be set at
+   *  once — they are independent flags whose meaning is the user's, not ours. */
+  const toggleMark = useCallback((id: string, mark: Mark) => {
+    setItems((prev) =>
+      prev.map((i) =>
+        !isDivider(i) && i.id === id ? { ...i, marks: toggleMarkIn(i.marks, mark) } : i
+      )
+    );
+  }, []);
+
+  /** Clear every mark on a session (the context menu's "Clear marks"). */
+  const clearMarks = useCallback((id: string) => {
+    setItems((prev) => patchSession(prev, id, { marks: undefined }));
   }, []);
 
   const setDynamic = useCallback((id: string, dynamic: string) => {
@@ -480,6 +532,8 @@ export function useSessions() {
     create,
     close,
     rename,
+    toggleMark,
+    clearMarks,
     setDynamic,
     setCwd,
     setRunning,

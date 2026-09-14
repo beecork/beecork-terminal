@@ -87,6 +87,8 @@ export default function App() {
     create,
     close,
     rename,
+    toggleMark,
+    clearMarks,
     setDynamic,
     setCwd,
     setRunning,
@@ -484,6 +486,8 @@ export default function App() {
           }}
           onCreate={newSession}
           onClose={requestClose}
+          onToggleMark={toggleMark}
+          onClearMarks={clearMarks}
           onToggleExpand={() => {
             // Run the visual first, so a throwing sound can't drop the toggle.
             sound.withVisual(() => setRailExpanded((e) => !e));

@@ -5,7 +5,10 @@ import {
   resumeCommand,
   isResumableAgent,
   isDivider,
+  isMark,
+  MARKS,
   moveBefore,
+  toggleMarkIn,
   type RailItem,
   type Session,
   splitLayout,
@@ -182,5 +185,49 @@ describe("splitLayout", () => {
       rightId: null,
       visibleIds: ["nope"],
     });
+  });
+});
+
+// The user's own colour marks. Their MEANING is the user's; these pin the two
+// properties the app owns — that toggling is symmetric, and that a value from
+// storage is never trusted.
+describe("session marks", () => {
+  it("toggles a mark on and back off", () => {
+    expect(toggleMarkIn(undefined, "red")).toEqual(["red"]);
+    expect(toggleMarkIn(["red"], "red")).toBeUndefined();
+  });
+
+  it("holds several at once, because the meanings are independent", () => {
+    // "waiting for deploy" AND "want to close this" is a real combination.
+    let m = toggleMarkIn(undefined, "red");
+    m = toggleMarkIn(m, "teal");
+    m = toggleMarkIn(m, "green");
+    expect(m).toEqual(["red", "teal", "green"]);
+    // Removing the middle one leaves the others untouched.
+    expect(toggleMarkIn(m, "teal")).toEqual(["red", "green"]);
+  });
+
+  it("returns undefined rather than an empty array when the last mark goes", () => {
+    // Absent, not empty: `JSON.stringify` drops the key entirely, so an unmarked
+    // session costs nothing in storage and reads as never-marked on restore.
+    expect(toggleMarkIn(["green"], "green")).toBeUndefined();
+  });
+
+  // Storage is untrusted input, exactly like `resumeAgent`. Guarding only the
+  // WRITE would still surface a bad value on the next launch, because restore
+  // runs first — the same trap a previous release already paid for.
+  it("rejects anything that is not a known mark", () => {
+    for (const m of MARKS) expect(isMark(m)).toBe(true);
+    for (const bad of ["amber", "blue", "", "RED", 1, null, undefined, {}]) {
+      expect(isMark(bad)).toBe(false);
+    }
+  });
+
+  // Amber and blue are the status dot's — a mark in either would be misread as
+  // the attention signal, which is the one thing a marking system must not do.
+  it("never uses a colour the status dot already speaks", () => {
+    expect(MARKS).not.toContain("amber");
+    expect(MARKS).not.toContain("blue");
+    expect(MARKS).not.toContain("yellow");
   });
 });
