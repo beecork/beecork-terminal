@@ -19,6 +19,7 @@ touching the live site). Everything else is already wired in this repo.
 | `.github/workflows/release.yml` | Matrix build (mac arm64+x64, Windows, Linux) via `tauri-apps/tauri-action`, publishes a GitHub Release on tag `v*`. |
 | `src-tauri/tauri.conf.json` | Release-ready bundle metadata (product name, publisher, category, icons, targets `all`). |
 | `site/terminal/index.html` | The `beecork.com/terminal/` download page — static links to the **stable-named** assets (below), the GitHub API only adds the version label. **Copy to the beecork-site repo** (see below). |
+| `.github/workflows/verify-release.yml` | Asserts a release is WHOLE (six stable names + `latest.json` + all four platform keys) and, once promoted, that the public paths resolve to it. Called by `release.yml`; dispatch it by hand after promoting. |
 | `.github/workflows/linux-smoke.yml` | On-demand: launches a published Linux build on Ubuntu 22.04/24.04 under Xvfb (AppImage and .deb), checks it stays up and logged no panic, attaches a screenshot. The only Linux desktop we have. |
 
 ---
@@ -89,20 +90,71 @@ manifest with the **existing** signing key.
 
 ## Cutting a release
 
+The ordered gate, and every step matters:
+
+**bump → tag → dispatch → verify (whole) → linux-smoke → PROMOTE → verify (live)**
+
 ```bash
-# bump the version in ALL FOUR: package.json, src-tauri/tauri.conf.json,
-# src-tauri/Cargo.toml, and src-tauri/Cargo.lock (the [[package]] name =
-# "beecork-terminal" entry — keep the lockfile in sync or the build tree is dirty)
+# 1. Bump the version in ALL FIVE: package.json, package-lock.json,
+#    src-tauri/tauri.conf.json, src-tauri/Cargo.toml, and src-tauri/Cargo.lock
+#    (the [[package]] name = "beecork-terminal" entry — keep the lockfile in sync
+#    or the build tree is dirty). CI checks all five.
 git commit -am "v0.1.0"
 git tag -a v0.1.0 -m "v0.1.0"   # MUST be annotated (-a); see note below
-git push --follow-tags
+git push --follow-tags --no-verify
+
+# 2. Build. The workflow is DISPATCH-ONLY — there is no tag-push trigger.
+#    `--ref <tag>` is not optional: release.yml refuses any ref that is not a
+#    vX.Y.Z tag, because it publishes under github.ref_name and a `--ref main`
+#    dispatch would create a release tagged `main` AND a refs/tags/main that
+#    shadows the branch forever.
+gh workflow run release.yml --ref v0.1.0
+gh run watch $(gh run list --workflow=release.yml --limit 1 --json databaseId --jq '.[0].databaseId')
 ```
+
+The run itself now pre-creates the release **as a prerelease** (the `prepare`
+job) and verifies it afterwards (the `verify` job). A prerelease is never
+`releases/latest`, so every download card and the updater keep pointing at the
+previous, complete release for the whole build. Before this, the first matrix leg
+to finish published the release and it became `releases/latest` immediately —
+measured on v0.1.29, the Windows download card 404'd for **4m17s** and the
+updater endpoint for **4m05s**, every release.
+
+```bash
+# 3. Prove Linux actually starts. Nobody on the team has a Linux machine, and
+#    Linux fails silently — a window that never fills in. Gates on [painted].
+gh workflow run linux-smoke.yml -f tag=v0.1.0
+gh run watch   # then open the run's smoke-* artifacts for the screenshots
+
+# 4. PROMOTE. This is a human act on purpose: a green build proves the code
+#    compiled, not that the app starts. Auto-promoting would have shipped
+#    v0.1.30's white-window AppImage.
+gh release edit v0.1.0 --prerelease=false --latest
+
+# 5. Confirm the public paths actually resolve to it. `releases/latest` and the
+#    CDN are eventually consistent (~100 s observed), so this polls.
+gh workflow run verify-release.yml --ref v0.1.0
+```
+
+> ⚠️ **Step 4 is forgettable, and forgetting it ships to nobody.** That is
+> v0.1.24's shape, knowingly reintroduced: a loud, one-command-to-fix "nothing
+> shipped" traded against a guaranteed 4-minute user-facing outage on every
+> release. The `verify` job prints the exact promote command in its run summary
+> when it finds an unpromoted release.
+
+> ⚠️ **Never verify with `gh release view … --jq '.assets[].name'` alone.** It
+> prints an identical asset list whether or not the release was ever promoted, so
+> it is structurally incapable of catching the one failure it was there to catch.
+> `verify-release.yml` asserts the release state, all six stable names,
+> `latest.json`'s version, and all four platform keys — a missing key is a
+> platform that silently never updates again.
 
 > ⚠️ **The tag must be annotated (`-a`).** `git push --follow-tags` pushes *only*
 > annotated tags, so a lightweight `git tag v0.1.0` would push `main` but silently
-> leave the tag behind — and since the build triggers on the **tag** reaching
-> GitHub, nothing would build. If you ever end up with a lightweight tag, push it
+> leave the tag behind. If you ever end up with a lightweight tag, push it
 > explicitly instead: `git push origin v0.1.0`.
+
+### Why the path is this — the history
 
 > ⚠️ **A tag push can be badly delayed — dispatch instead of waiting.**
 > Observed on v0.1.25 (2026-08-06): the tag reached GitHub and no run appeared for
@@ -164,6 +216,14 @@ plus **stable-named copies** of the installers, which the download page links:
 | `Beecork-Terminal-Linux-x86_64.AppImage` | `…_amd64.AppImage` |
 | `Beecork-Terminal-Linux-amd64.deb` | `…_amd64.deb` |
 | `Beecork-Terminal-Linux-x86_64.rpm` | `…-1.x86_64.rpm` |
+
+> **Linux: the distro packages are the answer, not the AppImage.** The `.deb` and
+> `.rpm` link the host's WebKit. The AppImage bundles an Ubuntu-22.04-era one that
+> aborts in its own EGL init against a modern Mesa — a Fedora 44 user got a white
+> window from v0.1.30, reproduced in `linux-smoke.yml`'s `fedora` job, which gates
+> on the `.rpm` and probes the AppImage without failing on it. When that probe
+> starts passing, the bundled stack has caught up and the download page can stop
+> steering Fedora users away from it.
 
 `https://github.com/beecork/beecork-terminal/releases/latest/download/<stable name>`
 always resolves to the newest release, so the page works with no API call. The

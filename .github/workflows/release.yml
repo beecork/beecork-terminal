@@ -15,10 +15,12 @@ name: Release
 # manifest (latest.json). See RELEASING.md "Cutting a release" — including the
 # step that confirms the release actually published.
 
+# Dispatch only. The `on: push: tags` trigger used to fire a SECOND run for every
+# tag push, racing the dispatched one — cancelled by hand on all five recent
+# releases. It was also unreliable in the other direction (a tag push has arrived
+# ~20 minutes late, and v0.1.24 built green and published nothing), which is why
+# RELEASING.md has always said to dispatch. One trigger, one run.
 on:
-  push:
-    tags:
-      - "v*"
   workflow_dispatch:
 
 jobs:
@@ -26,6 +28,19 @@ jobs:
   checks:
     runs-on: ubuntu-22.04
     steps:
+      # This workflow publishes under `github.ref_name`. On a `--ref main`
+      # dispatch that is the string "main": a real, published release tagged
+      # `main` that instantly becomes releases/latest for every download button
+      # AND the updater — and the releases API CREATES refs/tags/main, which then
+      # shadows the branch forever. A failing STEP is loud; a job-level `if:`
+      # would skip `release` too and the run would go green having done nothing,
+      # which is v0.1.24's exact shape.
+      - name: Refuse to release from a non-tag ref
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        run: |
+          echo "::error::release.yml must run on a vX.Y.Z tag ref, not ${{ github.ref }}."
+          echo "::error::Dispatch with: gh workflow run release.yml --ref vX.Y.Z"
+          exit 1
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
@@ -39,9 +54,11 @@ jobs:
       # The updater manifest (latest.json) advertises the version from
       # tauri.conf.json, NOT the git tag — so a tag that doesn't match it would
       # publish a release that installed clients never see as an update. Fail
-      # fast if they disagree. (Skipped on manual workflow_dispatch, non-tag ref.)
+      # fast if they disagree. Always runs: the step above refuses any ref that
+      # is not a tag, so the old `if:` here was unreachable-false — and its
+      # comment claimed dispatched runs skipped this gate, which was never true.
+      # A `--ref vX.Y.Z` dispatch IS a tag ref and IS checked (proven on v0.1.32).
       - name: Verify tag matches every versioned file
-        if: startsWith(github.ref, 'refs/tags/')
         run: |
           TAG="${GITHUB_REF_NAME#v}"
           FAIL=""
@@ -63,6 +80,19 @@ jobs:
             exit 1
           fi
           echo "version OK: $TAG"
+      # The page links names only release.yml produces. Nothing tied the two
+      # together, and the AppImage link in the page's prose (not a card) is
+      # exactly what a hand rename misses. `<` = published but not linked,
+      # `>` = linked but not published — a `>` is a live 404 on the site.
+      - name: The download page links exactly the names release.yml publishes
+        run: |
+          set -euo pipefail
+          diff <(grep -oE 'publish +Beecork-Terminal-[A-Za-z0-9._-]+' \
+                   .github/workflows/release.yml | awk '{print $2}' | sort -u) \
+               <(grep -oE 'releases/latest/download/[A-Za-z0-9._-]+' \
+                   site/terminal/index.html | sed 's|.*/||' | sort -u) \
+            || { echo "::error::release.yml and site/terminal/index.html disagree about the stable asset names. Rename in BOTH — see RELEASING.md."; exit 1; }
+
       # `cargo test` compiles the Tauri crate, which on Linux needs the WebKitGTK/
       # glib system libs AND libasound2-dev (ALSA headers for rodio/cpal, the native
       # sound engine) — same set the release job installs for its ubuntu leg.
@@ -101,8 +131,59 @@ jobs:
           cargo install cargo-audit --locked --version 0.22.2
           cd src-tauri && cargo audit
 
-  release:
+  # Create the release ourselves, as a PRERELEASE, before anything builds.
+  #
+  # Otherwise the first matrix leg to finish creates it with releaseDraft:false
+  # and it becomes `releases/latest` on the spot — while five of the six stable
+  # names, and latest.json, do not exist yet. Measured on v0.1.29: the Windows
+  # download card 404'd for 4m17s and the UPDATER endpoint for 4m05s.
+  #
+  # A prerelease is never `releases/latest`, so every download link and the
+  # updater keep resolving to the previous, COMPLETE release for the whole build.
+  # tauri-action finds it by tag and only uploads — it does NOT patch an existing
+  # release's metadata (its `create-release.ts` returns the found release
+  # unmodified and contains no updateRelease call), so `prerelease: false` below
+  # applies only on creation and cannot promote this. A DRAFT would NOT work:
+  # get-by-tag cannot find drafts.
+  #
+  # It also removes a failure class: pre-creating means tauri-action never calls
+  # the create-a-release API — the exact call that failed with "Resource not
+  # accessible by integration" on v0.1.24 and on two v0.1.30 dispatches.
+  #
+  # KNOWN TRADE: a release nobody promotes ships to nobody — v0.1.24's shape,
+  # deliberately reintroduced. That is a forgettable step producing a loud,
+  # one-command-to-fix "nothing shipped", traded against a guaranteed 4-minute
+  # user-facing outage every single release. verify's "Not promoted" notice
+  # prints the promote command, and linux-smoke now tests the prerelease.
+  #
+  # Promotion stays a HUMAN act, after linux-smoke.yml. A green build proves the
+  # code compiled, not that the app starts — auto-promoting would have shipped
+  # v0.1.30's white-window AppImage.
+  prepare:
     needs: checks
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      TAG: ${{ github.ref_name }}
+    steps:
+      - name: Pre-create the release as a prerelease
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            # Re-dispatch of a run that already got this far (v0.1.30 needed three).
+            state=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" \
+                      --json isPrerelease --jq 'if .isPrerelease then "prerelease" else "LIVE" end')
+            echo "::notice::$TAG already exists as a $state; reusing it"
+          else
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --prerelease \
+              --title "Beecork Terminal $TAG" \
+              --notes "Download the installer for your platform below. See the assets."
+          fi
+
+  release:
+    needs: [checks, prepare]
     permissions:
       contents: write
     strategy:
@@ -224,3 +305,19 @@ jobs:
                                         publish Beecork-Terminal-Linux-x86_64.rpm       "$bundle"/rpm/*.rpm ;;
             *) echo "::error::unexpected matrix leg $RUNNER_OS:$TARGET"; exit 1 ;;
           esac
+
+  # A release is not "done" when the matrix is green — v0.1.24 built green and
+  # shipped nothing, and RELEASING.md's documented check prints the same asset
+  # list for a promoted release and an unpromoted prerelease. This answers
+  # "is it whole?" authoritatively, and reports the promotion state.
+  verify:
+    needs: release
+    # Run even when a leg FAILED: a partial release is exactly what this is for,
+    # and "missing asset X" beats reading four matrix logs. Skipped only when
+    # `checks` gated the build out — nothing was built, nothing to verify.
+    if: ${{ !cancelled() && needs.release.result != 'skipped' }}
+    uses: ./.github/workflows/verify-release.yml
+    with:
+      tag: ${{ github.ref_name }}
+    permissions:
+      contents: read

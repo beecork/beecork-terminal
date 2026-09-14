@@ -1,0 +1,131 @@
+name: Verify a release
+
+# Two questions, with different answers at different times:
+#
+#   1. Is the release WHOLE? — instant, authoritative, works on a prerelease.
+#      Every stable name the download page links, plus latest.json, plus a
+#      latest.json whose version matches the tag and whose four platform keys
+#      are all present. A dead matrix leg silently removes one key and that
+#      platform then never updates again, with no error anywhere —
+#      `UpdateBanner.tsx` swallows a failed `check()`.
+#
+#   2. Do the public download paths resolve to it? — only meaningful once the
+#      release is LIVE, and eventually consistent: `releases/latest` and the
+#      CDN-served copy lag the API (~100 s observed). A bare check here goes RED
+#      on a good release; it must poll.
+#
+# Called by release.yml after the matrix (answers 1; reports 2 as "not promoted
+# yet"), and dispatched by hand after `gh release edit --prerelease=false
+# --latest` to answer 2 for real. Dispatch it ON THE TAG — it parses the stable
+# names out of release.yml, and that list is only correct for that tag's tree.
+#
+# Why this exists: RELEASING.md's documented check was `gh release view … --jq
+# '.assets[].name'`, which prints the same asset list whether or not the release
+# was ever promoted, and says nothing about latest.json. v0.1.24 built green and
+# shipped nothing; v0.1.30 needed three dispatches.
+on:
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to verify (empty = the ref this was dispatched on)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ inputs.tag != '' && inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: The release is whole
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+
+          # ONE source of truth for the stable names: the publish step in
+          # release.yml. Parse it — never re-type the list here, or this gate
+          # becomes the next thing that drifts.
+          mapfile -t WANT < <(grep -oE 'publish +Beecork-Terminal-[A-Za-z0-9._-]+' \
+                                .github/workflows/release.yml | awk '{print $2}' | sort -u)
+          [ "${#WANT[@]}" -eq 6 ] || {
+            echo "::error::expected 6 stable names in release.yml's publish step, parsed ${#WANT[@]}"
+            printf '  %s\n' "${WANT[@]}"; exit 1; }
+
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --json assets --jq '.assets[].name' | sort > have.txt
+          echo "::group::assets on $TAG"; cat have.txt; echo "::endgroup::"
+
+          FAIL=""
+          for n in "${WANT[@]}" latest.json; do
+            grep -Fqx -- "$n" have.txt || { echo "::error::missing asset: $n"; FAIL=yes; }
+          done
+          [ -z "$FAIL" ] || { echo "::error::$TAG is INCOMPLETE — do not promote it"; exit 1; }
+
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --pattern latest.json --output latest.json --clobber
+          got=$(jq -r .version latest.json)
+          [ "$got" = "$VERSION" ] || {
+            echo "::error::latest.json says $got, the tag says $VERSION"; exit 1; }
+          # One key per matrix leg. A missing key is a platform that silently
+          # stops receiving updates.
+          for k in darwin-aarch64 darwin-x86_64 linux-x86_64 windows-x86_64; do
+            jq -e --arg k "$k" '.platforms[$k].url and .platforms[$k].signature' \
+              latest.json >/dev/null \
+              || { echo "::error::latest.json has no usable $k — that platform will never update"; exit 1; }
+          done
+          echo "whole: 6 stable names + latest.json $got, all four platform keys present"
+
+      - name: The public download paths resolve to it
+        run: |
+          set -euo pipefail
+          BASE="https://github.com/$GITHUB_REPOSITORY"
+          state=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft,isPrerelease \
+                    --jq 'if .isDraft then "draft" elif .isPrerelease then "prerelease" else "live" end')
+          if [ "$state" != live ]; then
+            printf '::notice title=Not promoted::%s is a %s, so releases/latest still points at the previous COMPLETE release — that is the whole point of building into a prerelease. When Linux is proven: gh release edit %s --prerelease=false --latest   then: gh workflow run verify-release.yml --ref %s\n' \
+              "$TAG" "$state" "$TAG" "$TAG"
+            exit 0
+          fi
+
+          # releases/latest is eventually consistent. Poll, bounded — a bare
+          # check here would go red on a perfectly good release.
+          deadline=$(( SECONDS + 420 ))
+          while :; do
+            loc=$(curl -sSI "$BASE/releases/latest" | tr -d '\r' \
+                    | awk 'tolower($1)=="location:"{print $2}' || true)
+            ver=$(curl -fsSL "$BASE/releases/latest/download/latest.json" 2>/dev/null \
+                    | jq -r .version 2>/dev/null || true)
+            if [ "${loc##*/}" = "$TAG" ] && [ "$ver" = "${TAG#v}" ]; then
+              echo "releases/latest -> $TAG ; CDN latest.json -> $ver"; break
+            fi
+            [ "$SECONDS" -lt "$deadline" ] || {
+              echo "::error::after 7 min releases/latest is '${loc##*/}' and the CDN latest.json is '$ver' (want $TAG / ${TAG#v})"
+              exit 1; }
+            echo "propagating… (now '${loc##*/}' / '$ver')"
+            sleep 15
+          done
+
+          fail=""
+          for n in $(grep -oE 'publish +Beecork-Terminal-[A-Za-z0-9._-]+' \
+                       .github/workflows/release.yml | awk '{print $2}' | sort -u); do
+            # HEAD with -L: works on the signed release-assets URLs and downloads
+            # zero bytes. A plain GET would pull the 84 MB AppImage.
+            code=$(curl -sSI -L -o /dev/null -w '%{http_code}' "$BASE/releases/latest/download/$n")
+            echo "  $code  $n"
+            [ "$code" = 200 ] || fail="$fail $n"
+          done
+          [ -z "$fail" ] || { echo "::error::download-page links are DEAD:$fail"; exit 1; }
+          echo "all six download cards resolve"
