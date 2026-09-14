@@ -21,6 +21,7 @@ import {
   type Session,
 } from "./lib/sessions";
 import { useSessionStatus } from "./lib/useSessionStatus";
+import { onControlRequest } from "./lib/events";
 import { basename } from "./lib/paths";
 import { ptyCd, ptyInsertPaths, setWatchRoot } from "./lib/api";
 import { usePersistedState } from "./lib/persist";
@@ -89,6 +90,7 @@ export default function App() {
     rename,
     toggleMark,
     clearMarks,
+    setPendingCommand,
     setDynamic,
     setCwd,
     setRunning,
@@ -353,6 +355,18 @@ export default function App() {
     };
   }, [focusTerminal]);
 
+  // A request from the local control socket — how a CLI agent running inside a
+  // session asks for another one (see control.rs). The request has already been
+  // vetted at the trust boundary: the directory exists and any command is from a
+  // fixed allowlist, so there is nothing to re-validate here.
+  useEffect(() => {
+    return onControlRequest((req) => {
+      if (req.kind !== "session.new") return;
+      const id = create(req.cwd ?? undefined);
+      if (req.run) setPendingCommand(id, req.run);
+    });
+  }, [create, setPendingCommand]);
+
   /** False when the watcher refuses this folder — correct, but not self-updating. */
   const [watchLive, setWatchLive] = useState(true);
   // Keep the file watcher on the active terminal's directory, so the live diff
@@ -562,6 +576,8 @@ export default function App() {
                   onCloseSession={() => requestClose(s.id)}
                   onRequestClose={!split && isFocused ? () => requestClose(s.id) : undefined}
                   resumeAgent={s.resumeAgent}
+                  pendingCommand={s.pendingCommand}
+                  onPendingConsumed={(id) => setPendingCommand(id, undefined)}
                   resumeSessionId={s.resumeSessionId}
                   onResumeConsumed={clearResume}
                 />
