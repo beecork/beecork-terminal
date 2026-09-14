@@ -43,6 +43,7 @@
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -59,6 +60,22 @@ const ROLL_AT_BYTES: u64 = 1_000_000;
 /// The webview can send anything (a stack trace, a giant JSON payload it choked
 /// on); keep one entry bounded so a runaway error can't fill the disk.
 const MAX_EVENT_BYTES: usize = 16 * 1024;
+/// What ONE RUN may append before the log stops accepting entries from it.
+/// Deliberately far below `ROLL_AT_BYTES` so a single run can cause AT MOST ONE
+/// roll — and therefore can never destroy the previous run's `.log.1`, and its
+/// own `[launch]`/`[ready]`/`[painted]` are always in one of the two files.
+/// Before this, a repeating panic wrote an UNBOUNDED backtrace per occurrence:
+/// the watcher emits up to ten batches a second (`watcher::COALESCE_MS`), so a
+/// deterministic panic in a command it drives filled the 1 MB budget in about
+/// four seconds and erased `.log.1` about four seconds later — leaving the user
+/// with N copies of one stack and none of the three markers that are the
+/// actual diagnosis.
+const RUN_BUDGET_BYTES: u64 = 256 * 1024;
+/// Charged against the budget on top of each entry's own text, for the timestamp
+/// and the tag. Without it a storm of one-byte entries blows past
+/// `ROLL_AT_BYTES` in per-line overhead alone while the budget still reads as
+/// unspent — 256K one-byte entries is ~13 MB of timestamps.
+const ENTRY_OVERHEAD: u64 = 64;
 
 static LOG_PATH: OnceLock<PathBuf> = OnceLock::new();
 
@@ -94,13 +111,7 @@ pub fn init() {
     std::panic::set_hook(Box::new(move |info| {
         let thread = std::thread::current();
         let backtrace = std::backtrace::Backtrace::force_capture();
-        append(
-            "PANIC",
-            &format!(
-                "thread '{}': {info}\n{backtrace}",
-                thread.name().unwrap_or("?")
-            ),
-        );
+        append("PANIC", &panic_body(thread.name().unwrap_or("?"), info, &backtrace));
         // Still print it where a `tauri dev` run or a terminal launch can see it.
         previous(info);
     }));
@@ -129,9 +140,44 @@ pub fn path() -> Option<&'static Path> {
 }
 
 fn append(kind: &str, message: &str) {
-    if let Some(path) = LOG_PATH.get() {
+    let Some(path) = LOG_PATH.get() else {
+        return;
+    };
+    // `launch` and `ready` are written once per run by this file itself, and
+    // `linux-smoke.yml` greps for both — CLAUDE.md calls those strings an
+    // interface. A panic storm between `init()` and `setup()` must never cost us
+    // either one, so they skip the gate entirely. Everything else goes through
+    // it, `painted` included: that one arrives from the webview through
+    // `log_event`, so it is not ours to treat as once-per-run.
+    if kind == "launch" || kind == "ready" {
         append_to(path, kind, message);
+        return;
     }
+    match GATE.admit(kind, message) {
+        Admit::Write => append_to(path, kind, message),
+        Admit::Final => {
+            append_to(path, kind, message);
+            append_to(
+                path,
+                kind,
+                "… this run's log budget is spent — further entries are dropped so the markers above survive",
+            );
+        }
+        Admit::Repeat(n) => append_to(path, kind, &format!("… the entry above repeated {n}×")),
+        Admit::Drop => {}
+    }
+}
+
+/// The `[PANIC]` body, bounded exactly like a webview event. A `force_capture()`
+/// backtrace is tens of KB, and the panic that matters is the one that REPEATS —
+/// see `RUN_BUDGET_BYTES`. `bounded` cuts from the tail, so the thread name, the
+/// panic location and the message always survive.
+fn panic_body(
+    thread: &str,
+    info: &dyn std::fmt::Display,
+    backtrace: &dyn std::fmt::Display,
+) -> String {
+    bounded(format!("thread '{thread}': {info}\n{backtrace}"))
 }
 
 /// One entry: `2026-09-12 19:40:03Z [kind] message`. A multi-line message (a
@@ -142,7 +188,22 @@ fn append_to(path: &Path, kind: &str, message: &str) {
     let Ok(mut f) = OpenOptions::new().create(true).append(true).open(path) else {
         return;
     };
-    let _ = writeln!(f, "{} [{kind}] {}", timestamp(), message.trim_end());
+    // ONE `write_all`, not `writeln!`. `f` is an unbuffered `File`, and
+    // `Write::write_fmt` drives `fmt::write`, whose adapter calls `write_all`
+    // once per literal piece and once per argument — six syscalls for this
+    // format string. `O_APPEND` makes each land atomically at the end of the
+    // file, but nothing groups them, so a second thread appending at the same
+    // moment interleaves at a piece boundary: `[`, `PANIC` and `]` are three
+    // different pieces, so the TAG ITSELF could be split in half. `[PANIC]` is
+    // an interface — `linux-smoke.yml` greps for it, and so does whoever reads a
+    // log a user sent. Concurrent appends are the norm here: the panic hook is
+    // process-global and fires on any thread, and `log_event` is an async
+    // command running on a tokio worker alongside it — and a cascade where
+    // several threads fail together is exactly when the log matters most. A
+    // single `write(2)` to a regular file under `O_APPEND` is serialized by the
+    // kernel against other appenders, so one buffer is one atomic entry.
+    let line = format!("{} [{kind}] {}\n", timestamp(), message.trim_end());
+    let _ = f.write_all(line.as_bytes());
 }
 
 fn roll_if_large(path: &Path) {
@@ -165,6 +226,102 @@ fn bounded(mut message: String) -> String {
         message.push_str("… [truncated]");
     }
     message
+}
+
+/// What the gate says to do with an entry.
+#[derive(Debug, PartialEq, Eq)]
+enum Admit {
+    /// Write it.
+    Write,
+    /// Write it, then one line saying this run's budget is spent.
+    Final,
+    /// Byte-identical to the entry before it — write only a running count.
+    Repeat(u64),
+    /// Write nothing (an unreported repeat, or past the budget).
+    Drop,
+}
+
+/// Collapses consecutive identical entries and caps what one run may write.
+///
+/// ATOMICS ONLY — never a `Mutex`, `RwLock`, `RefCell` or `OnceLock` holding a
+/// lock. This is reached from inside the panic hook, where a poisoned lock, a
+/// contended lock or a re-entrant borrow is precisely the failure the file
+/// exists to record. Nothing here allocates, indexes, unwraps, or can overflow:
+/// every arithmetic operation wraps or saturates rather than panicking in a
+/// debug build.
+///
+/// Two threads panicking with DIFFERENT messages thrash `last` and neither
+/// collapses. That is a degradation, not a break — the budget is the hard
+/// backstop, and the realistic case is one repeating fault driven by the watcher
+/// on one thread.
+struct Gate {
+    /// Hash of the last admitted entry; `0` means "nothing yet", which is why
+    /// `entry_hash` never returns 0.
+    last: AtomicU64,
+    /// How many times that entry has repeated since.
+    repeats: AtomicU64,
+    /// Text bytes admitted this run, each charged `ENTRY_OVERHEAD` on top.
+    bytes: AtomicU64,
+}
+
+impl Gate {
+    const fn new() -> Self {
+        Self {
+            last: AtomicU64::new(0),
+            repeats: AtomicU64::new(0),
+            bytes: AtomicU64::new(0),
+        }
+    }
+
+    fn admit(&self, kind: &str, message: &str) -> Admit {
+        let h = entry_hash(kind, message);
+        if self.last.swap(h, Ordering::Relaxed) == h {
+            // `fetch_add` wraps rather than panicking; `saturating_add` keeps the
+            // `+ 1` from panicking in a debug build. Both are unreachable (2^64
+            // repeats), and both are written this way because "nothing here may
+            // panic" has to hold by construction, not by argument.
+            let n = self.repeats.fetch_add(1, Ordering::Relaxed).saturating_add(1);
+            // Report at 1, 2, 4, 8 …: the count stays current within a factor of
+            // two even when the process is killed mid-storm — a total flushed
+            // only on the NEXT distinct entry would be lost exactly then — and a
+            // billion repeats cost thirty lines. Repeat lines are not charged to
+            // the budget: they are O(log N) per distinct message and ~40 bytes.
+            return if n.is_power_of_two() {
+                Admit::Repeat(n)
+            } else {
+                Admit::Drop
+            };
+        }
+        self.repeats.store(0, Ordering::Relaxed);
+        let charge = (message.len() as u64).saturating_add(ENTRY_OVERHEAD);
+        let before = self.bytes.fetch_add(charge, Ordering::Relaxed);
+        if before >= RUN_BUDGET_BYTES {
+            Admit::Drop
+        } else if before.saturating_add(charge) >= RUN_BUDGET_BYTES {
+            Admit::Final
+        } else {
+            Admit::Write
+        }
+    }
+}
+
+/// Process-global, `const`-initialised: no lazy init, so there is no
+/// initialisation path that could run — or fail — inside the panic hook.
+static GATE: Gate = Gate::new();
+
+/// FNV-1a over `kind` and `message`: allocation-free, branch-free and wrapping —
+/// what the panic hook needs, and no new dependency for eight lines (the same
+/// reasoning as the transcribed `civil_from_days` below). We only ever compare
+/// it with the IMMEDIATELY PRECEDING hash, so collision quality beyond
+/// "different text hashes differently" is irrelevant. Never returns 0, which
+/// `Gate::last` reserves for "nothing logged yet".
+fn entry_hash(kind: &str, message: &str) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in kind.bytes().chain(message.bytes()) {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    h | 1
 }
 
 /// `YYYY-MM-DD HH:MM:SSZ` from std alone — no chrono in the tree for one line.
@@ -294,6 +451,73 @@ mod tests {
         assert!(std::fs::read_to_string(&p).unwrap().contains("[launch] fresh"));
         let rolled = std::fs::metadata(d.path().join("t.log.1")).unwrap();
         assert_eq!(rolled.len(), ROLL_AT_BYTES + 1);
+    }
+
+    // M6: the log used to destroy itself fastest under exactly the conditions it
+    // exists for — a REPEATING fault. These pin the two mechanisms that stop it.
+    // A local `Gate`, never the `GATE` static: cargo runs these in one process in
+    // parallel, so shared state would make them pollute each other.
+
+    #[test]
+    fn the_panic_body_is_bounded_like_any_other_entry() {
+        let huge = "F".repeat(MAX_EVENT_BYTES * 4); // a force_capture() backtrace
+        let body = panic_body("worker", &"panicked at src/x.rs:1:1: boom", &huge);
+        assert!(body.ends_with("… [truncated]"));
+        assert!(body.len() <= MAX_EVENT_BYTES + "… [truncated]".len());
+        // The head must survive: it carries the thread, the location and the message.
+        assert!(body.starts_with("thread 'worker': panicked at src/x.rs:1:1: boom"));
+    }
+
+    #[test]
+    fn consecutive_identical_entries_collapse_to_a_doubling_count() {
+        let g = Gate::new();
+        assert_eq!(g.admit("PANIC", "same"), Admit::Write);
+        // Reported at 1, 2, 4, 8 … so the count survives a kill mid-storm.
+        let reported: Vec<u64> = (0..16)
+            .filter_map(|_| match g.admit("PANIC", "same") {
+                Admit::Repeat(n) => Some(n),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(reported, vec![1, 2, 4, 8, 16]);
+        // A different entry starts a fresh streak rather than being swallowed.
+        assert_eq!(g.admit("PANIC", "other"), Admit::Write);
+    }
+
+    #[test]
+    fn one_run_cannot_spend_more_than_its_budget() {
+        let g = Gate::new();
+        let chunk = "x".repeat(8 * 1024);
+        let mut written = 0u64;
+        let mut final_seen = false;
+        // Distinct messages, so repeat-suppression cannot be what stops it.
+        for i in 0..200 {
+            match g.admit("PANIC", &format!("{i}{chunk}")) {
+                Admit::Write => written += 1,
+                Admit::Final => {
+                    final_seen = true;
+                    written += 1;
+                }
+                Admit::Drop => {}
+                Admit::Repeat(_) => panic!("distinct messages must not read as repeats"),
+            }
+        }
+        assert!(final_seen, "the run must announce that its budget is spent");
+        // Far below the ~122 entries that would reach ROLL_AT_BYTES, so one run
+        // can cause at most one roll and never destroys the previous run's log.
+        assert!(written < 40, "wrote {written} entries");
+    }
+
+    #[test]
+    fn the_launch_and_ready_markers_are_never_gated() {
+        // Not a Gate test: `append` routes them around it entirely, because
+        // linux-smoke.yml greps for both and a panic storm must not cost either.
+        let g = Gate::new();
+        for _ in 0..5 {
+            // Proof the gate WOULD have swallowed them, which is why append skips it.
+            g.admit("launch", "same");
+        }
+        assert_eq!(g.admit("launch", "same"), Admit::Drop);
     }
 
     #[test]

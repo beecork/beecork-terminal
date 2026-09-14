@@ -40,9 +40,8 @@ jobs:
             artifact: deb
           - os: ubuntu-22.04
             artifact: deb
-          # `extra_env` (diagnostic only) is applied to the app's environment.
     runs-on: ${{ matrix.os }}
-    name: ${{ matrix.os }} ${{ matrix.artifact }} ${{ matrix.extra_env }}
+    name: ${{ matrix.os }} ${{ matrix.artifact }}
     steps:
       - name: Download the build
         env:
@@ -52,7 +51,15 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "$TAG" ]; then
-            TAG=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName)
+            # NEWEST release including PRERELEASES. `gh release view` with no tag
+            # returns the newest non-prerelease, which during the documented
+            # release flow is the PREVIOUS version — so a no-arg run silently
+            # tested the build you were trying to replace. `--exclude-drafts`
+            # because a draft has no downloadable assets, and `// ""` because an
+            # empty array would otherwise yield the literal string "null".
+            TAG=$(gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --limit 1 \
+                    --json tagName --jq '.[0].tagName // ""')
+            [ -n "$TAG" ] || { echo "::error::no releases to test"; exit 1; }
           fi
           echo "testing $TAG ($ARTIFACT on $RUNNER_OS)"
           echo "TAG=$TAG" >> "$GITHUB_ENV"
@@ -100,7 +107,6 @@ jobs:
       - name: Launch and observe
         env:
           ARTIFACT: ${{ matrix.artifact }}
-          EXTRA_ENV: ${{ matrix.extra_env }}
         run: |
           set -uo pipefail
           export DISPLAY=:99
@@ -113,8 +119,8 @@ jobs:
           # `dbus-run-session` wraps the app, so find the app's own pid by name
           # for the liveness check rather than trusting `$!`.
           case "$ARTIFACT" in
-            appimage) dbus-run-session -- env $EXTRA_ENV "$GITHUB_WORKSPACE/app.AppImage" >"$GITHUB_WORKSPACE/app.out" 2>&1 & ;;
-            deb)      dbus-run-session -- env $EXTRA_ENV beecork-terminal               >"$GITHUB_WORKSPACE/app.out" 2>&1 & ;;
+            appimage) dbus-run-session -- "$GITHUB_WORKSPACE/app.AppImage" >"$GITHUB_WORKSPACE/app.out" 2>&1 & ;;
+            deb)      dbus-run-session -- beecork-terminal                  >"$GITHUB_WORKSPACE/app.out" 2>&1 & ;;
           esac
           WRAPPER=$!
           sleep 20
@@ -211,8 +217,13 @@ jobs:
           set -euo pipefail
           dnf -y install gh findutils >/dev/null
           if [ -z "$TAG" ]; then
-            TAG=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName)
+            # See the smoke job above: newest INCLUDING prereleases, or a no-arg
+            # run tests the release you just replaced.
+            TAG=$(gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --limit 1 \
+                    --json tagName --jq '.[0].tagName // ""')
+            [ -n "$TAG" ] || { echo "::error::no releases to test"; exit 1; }
           fi
+          echo "testing $TAG (fedora rpm + AppImage probe)"
           echo "TAG=$TAG" >> "$GITHUB_ENV"
           gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
             --pattern 'Beecork.Terminal-*.x86_64.rpm' --output app.rpm
@@ -226,7 +237,9 @@ jobs:
           # No --nodeps: the point is that Fedora RESOLVES libwebkit2gtk-4.1.so.0
           # itself. If this ever fails, the rpm's dependencies are wrong.
           dnf -y install ./app.rpm
-          dnf -y install xorg-x11-server-Xvfb mesa-dri-drivers dbus-daemon procps-ng >/dev/null
+          # xorg-x11-apps: xwd, ImageMagick: convert — for the per-case screenshot.
+          dnf -y install xorg-x11-server-Xvfb mesa-dri-drivers dbus-daemon procps-ng \
+                         xorg-x11-apps ImageMagick >/dev/null
           rpm -q webkit2gtk4.1 mesa-dri-drivers || true
 
       - name: Launch both and compare
@@ -245,6 +258,11 @@ jobs:
             sleep 15
             local alive=0
             pgrep -f '^(/.*/)?beecork-terminal$' >/dev/null && alive=1
+            # A screenshot per case, like the `smoke` job has. This job gates on
+            # `[painted]`, and when that assertion fails the picture is the first
+            # thing a human wants — a grey window and a white one are the same
+            # log line but two different bugs.
+            xwd -root -silent | convert xwd:- "/tmp/$label.png" || true
             echo "::group::$label (alive=$alive)"
             cat "/tmp/$label.out" || true
             echo "--- log ---"; cat "$LOG" 2>/dev/null || echo "(no log)"
@@ -295,3 +313,13 @@ jobs:
               echo "::warning::AppImage did not come up, but NOT with the reported EGL error — check /tmp/appimage.out in the log above; the probe may be broken rather than the app"
             fi
           fi
+
+      - name: Attach the Fedora screenshots and output
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: smoke-fedora
+          path: |
+            /tmp/*.png
+            /tmp/*.out
+          if-no-files-found: warn

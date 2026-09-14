@@ -23,7 +23,14 @@ export const diagInfo = () => invoke<DiagInfo>("diag_info");
  *  invoke itself throws, and that is swallowed too. */
 export function logEvent(kind: string, message: string): void {
   try {
-    void invoke<void>("log_event", { kind, message }).catch(() => {});
+    // `message` is TYPED string, but every caller is an error path where the
+    // value can be anything — `describeError` used to return the VALUE
+    // `undefined` while declaring `string` (see below). A non-string is dropped
+    // in serialization, the Rust command then fails to deserialize, the promise
+    // rejects, and `.catch` swallows it: the entry vanishes silently, which is
+    // the one thing this file must never do. One coercion closes that for good.
+    const body = typeof message === "string" ? message : String(message);
+    void invoke<void>("log_event", { kind, message: body }).catch(() => {});
   } catch {
     /* not inside Tauri — nowhere to write */
   }
@@ -36,10 +43,17 @@ export function describeError(reason: unknown): string {
   }
   if (typeof reason === "string") return reason;
   try {
-    return JSON.stringify(reason);
+    // `JSON.stringify` is DECLARED `string` but returns the value `undefined`
+    // for `undefined`, a function, or a lone symbol — TypeScript cannot catch
+    // it, and the `try/catch` only covers the throwing cases (circular, BigInt).
+    // `Promise.reject()` with no argument and `throw undefined` both land here,
+    // and used to be recorded nowhere at all.
+    const json = JSON.stringify(reason);
+    if (typeof json === "string") return json;
   } catch {
-    return String(reason);
+    /* circular, BigInt, a throwing toJSON — fall through */
   }
+  return String(reason);
 }
 
 /** Record that the UI actually reached the screen.
@@ -59,9 +73,23 @@ export function describeError(reason: unknown): string {
  *  a window that came up 0×0 is visible in the log as well. */
 export function logPainted(): void {
   requestAnimationFrame(() =>
-    requestAnimationFrame(() =>
-      logEvent("painted", `UI painted at ${window.innerWidth}×${window.innerHeight}`)
-    )
+    requestAnimationFrame(() => {
+      // Two extra fields, both chosen because they FALSIFY a `[painted]` that
+      // did not mean what it says — not because they were free to add.
+      //   root=0 children  → React never mounted, so a frame was composited over
+      //                      an empty page; self-evidently not a real paint.
+      //   visibility=hidden → the window was occluded or minimised at launch.
+      //                      rAF callbacks queue rather than drop, so this line
+      //                      can arrive minutes after `[ready]`; without the
+      //                      field that gap reads as a second anomaly.
+      const root = document.getElementById("root");
+      const kids = root ? root.childElementCount : -1;
+      logEvent(
+        "painted",
+        `UI painted at ${window.innerWidth}×${window.innerHeight}` +
+          ` root=${kids} children visibility=${document.visibilityState}`
+      );
+    })
   );
 }
 
