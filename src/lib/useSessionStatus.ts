@@ -41,7 +41,8 @@ const AGENT_EVERY = 15;
 // so the restored session falls back to the generic `--continue` and reopens
 // whichever chat ran last — exactly the failure per-tab resume exists to
 // prevent. One lookup at the transition isn't enough either: a just-started
-// agent hasn't written its transcript yet, so the first few come back empty.
+// agent hasn't registered yet (Claude writes `~/.claude/sessions/<pid>.json`
+// seconds after starting; see agents.rs), so the first few come back empty.
 // Grant a short window of eager ticks instead, ended early once every running
 // agent has its id.
 const AGENT_EAGER_TICKS = 15;

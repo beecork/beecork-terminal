@@ -651,7 +651,10 @@ fn statuses_for(
         cwd: Option<String>,
         running: Option<String>,
         running_known: bool,
-        fg_cmd: Option<u32>,
+        /// (pid, start time in unix seconds) — the start time lets the agent
+        /// lookup reject a registry file left behind by an earlier owner of a
+        /// recycled pid.
+        fg_cmd: Option<(u32, u64)>,
     }
     let rows: Vec<Row> = targets
         .into_iter()
@@ -670,8 +673,11 @@ fn statuses_for(
                 // it isn't, the command is mid-exit or the pid went stale between
                 // tcgetpgrp and this refresh — either way we don't know yet, and
                 // the next tick (2s) answers properly.
-                Some(f) => match sys.process(Pid::from_u32(f)).and_then(command_label) {
-                    Some(label) => (Some(label), true, Some(f)),
+                Some(f) => match sys
+                    .process(Pid::from_u32(f))
+                    .and_then(|p| command_label(p).map(|label| (label, p.start_time())))
+                {
+                    Some((label, started)) => (Some(label), true, Some((f, started))),
                     None => (None, false, None),
                 },
                 // No foreground group to read (tcgetpgrp failed; always on
@@ -701,10 +707,11 @@ fn statuses_for(
             .collect();
     }
 
-    // Phase 2: which cwds hold *two or more* Claude tabs? Only there can the cheap
-    // newest-transcript-in-folder guess pick the wrong chat, so only there do we
-    // pay for the slow lsof disambiguation. The common one-Claude-per-folder case
-    // never runs lsof. (Owned keys so phase 3 can consume `rows`.)
+    // Phase 2: which cwds hold *two or more* Claude tabs? Claude's own pid
+    // registry answers exactly and runs first (see `resolve_agent_session`); only
+    // when it misses AND tabs share a folder can the newest-transcript-in-folder
+    // guess pick the wrong chat, so only there do we pay for the slow lsof
+    // disambiguation. (Owned keys so phase 3 can consume `rows`.)
     let mut claude_cwd_counts: HashMap<String, usize> = HashMap::new();
     for r in &rows {
         if r.running.as_deref() == Some("claude") {
