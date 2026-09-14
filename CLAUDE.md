@@ -10,8 +10,10 @@ read it before changing that mechanism.
   per-session writer thread and returns; that thread is the only thing that
   blocks. Making it `command(async)` would put keystrokes on a threadpool where
   they can reorder, and writing inline lets a child that isn't draining stdin
-  stall the IPC thread. Twelve other commands *are* deliberately async — this one
-  is not.
+  stall the IPC thread. Most other commands *are* deliberately async — this one is
+  not. (Don't put a count here: the last one said "twelve" and was wrong by the
+  time `log_event` landed. The sync exceptions are listed under "Backend command
+  threading".)
 - **Submit lines with `\r`, never `\n`.** `\r` is what Enter sends and the only
   byte Windows ConPTY (cmd.exe / PowerShell) accepts as "run this line". `\n`
   works on macOS/Linux and leaves the command typed-but-unrun on Windows.
@@ -34,6 +36,16 @@ read it before changing that mechanism.
 - **Force a UTF-8 locale when the environment has none.** A Finder-launched `.app`
   inherits no locale, which is why multibyte output garbled only in the installed
   app and never under `tauri dev`.
+- **`portable_pty::Child::kill` is a SIGHUP plus a 200 ms grace loop, not a
+  SIGKILL.** On unix it signals SIGHUP, then polls `try_wait` five times with
+  `thread::sleep(50ms)` between attempts before escalating to SIGKILL. The first
+  poll runs microseconds after the signal, so ~50 ms is the ROUTINE cost of
+  killing a live session — not an edge case, and `kill_by_owner` multiplied it by
+  the pane count on the MAIN thread at window close. Never call it on the IPC or
+  main thread; every reap goes through `reap_detached`, which sends the signal
+  synchronously (via `clone_killer`, which skips the grace loop) and hands the
+  escalation and the `wait()` to a thread. It signals the child PID only, never
+  its process group.
 - **Sessions are window-local.** Each handle records its owning window label and
   `kill_by_owner` reaps only that window's sessions. A ⌘N window must never reap
   the first window's shells.
@@ -222,9 +234,31 @@ and no devtools — so without this file a crash report is the words "it crashed
 
 - **Anything that shells out, touches disk, or scans the process table is
   `#[tauri::command(async)]`.** A plain `#[tauri::command]` runs INLINE on the
-  IPC/main thread and is felt as a frozen window. Two deliberate exceptions: pure
-  env lookups (`get_root`, `home_dir`), where the hop costs more than the work,
-  and `pty_write` (see above).
+  IPC/main thread and is felt as a frozen window.
+- **`async` is not a parking spot either.** On a *sync* fn it generates
+  `async_runtime::spawn`, NOT `spawn_blocking` (tauri-macros `command/wrapper.rs`
+  → `ipc/mod.rs::respond_async_serialized`), so the body runs on a tokio WORKER
+  thread and that pool is only `num_cpus` wide. Work that can block for an
+  unbounded time belongs on a thread of its own — see `reap_detached` in `pty.rs`.
+- **The deliberate sync exceptions, every one pure or enqueue-only.** Don't count
+  them in prose — a number here has already gone stale once; check the code.
+  - `get_root` / `home_dir` — pure env lookups; the IPC hop costs more than the work.
+  - `diag_info` — a pure version/path lookup.
+  - `play_sound`, `set_watch_root`, `pty_cd`, `pty_insert_paths` — one channel
+    send each. `pty_resize` — one non-blocking ioctl.
+  - `pty_write` — enqueues to the session's writer thread (see PTY above).
+  - `pty_spawn` and `pty_kill` — sync for ORDERING, and it is load-bearing. Sync
+    commands serialize on the IPC thread, which is the only thing that makes
+    `pty_spawn`'s owner check, its `take_and_reap` and its `insert` — three
+    separate lock acquisitions — a safe check-then-act. Move it to the async pool
+    and two same-id spawns can both pass the owner check before either reaps; the
+    second insert then overwrites and drops the first handle, whose reader thread
+    fails the token guard and never reaps it. That is the ⌘N "lost Claude Code"
+    regression's exact shape, which a release already paid for; converting it
+    means claiming the id atomically under ONE guard first. The same
+    serialization guarantees a `pty_kill(id)` issued before a `pty_spawn(id)`
+    (HMR remount, ErrorBoundary "Try again") cannot land after it and kill the
+    fresh shell. Neither blocks: the kill+wait is detached.
 
 ## Linux (`src-tauri/src/lib.rs`, `src-tauri/src/fs.rs`)
 

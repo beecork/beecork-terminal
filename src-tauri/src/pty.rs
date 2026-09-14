@@ -146,12 +146,51 @@ fn env_selects_utf8(lc_all: Option<&str>, lc_ctype: Option<&str>, lang: Option<&
     false
 }
 
-/// Remove a session under lock, then kill+reap it with the lock released.
+/// Kill a removed session's child WITHOUT blocking the caller.
+///
+/// `portable_pty::Child::kill` is not the quick SIGKILL its name suggests. On
+/// unix (portable-pty 0.8.1, `impl ChildKiller for std::process::Child`) it sends
+/// SIGHUP and then gives the child a grace period before escalating: `try_wait`
+/// five times with `thread::sleep(50ms)` between attempts. The first poll runs
+/// microseconds after the signal, when the child has not begun dying, so the
+/// ROUTINE cost is ~50 ms per live session and the ceiling is 200 ms. `wait()`
+/// can then add an unbounded stall of its own if the child is in uninterruptible
+/// sleep (a shell sitting in a stalled NFS/SMB/FUSE mount under its cwd) —
+/// SIGKILL is recorded but not acted on until it leaves the kernel.
+///
+/// Every caller is on a thread that must not stall for that: `pty_kill` and
+/// `pty_spawn` are sync commands running INLINE on the IPC/main thread (that is
+/// deliberate — see the ordering note on each), and `kill_by_owner` runs on the
+/// MAIN thread from the window `Destroyed` handler, where no `command(async)`
+/// conversion could have reached it. Closing a window with a dozen panes
+/// multiplied the grace period by twelve and froze the window for the sum.
+///
+/// So: deliver the signal synchronously, then hand the escalation and the reap to
+/// a thread. `clone_killer` exists for exactly this — it returns a
+/// `ProcessSignaller` whose `kill` is a bare `libc::kill(pid, SIGHUP)` with NO
+/// grace loop — so the child is signalled before this function returns and window
+/// close still cannot orphan a shell. The caller drops `master` and `input` as
+/// soon as it returns, which closes the pty and ends the writer thread, so a
+/// child that refuses to die holds up nothing but one detached thread.
+///
+/// Honest limit, true of every reap site in this file: portable-pty signals the
+/// child PID only, never its process group, so the shell's own descendants are
+/// not reaped by us — they get SIGHUP from the kernel when the master closes.
+fn reap_detached(child: Box<dyn portable_pty::Child + Send + Sync>) {
+    let mut killer = child.clone_killer();
+    let _ = killer.kill();
+    thread::spawn(move || {
+        let mut child = child;
+        let _ = child.kill();
+        let _ = child.wait();
+    });
+}
+
+/// Remove a session under lock, then kill it and reap it off-thread.
 fn take_and_reap(state: &PtyState, id: &str) {
     let removed = sessions(state).remove(id);
-    if let Some(mut h) = removed {
-        let _ = h.child.kill();
-        let _ = h.child.wait();
+    if let Some(h) = removed {
+        reap_detached(h.child);
     }
 }
 
@@ -166,9 +205,8 @@ pub fn kill_by_owner(state: &PtyState, label: &str) {
             .collect();
         ids.into_iter().filter_map(|id| g.remove(&id)).collect()
     };
-    for mut h in removed {
-        let _ = h.child.kill();
-        let _ = h.child.wait();
+    for h in removed {
+        reap_detached(h.child);
     }
 }
 
@@ -293,8 +331,24 @@ pub fn pty_spawn(
     let child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
     drop(pair.slave);
 
-    let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
-    let mut writer = pair.master.take_writer().map_err(|e| e.to_string())?;
+    // From here the child is RUNNING but is not yet in the session map, so
+    // nothing else will ever reap it: an early return that merely drops `child`
+    // leaves a zombie holding a PID slot for the life of the app (`Drop` neither
+    // kills nor waits). The realistic trigger is fd exhaustion — each live
+    // session holds three dups of the master — and the pane retries on failure,
+    // so the leak compounds precisely when the process is already short of
+    // descriptors. Bind both fallible calls so the error path can clean up.
+    let streams = pair
+        .master
+        .try_clone_reader()
+        .and_then(|r| pair.master.take_writer().map(|w| (r, w)));
+    let (mut reader, mut writer) = match streams {
+        Ok(v) => v,
+        Err(e) => {
+            reap_detached(child);
+            return Err(e.to_string());
+        }
+    };
     let token = SEQ.fetch_add(1, Ordering::Relaxed);
 
     // Writer thread: the only place that blocks on pty input. `pty_write` merely
@@ -358,8 +412,23 @@ pub fn pty_spawn(
                     None
                 }
             };
-            if let Some(mut h) = removed {
-                let _ = h.child.wait();
+            if let Some(h) = removed {
+                // `Ok(0)` from the reader means every slave fd closed, NOT that
+                // the child exited — portable-pty maps the master's EIO to EOF.
+                // A child that `exec`ed into something detached
+                // (`exec cmd </dev/null >/dev/null 2>&1`, `exec setsid cmd`) is
+                // still alive here, and we have just removed the ONLY handle to
+                // it, so `pty_kill` and `kill_by_owner` can no longer reach it.
+                // Waiting on it inline would park this thread forever and, with
+                // it, `h.master`, `h.input` and the writer thread blocked on
+                // `rx.recv()` — the pane goes silently dead to keystrokes and
+                // survives window close, with no SIGHUP at close either, because
+                // the master is still held open. So kill it, like this file's two
+                // other reap sites do, and reap off-thread so the fds and the
+                // writer thread are released even if the child refuses to die. On
+                // the normal path the child is already a zombie and this costs
+                // nothing.
+                reap_detached(h.child);
             }
         }
     });
@@ -463,6 +532,11 @@ pub fn pty_resize(
     Ok(())
 }
 
+/// Sync ON PURPOSE, like `pty_write`: after `reap_detached` this is enqueue-only
+/// (one `remove` under lock, one signal, one thread spawn), and staying on the
+/// IPC thread is what guarantees a `pty_kill(id)` issued before a `pty_spawn(id)`
+/// — an HMR remount, ErrorBoundary "Try again" — cannot land AFTER it and kill
+/// the shell that spawn just started. See the threading rule in CLAUDE.md.
 #[tauri::command]
 pub fn pty_kill(state: tauri::State<PtyState>, id: String) -> Result<(), String> {
     take_and_reap(&state, &id);
