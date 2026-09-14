@@ -251,11 +251,19 @@ export function useSessionStatus(
   const onActivity = useCallback(
     (id: string) => {
       const now = performance.now();
-      setBusy((prev) => {
-        if (prev.has(id)) return prev;
+      // The streak start is recorded OUTSIDE the updater. React requires
+      // updaters to be pure and StrictMode double-invokes them to surface it: on
+      // a replay `prev.has(id)` is false again, so the start time would be
+      // overwritten with the latest chunk's timestamp, collapsing `workedMs`
+      // toward zero and suppressing the quiet-inferred "come look" for a turn
+      // that genuinely qualified. `busySince[id] === undefined` is the same
+      // "streak already running?" question `prev.has(id)` asks — the two stay in
+      // lockstep because every `setBusy` that removes an id deletes the key in
+      // the same breath (the idle timer below, and `markClosed`).
+      if (busySince.current[id] === undefined) {
         busySince.current[id] = now; // idle → working: a fresh streak begins
-        return addId(prev, id);
-      });
+      }
+      setBusy((prev) => (prev.has(id) ? prev : addId(prev, id)));
       if (!bellRang.current.has(id)) clearWants(id);
       clearTimeout(idleTimers.current[id]);
       clearTimeout(attnTimers.current[id]);

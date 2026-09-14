@@ -10,6 +10,7 @@ import {
   type Entry,
 } from "../lib/api";
 import { onFsChanged } from "../lib/events";
+import { useLatestWins } from "../lib/latest";
 import { useSettings, zoomFont, type Surface } from "../lib/settings";
 import type { OpenRequest } from "../App";
 import FileTree from "./FileTree";
@@ -43,6 +44,8 @@ interface Props {
   onOpenInTerminal: (dir: string) => void;
   /** collapse the whole panel back to the thin strip */
   onCollapse: () => void;
+  /** False when the watcher refuses this folder — the panel is correct but not live. */
+  liveUpdates: boolean;
 }
 
 /** State for the new-file / new-folder / rename prompt. */
@@ -57,6 +60,9 @@ interface PromptState {
 
 type PanelLayout = "stacked" | "sideBySide";
 
+/** The one `statuses` slice describes the one current root — see `refresh`. */
+const STATUSES = "statuses";
+
 export default function SidePanel({
   openRequest,
   root,
@@ -65,6 +71,7 @@ export default function SidePanel({
   onFocusSurface,
   onOpenInTerminal,
   onCollapse,
+  liveUpdates,
 }: Props) {
   const { settings, update } = useSettings();
   const { menu, openMenu, closeMenu } = useContextMenu<Entry>();
@@ -119,11 +126,33 @@ export default function SidePanel({
     },
   });
 
+  // One state slice, three callers (the root effect below, every `fs-changed`
+  // refresh, and the Refresh button), so the latest-wins key is a CONSTANT —
+  // NOT the root. `git_status` is `command(async)`, so replies arrive in
+  // completion order: switch from a big repo A to repo B and A's slow reply can
+  // land last and paint A's absolute paths over B's tree, blanking every change
+  // marker with no recovery (the next refresh only comes from an `fs-changed`
+  // event, and an unedited repo produces none). Keying on the ROOT would NOT fix
+  // that — A's late ticket would be the first one filed under key "A", so
+  // `accept` would allow it. The key must match the granularity of the state it
+  // guards, and there is one `statuses` for one root. Contrast `latest.ts`,
+  // where per-SESSION keys are right because each session owns its own slice.
+  const latest = useLatestWins();
   const refresh = useCallback(() => {
-    gitStatus(root ?? undefined)
-      .then(setStatuses)
-      .catch(() => setStatuses([]));
-  }, [root]);
+    const ticket = latest.take();
+    // Both arms are guarded: the rejection path writes too, so a stale reject
+    // can blank a correct result just as easily as a stale resolve can
+    // overwrite one. Two-argument `then` rather than `.then().catch()`, so a
+    // throw inside `setStatuses` cannot fall through into the blank-it path.
+    gitStatus(root ?? undefined).then(
+      (s) => {
+        if (latest.accept(STATUSES, ticket)) setStatuses(s);
+      },
+      () => {
+        if (latest.accept(STATUSES, ticket)) setStatuses([]);
+      }
+    );
+  }, [root, latest]);
 
   useEffect(() => {
     refresh();
@@ -219,6 +248,14 @@ export default function SidePanel({
           <span className="chip-name">{rootName || "Files"}</span>
           {settings.treeDiff && statuses.length > 0 && (
             <span className="count-pill">{statuses.length}</span>
+          )}
+          {!liveUpdates && (
+            <span
+              className="count-pill not-live"
+              title="Live updates are off in this folder — the watcher refuses the filesystem root, your home directory and its ancestors, so the tree and diff will not refresh on their own. Use Refresh, or open a project folder."
+            >
+              not live
+            </span>
           )}
         </div>
         <div className="panel-actions">

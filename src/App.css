@@ -246,6 +246,15 @@ body {
   flex: 0 0 auto;
 }
 
+/* The watcher refuses this folder (root, home, an ancestor of home), so the tree
+   and diff are correct but will not refresh themselves — see watcher.rs. Muted
+   on purpose: it is a statement of fact, not an error. */
+.count-pill.not-live {
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid var(--border);
+}
+
 /* subordinate section labels (Files / Editor) */
 .seclabel {
   height: 28px;

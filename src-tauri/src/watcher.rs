@@ -91,6 +91,12 @@ fn watch_root(watcher: &mut RecommendedWatcher, root: &Path) {
     }
 }
 
+/// Can we actually place a watch on `p`? Split out so the `set_watch_root`
+/// command can answer the UI with the same predicate the loop applies.
+fn watchable(p: &Path) -> bool {
+    p.is_dir() && !too_broad_to_watch(p)
+}
+
 /// A directory we can descend into — must be a real directory, NOT a symlink
 /// (following symlinks lets a hostile repo escape the tree and loop / exhaust
 /// inotify). `symlink_metadata` does not follow the leaf.
@@ -227,34 +233,72 @@ pub fn watch_project(app: AppHandle) {
             let _ = app.emit("fs-changed", changed);
         }
         if let Some(new) = reroot {
-            if new != root && new.is_dir() && !too_broad_to_watch(&new) {
-                // Drop the old watcher (releasing all its watches) and build a
-                // fresh one rooted at `new`, so the live diff follows the
-                // terminal when it cd's outside the launch directory.
-                if let Some(w) = make_watcher(tx.clone()) {
-                    watcher = w;
-                    root = new;
-                    watch_root(&mut watcher, &root);
-                    // Empty payload = "everything changed" (a re-root), so
-                    // path-filtered subscribers still refresh.
-                    let _ = app.emit("fs-changed", Vec::<String>::new());
+            // A same-folder re-root stays a no-op: App re-fires `set_watch_root`
+            // on every `terminalCwd` change, and emitting here would cost a full
+            // re-list plus a `git_status` on every status tick that re-reports
+            // the same cwd.
+            if new != root {
+                if watchable(&new) {
+                    // Drop the old watcher (releasing all its watches) and build a
+                    // fresh one rooted at `new`, so the live diff follows the
+                    // terminal when it cd's outside the launch directory.
+                    if let Some(w) = make_watcher(tx.clone()) {
+                        watcher = w;
+                        root = new;
+                        watch_root(&mut watcher, &root);
+                    }
+                } else {
+                    // Refusing the WATCH is deliberate (see `too_broad_to_watch`);
+                    // the panel silently freezing because of it is not. The UI has
+                    // already moved to `new` — it listed it, ran `git_status` on
+                    // it — so it must not keep showing the OLD folder's data just
+                    // because we declined to watch the new one. Say so, and still
+                    // refresh once below.
+                    eprintln!(
+                        "watcher: refusing broad/absent root {new:?}; live updates are off there"
+                    );
                 }
+                // Empty payload = "everything changed" (a re-root), so
+                // path-filtered subscribers still refresh.
+                let _ = app.emit("fs-changed", Vec::<String>::new());
             }
         }
     }
 }
 
 /// Re-root the file watcher to follow the active terminal's working directory.
-#[tauri::command]
-pub fn set_watch_root(control: tauri::State<WatchControl>, root: String) {
+///
+/// Returns whether that folder is one we will actually watch. The loop is the
+/// real decider, but its verdict is `watchable`, whose only non-trivial half is
+/// the pure `too_broad_to_watch` predicate — so answering here is honest and
+/// saves the UI a round trip. `false` means "the panel is correct right now but
+/// will not update itself here", which the panel says out loud instead of
+/// silently freezing.
+///
+/// `command(async)` because `is_dir()` is a stat — see the threading rule in
+/// CLAUDE.md. It was sync while it only took a lock and sent on a channel.
+#[tauri::command(async)]
+pub fn set_watch_root(control: tauri::State<WatchControl>, root: String) -> bool {
+    let p = PathBuf::from(root);
     if let Some(tx) = control.tx.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
-        let _ = tx.send(WatchMsg::Reroot(PathBuf::from(root)));
+        let _ = tx.send(WatchMsg::Reroot(p.clone()));
     }
+    watchable(&p)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The predicate `set_watch_root` answers the UI with, and the loop applies.
+    #[test]
+    fn watchable_refuses_broad_and_absent_roots() {
+        // `/` short-circuits in `is_broad_root` before HOME is consulted, so this
+        // is hermetic.
+        assert!(!watchable(Path::new("/")));
+        // The `is_dir()` half — a path that is not a directory at all.
+        assert!(!watchable(Path::new("/no/such/dir/here")));
+    }
 
     // Guards the CPU-runaway regression: a Finder launch (cwd `/`) must never make
     // the watcher walk the whole disk. `/`, home, and home's ancestors are refused.

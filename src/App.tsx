@@ -351,10 +351,24 @@ export default function App() {
     };
   }, [focusTerminal]);
 
+  /** False when the watcher refuses this folder — correct, but not self-updating. */
+  const [watchLive, setWatchLive] = useState(true);
   // Keep the file watcher on the active terminal's directory, so the live diff
-  // keeps updating after the terminal cd's outside the launch folder.
+  // keeps updating after the terminal cd's outside the launch folder — and
+  // remember when that folder is one the watcher refuses (`/`, home, an ancestor
+  // of home), so the panel can say "not live" instead of silently freezing.
+  // See watcher.rs.
   useEffect(() => {
-    if (terminalCwd) setWatchRoot(terminalCwd).catch(() => {});
+    if (!terminalCwd) return;
+    let cancelled = false;
+    setWatchRoot(terminalCwd)
+      .then((live) => {
+        if (!cancelled) setWatchLive(live);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
   }, [terminalCwd]);
 
   // ⌘T new session (inherits cwd), ⌘N new window, ⌘D toggle split view.
@@ -566,6 +580,7 @@ export default function App() {
                   file can never take the terminal down with it. */}
               <ErrorBoundary what="The file panel" inline>
               <SidePanel
+                liveUpdates={watchLive}
                 openRequest={openRequest}
                 root={browseCwd ?? terminalCwd}
                 sessionId={activeId}

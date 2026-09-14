@@ -85,9 +85,14 @@ export const ptyCd = (id: string, dir: string) => invoke<void>("pty_cd", { id, d
 export const ptyInsertPaths = (id: string, paths: string[]) =>
   invoke<void>("pty_insert_paths", { id, paths });
 
-/** Re-root the file watcher to follow the active terminal's working directory. */
+/**
+ * Re-root the file watcher to follow the active terminal's working directory.
+ * Resolves `false` when that folder is one the watcher refuses — `/`, the home
+ * directory, an ancestor of home, or a path that is not a directory. The panel
+ * is still correct there, it just will not update itself; see watcher.rs.
+ */
 export const setWatchRoot = (root: string) =>
-  invoke<void>("set_watch_root", { root });
+  invoke<boolean>("set_watch_root", { root });
 
 export const listDir = (path?: string) =>
   invoke<Listing>("list_dir", { path: path ?? null });

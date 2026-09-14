@@ -87,6 +87,23 @@ describe("busy dot and the WORK_MIN_MS gate", () => {
     expect(attention).not.toHaveBeenCalled();
   });
 
+  // The streak start lives in `busySince`, written OUTSIDE the setBusy updater
+  // (React requires updaters to be pure). This pins the re-arm that fix depends
+  // on: once a streak ends, the next one must measure from its OWN first chunk.
+  // If someone later stops deleting the key when the streak ends, a short second
+  // burst would inherit the first streak's start, read as a long turn, and nag.
+  it("a second short burst after an idle gap re-measures from its own start", async () => {
+    const { result } = setup({ activeId: "a", visibleIds: ["a"] });
+    await workStreak(result.current.onActivity, "b"); // a real turn…
+    await tick(QUIET_MS + 100); // …ends, and the idle timer clears the streak
+    attention.mockClear();
+
+    act(() => result.current.onActivity("b")); // one chunk — not a turn
+    await tick(ATTN_QUIET_MS + 500);
+    expect(result.current.wantsYou.has("b")).toBe(false);
+    expect(attention).not.toHaveBeenCalled();
+  });
+
   // Flagging at QUIET_MS chimed in the MIDDLE of agent turns (API latency between
   // tool rounds reads as silence); only a much longer pause means "finished".
   it("a real streak flags only after the full quiet window, and chimes once", async () => {

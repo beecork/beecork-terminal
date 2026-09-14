@@ -716,9 +716,17 @@ export default function TerminalPane({
       // both of which let a shell-startup query race the prompt and leak the
       // terminal's reply into the command line. Later show/hide cycles keep the
       // already-running shell (spawnedRef gates this to once).
-      if (!spawnedRef.current) {
+      // Latch only on a call that actually happened. Consuming the gate while
+      // `restartRef` is still null (the mount effect bailed at its ref check)
+      // would brick the pane forever: nothing resets `spawnedRef`, the mount
+      // effect's deps never change again, and the press-any-key retry needs an
+      // `exitedRef` that only a FAILED spawn sets — so a spawn that never ran
+      // leaves no way back. Leaving the gate unlatched costs nothing on every
+      // path that works, and lets the next visibility pass retry on the one that
+      // does not.
+      if (!spawnedRef.current && restartRef.current) {
         spawnedRef.current = true;
-        restartRef.current?.();
+        restartRef.current();
       }
     });
     // And once more, a moment later. The repaint above goes out on the frame the
