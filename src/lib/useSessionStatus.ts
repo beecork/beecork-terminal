@@ -160,9 +160,12 @@ export function useSessionStatus(
     wantsRef.current = addId(wantsRef.current, id);
     setWantsYou(wantsRef.current);
     if (chime) {
-      // Ordering alone is not enough: an exception escaping the caller aborts
-      // React's pending state flush too, so the dot would still never light.
-      // Same guard the terminal's Enter tone uses.
+      // The chime goes last so a throw can't cost the dot — and it is wrapped
+      // because onBell still has work AFTER this returns (the OS notification at
+      // the bottom of onBell), which a throw would skip. Not a React mechanism:
+      // React 19 queues its flush as a microtask and a later throw cannot cancel
+      // it. sound.ts is fire-and-forget and cannot throw today; it was
+      // synchronous Web Audio until v0.1.15.
       try {
         sound.attention();
       } catch {

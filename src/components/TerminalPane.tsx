@@ -534,7 +534,17 @@ export default function TerminalPane({
           term.write(
             "\r\n\x1b[90m[process exited — press any key to start a new shell]\x1b[0m\r\n"
           );
-          sound.exit(); // after the banner — a throwing sound must not eat it
+          // Last in the handler, and wrapped: this runs inside a Tauri
+          // Channel.onmessage, where an escaping throw stops the channel
+          // advancing its message index (@tauri-apps/api core.js) — harmless for
+          // this final "exit" message, fatal anywhere earlier. sound.ts cannot
+          // throw today; keep both halves so a regression reaches neither the
+          // banner nor the channel.
+          try {
+            sound.exit();
+          } catch {
+            /* never let audio eat the exit banner */
+          }
         }
       };
       // Restart where the session actually IS: the shell's own OSC 7 push, else
@@ -581,10 +591,17 @@ export default function TerminalPane({
     // it even when you're watching this session (the off-screen attention path in
     // App also fires, but the shared throttle collapses the two into one chime).
     // Run the attention pipeline FIRST — the bell can't be retried, so a throwing
-    // sound call must never drop the wantsYou flag + OS notification.
+    // sound call must never drop the wantsYou flag + OS notification. xterm 6
+    // catches listener throws itself, so this ordering is the only thing that
+    // protects the pipeline; the wrap below just keeps the four sound sites
+    // uniform.
     const bellSub = term.onBell(() => {
       cbRef.current.onBell(sessionId);
-      sound.attention();
+      try {
+        sound.attention();
+      } catch {
+        /* never let audio cost the bell */
+      }
     });
 
     const titleSub = term.onTitleChange((t) => {

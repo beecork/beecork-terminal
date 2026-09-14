@@ -84,9 +84,17 @@ read it before changing that mechanism.
 - **Audio is synthesized and played in Rust. Never Web Audio.** WKWebView suspends
   and zombifies a backgrounded page's `AudioContext`; sound died silently over
   time and only a fresh window brought it back. `sound.ts` is policy only.
-- **Do the action first, then play the sound — and wrap the call.** Ordering alone
-  is not enough: an exception escaping the handler aborts React's pending state
-  flush too, so the flag you just set never commits. Both are required.
+- **Do the action first, then play the sound — and wrap the call.** A throwing
+  sound call just ends the handler: everything after it is skipped. That is plain
+  control flow, not a React mechanism (React 19 queues its state flush as a
+  microtask, which a later synchronous throw cannot cancel), and it costs more
+  than state — `onBell` lights the dot, chimes, and only then fires the OS
+  notification, so a chime placed first would lose the notification too.
+  `sound.ts` is fire-and-forget today (`invoke` is `async`, the rejection is
+  swallowed) and cannot throw synchronously; it was synchronous Web Audio until
+  v0.1.15, so the `try/catch` stays as insurance against a regression reaching
+  whatever comes after. Pinned by "action before sound (flagWants)" in
+  `useSessionStatus.test.ts`.
 
 ## Terminal pane (`src/components/TerminalPane.tsx`)
 
@@ -139,8 +147,15 @@ read it before changing that mechanism.
 - **Do not force `.xterm-screen`'s height.** In xterm 6 the screen sits inside
   `.xterm-scrollable-element`; forcing 100% collapses that wrapper — and the
   scrollbar — to zero height.
-- **Scrollbar rules must name the element that actually SCROLLS, and every
-  scroll box reserves its gutter** (`scrollbar-gutter: stable`). The tree's rules
+- **Scrollbar rules must name the element that actually SCROLLS, and a scroll box
+  whose CONTENT HEIGHT CHANGES reserves its gutter** (`scrollbar-gutter: stable`
+  — `.tree-scroll`, `.rail-list`). Three are deliberately left alone, so don't
+  re-file them: `.pane-menu`, `.media-body` and `.crash-msg` get their content
+  once and cannot toggle a bar (and `.media-body` centres its child, so a
+  one-sided gutter would off-centre the image). `.cm-scroller` is the
+  interesting one — it already has a themed `::-webkit-scrollbar`, which makes
+  its bar classic on EVERY platform, so a gutter there costs 8px of editor width
+  everywhere to prevent a flicker CodeMirror's measure loop already damps. The tree's rules
   were written against `.file-tree`, which is the inner list — `.tree-scroll` is
   the scroll box — so the tree drew the platform default. That is invisible on
   macOS (overlay scrollbars, zero layout width) and a fat classic bar on Windows

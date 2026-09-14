@@ -527,6 +527,13 @@ body {
 .rail-list {
   flex: 1 1 auto;
   overflow: auto;
+  /* Same reflow trap as `.tree-scroll`: opening or closing a session changes the
+     list's height, the scrollbar appears or vanishes, and on Windows (classic,
+     space-taking bars) every row reflows. Gutter only, deliberately NOT themed
+     via `::-webkit-scrollbar` — styling it would convert macOS's zero-width
+     overlay bar into a classic one and cost 8px of a narrow rail permanently,
+     which is a real loss for a flicker macOS cannot have. */
+  scrollbar-gutter: stable;
   padding: 6px;
   display: flex;
   flex-direction: column;
