@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
+import { describeError, logEvent } from "../lib/diag";
 
 type State = "idle" | "installing" | "error";
 
@@ -27,8 +28,14 @@ export default function UpdateBanner() {
         if (cancelled || busyRef.current) return;
         // Show an update only if the user hasn't already dismissed that version.
         setUpdate(u && u.version !== dismissedRef.current ? u : null);
-      } catch {
-        // Offline, no release yet, endpoint unreachable — ignore silently.
+      } catch (e) {
+        // Offline and "no release yet" are normal and stay non-fatal — but a
+        // broken channel (a 404 endpoint, a malformed manifest, a platform key
+        // missing because a matrix leg died) is otherwise indistinguishable from
+        // "you are up to date", forever, with nothing written down anywhere.
+        // Record it; never surface it. `logEvent` is fire-and-forget by contract
+        // and cannot throw back into this error path.
+        logEvent("update-check", describeError(e));
       }
     }
     poll(); // on launch
@@ -47,7 +54,10 @@ export default function UpdateBanner() {
     try {
       await update!.downloadAndInstall();
       await relaunch();
-    } catch {
+    } catch (e) {
+      // The banner says "Update failed."; the log says why. Without this, a user
+      // reporting "it won't update" leaves us nothing to read.
+      logEvent("update-install", describeError(e));
       setState("error");
       busyRef.current = false;
     }

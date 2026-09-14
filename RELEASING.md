@@ -325,6 +325,12 @@ The site's own workflow deploys to Cloudflare Pages automatically.
 | Download site | static + GitHub API | static + GitHub API (same technique) |
 | Site deploy | Cloudflare Pages | Cloudflare Pages (same) |
 
+> **When `cargo audit` blocks a release on a new upstream advisory**, add a
+> justified entry to `src-tauri/.cargo/audit.toml` — that file's existing entries
+> are the pattern. Never weaken `--audit-level`, never add `continue-on-error`.
+> The temptation arrives on a hotfix path at 2 a.m., which is exactly when a
+> permanently weakened gate is cheapest to create and most expensive to have.
+
 ## Known gaps (deliberate, for later)
 
 - **Windows code signing** isn't set up → Windows SmartScreen shows an

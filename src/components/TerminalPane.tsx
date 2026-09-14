@@ -4,7 +4,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { SearchAddon } from "@xterm/addon-search";
 import { invoke, Channel } from "@tauri-apps/api/core";
-import { getRoot, revealPath, openUrl } from "../lib/api";
+import { getRoot, revealPath, openUrl, type PtyEvent } from "../lib/api";
 import { useSettings, zoomFont, SMOOTH_SCROLL_MS, type Theme, type Surface } from "../lib/settings";
 import {
   decodeBase64,
@@ -27,10 +27,6 @@ import "@xterm/xterm/css/xterm.css";
 
 /** WebView2 (Windows) reports "Windows NT" in its UA; WKWebView/WebKitGTK don't. */
 const IS_WINDOWS = /Windows/i.test(navigator.userAgent);
-
-type PtyEvent =
-  | { event: "output"; data: string }
-  | { event: "exit"; data: number };
 
 /** DEC private modes a child killed mid-run (SIGHUP, crash) leaves stuck ON in
  *  xterm — it never got to emit its own terminal cleanup. Mouse tracking is the

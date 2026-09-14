@@ -50,6 +50,11 @@ jobs:
           # flags Node 20 as deprecated on its runners. Matches local dev.
           node-version: 22
           cache: npm
+      # `# stable` is deliberate and FLOATING. Every action in this workflow is
+      # SHA-pinned; the Rust compiler is not, so two releases a week apart can be
+      # built by different compilers — the one unpinned input to the shipped
+      # binary. Pinning it means owning the bump and losing compiler security
+      # fixes for free. We take the float knowingly.
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
       # The updater manifest (latest.json) advertises the version from
       # tauri.conf.json, NOT the git tag — so a tag that doesn't match it would

@@ -73,6 +73,23 @@ export const ptyStatus = (id: string, withAgents = false): Promise<PtyStatus> =>
     (m) => m[id] ?? { cwd: null, running: null, running_known: false, agent_session: null }
   );
 
+/** One pty read, as the Rust `PtyEvent` enum sends it over the Channel. */
+export type PtyEvent =
+  | { event: "output"; data: string }
+  | { event: "exit"; data: number };
+
+/**
+ * The four pty LIFECYCLE commands — `pty_spawn`, `pty_write`, `pty_kill`,
+ * `pty_resize` — are deliberately NOT wrapped here. They are called as raw
+ * `invoke` from `TerminalPane`'s mount effect, alongside the `Channel` that
+ * carries their output, because that effect is the one place that owns a
+ * session's lifetime and the wrapper would only add a hop. They are also the
+ * commands whose SYNC, enqueue-only nature is load-bearing (see CLAUDE.md,
+ * "PTY" and "Backend command threading"), so a wrapper that made them look
+ * interchangeable with the async ones would be actively misleading. Everything
+ * else goes through this file.
+ */
+
 /**
  * `cd` a session into a folder. The path is quoted in Rust, for the shell that
  * session actually runs — the webview can only guess the platform from a user
