@@ -913,13 +913,15 @@ mod tests {
         });
         let mut writer = pair.master.take_writer().unwrap();
 
-        let fg = |m: &Box<dyn MasterPty + Send>| m.process_group_leader();
+        // `&dyn`, not `&Box<dyn>` — the extra indirection buys nothing and clippy
+        // rejects it (`borrowed_box`). Callers pass `&*pair.master`.
+        let fg = |m: &(dyn MasterPty + Send)| m.process_group_leader();
         std::thread::sleep(Duration::from_millis(400));
-        let idle = fg(&pair.master);
+        let idle = fg(&*pair.master);
         writer.write_all(b"sleep 3\n").unwrap();
         writer.flush().unwrap();
         std::thread::sleep(Duration::from_millis(600));
-        let busy = fg(&pair.master);
+        let busy = fg(&*pair.master);
         let _ = child.kill();
 
         assert_eq!(idle, Some(shell_pid), "at the prompt the fg group is the shell");
