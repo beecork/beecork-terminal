@@ -183,6 +183,21 @@ describe("PATH_RE", () => {
     expect(find("see src/App.tsx:42 for details")).toEqual(["src/App.tsx:42"]);
     expect(find("edited lib/paths.ts")).toEqual(["lib/paths.ts"]);
   });
+  // The leading separator IS the bug this pins: matched without it, an absolute
+  // path comes back relative and `openToken` re-roots it at the session cwd.
+  it("keeps the leading separator of an absolute path", () => {
+    expect(find("see /Users/me/repo/src/App.tsx:12 for details")).toEqual([
+      "/Users/me/repo/src/App.tsx:12",
+    ]);
+    expect(
+      find("wrote (/var/folders/v0/x_y0000gn/T/claude-chrome-shots-lUHh5e/shot-17899-3.jpg)"),
+    ).toEqual(["/var/folders/v0/x_y0000gn/T/claude-chrome-shots-lUHh5e/shot-17899-3.jpg"]);
+  });
+  it("keeps both leading separators of a UNC share", () => {
+    expect(find("opened \\\\server\\share\\notes.txt")).toEqual([
+      "\\\\server\\share\\notes.txt",
+    ]);
+  });
   it("finds Windows paths, drive and all", () => {
     expect(find("wrote C:\\Users\\me\\proj\\src\\main.rs")).toEqual([
       "C:\\Users\\me\\proj\\src\\main.rs",

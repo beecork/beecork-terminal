@@ -108,6 +108,17 @@ read it before changing that mechanism.
 - **Reset stuck DEC private modes when a child dies.** A child killed mid-run
   leaves mouse tracking on, and the next shell echoes every mouse move as growing
   `\e[<35;…M` gibberish.
+- **Linkify the LOGICAL line, not the buffer row.** xterm calls `provideLinks`
+  with one row at a time, and a path longer than the pane wraps: per row the head
+  has no extension (PATH_RE never sees a path) and the tail matches as a
+  *relative* one, which `openToken` re-roots at the session cwd — the click opens
+  a file that cannot exist ("No preview available" on a screenshot that is right
+  there on screen). Rejoin the continuation rows (`isWrapped`) before matching,
+  and give every row but the last its full width — no right-trim, explicit
+  `cols` — or every offset past the join shifts and the range underlines the
+  wrong cells. A link range may legally span rows (`_linkAtPosition` compares
+  flat buffer offsets), so hover, underline and click all follow it. Pinned by
+  the two wrapped-link tests in `TerminalPane.test.tsx`.
 - **Anything read from inside the mount effect must come from a ref.** The link
   provider's `activate` and `spawn` closures are built ONCE, so a prop read
   directly in them freezes at first-visible — the change looks right and does
@@ -322,6 +333,12 @@ Both rules below are the fixes for exactly that.
 
 ## Paths (`src/lib/paths.ts`)
 
+- **`PATH_RE` must keep a path's leading separator.** A segment loop that can
+  only start at a word character matches `Users/me/a.ts` inside `/Users/me/a.ts`,
+  so every clicked ABSOLUTE path came back RELATIVE and was re-rooted under the
+  session cwd. The root alternative (`[A-Za-z]:[\\/]` or `[\\/]{1,2}`, the
+  second for a UNC `\\host\share`) is the only thing holding that. Pinned by
+  the absolute / UNC cases in `paths.test.ts`.
 - **Every path helper is separator-agnostic.** The backend hands us *native*
   paths, so Windows paths arrive with backslashes. A POSIX-only `split("/")`
   silently returns the whole path as a basename, an empty dirname (new files land
