@@ -8,10 +8,32 @@ import { render, act } from "@testing-library/react";
 // ordering logic and nothing else.
 const terminals: { opened: number; disposed: number; refreshed: number; themeWrites: number }[] = [];
 
-type TermLink = { text: string; activate: (e: { metaKey: boolean; ctrlKey: boolean }) => void };
+type TermPos = { x: number; y: number };
+type TermLink = {
+  text: string;
+  range: { start: TermPos; end: TermPos };
+  activate: (e: { metaKey: boolean; ctrlKey: boolean }) => void;
+};
 type LinkProvider = { provideLinks(y: number, cb: (links?: TermLink[]) => void): void };
 let provider: LinkProvider | null = null;
-let lineText = "";
+
+// The link provider reads the BUFFER, not one string: a long path wraps and has
+// to be rejoined across rows, so the fake buffer has to be able to wrap. Rows
+// carry `isWrapped` the way xterm's do — the flag is on the CONTINUATION row,
+// never on its head — and `translateToString` pads to `cols` and honours
+// trimRight, because the rejoin depends on both.
+const TEST_COLS = 80;
+let bufferRows: { text: string; wrapped: boolean }[] = [];
+const setLine = (text: string) => {
+  bufferRows = [{ text, wrapped: false }];
+};
+/** Lay `text` into rows the way a pane `TEST_COLS` wide would. */
+const setWrappedLine = (text: string) => {
+  bufferRows = [];
+  for (let i = 0; i < text.length; i += TEST_COLS) {
+    bufferRows.push({ text: text.slice(i, i + TEST_COLS), wrapped: i > 0 });
+  }
+};
 
 // jsdom has no ResizeObserver; the pane installs one to refit on resize.
 globalThis.ResizeObserver = class {
@@ -22,11 +44,27 @@ globalThis.ResizeObserver = class {
 
 vi.mock("@xterm/xterm", () => {
   class FakeTerminal {
-    cols = 80;
+    cols = TEST_COLS;
     rows = 24;
     options: Record<string, unknown> = {};
     buffer = {
-      active: { type: "normal", getLine: () => ({ translateToString: () => lineText }) },
+      active: {
+        type: "normal",
+        get length() {
+          return bufferRows.length;
+        },
+        getLine: (i: number) => {
+          const row = bufferRows[i];
+          if (!row) return undefined;
+          return {
+            isWrapped: row.wrapped,
+            translateToString: (trimRight?: boolean, start = 0, end = TEST_COLS) => {
+              const cells = row.text.padEnd(TEST_COLS, " ").slice(start, end);
+              return trimRight ? cells.replace(/\s+$/, "") : cells;
+            },
+          };
+        },
+      },
     };
     parser = { registerOscHandler: () => ({ dispose: () => {} }) };
     private rec: { opened: number; disposed: number; refreshed: number; themeWrites: number };
@@ -342,7 +380,7 @@ describe("clicked-path resolution", () => {
     invoke.mockClear();
     terminals.length = 0;
     provider = null;
-    lineText = "";
+    bufferRows = [];
   });
 
   const pane = (onOpenPath: () => void, currentCwd?: string) => (
@@ -357,12 +395,16 @@ describe("clicked-path resolution", () => {
     </SettingsProvider>
   );
 
-  function clickFirstLink() {
+  function linksOn(row: number) {
     let links: TermLink[] = [];
-    provider!.provideLinks(1, (l) => {
+    provider!.provideLinks(row, (l) => {
       links = l ?? [];
     });
-    links[0].activate({ metaKey: false, ctrlKey: false });
+    return links;
+  }
+
+  function clickFirstLink(row = 1) {
+    linksOn(row)[0].activate({ metaKey: false, ctrlKey: false });
   }
 
   // A default zsh/bash never emits OSC 7, so the poll-derived cwd is the only
@@ -375,7 +417,7 @@ describe("clicked-path resolution", () => {
     await flushFrame();
     await act(async () => rerender(pane(onOpenPath, "/repo/packages/api")));
 
-    lineText = "src/App.tsx:12";
+    setLine("src/App.tsx:12");
     clickFirstLink();
     expect(onOpenPath).toHaveBeenCalledWith("/repo/packages/api/src/App.tsx", 12);
   });
@@ -384,8 +426,60 @@ describe("clicked-path resolution", () => {
     const onOpenPath = vi.fn();
     render(pane(onOpenPath, undefined));
     await flushFrame();
-    lineText = "src/App.tsx:12";
+    setLine("src/App.tsx:12");
     clickFirstLink();
     expect(onOpenPath).toHaveBeenCalledWith("/repo/src/App.tsx", 12);
+  });
+
+  // An absolute path must be opened as written. Drop its leading separator and
+  // it reads as relative, and the line above re-roots it under the session cwd.
+  it("opens an absolute path as-is, not re-rooted at the cwd", async () => {
+    const onOpenPath = vi.fn();
+    render(pane(onOpenPath, "/repo"));
+    await flushFrame();
+    setLine("edited /Users/me/other/src/App.tsx:12");
+    clickFirstLink();
+    expect(onOpenPath).toHaveBeenCalledWith("/Users/me/other/src/App.tsx", 12);
+  });
+
+  // The reported bug: a screenshot path too long for the pane. Per ROW the head
+  // has no extension (no link at all) and the tail links as a relative path, so
+  // the click opened `<cwd>/hrome-…/shot.jpg` — "No preview available".
+  const WRAPPED =
+    "shut (/var/folders/v0/98f2gj3j4y54_m34wntqpd8c0000gn/T/claude-chrome-screenshots-lUHh5e/screenshot-1789918353418-3.jpg)";
+  const WRAPPED_PATH = WRAPPED.slice("shut (".length, -1);
+
+  it("rejoins a path that WRAPPED across rows, from either row", async () => {
+    const onOpenPath = vi.fn();
+    render(pane(onOpenPath, "/repo"));
+    await flushFrame();
+    setWrappedLine(WRAPPED);
+    expect(bufferRows.length).toBeGreaterThan(1); // the wrap is the point
+
+    clickFirstLink(bufferRows.length); // hovering the tail row, as the user did
+    expect(onOpenPath).toHaveBeenCalledWith(WRAPPED_PATH, undefined);
+
+    onOpenPath.mockClear();
+    clickFirstLink(1); // and the head row gives the same link
+    expect(onOpenPath).toHaveBeenCalledWith(WRAPPED_PATH, undefined);
+  });
+
+  // xterm hit-tests and underlines a link by its RANGE, so a rejoined token
+  // whose range stayed on one row would highlight (and be clickable on) only
+  // the row it was asked about.
+  it("gives the rejoined link a range that spans the wrap", async () => {
+    const onOpenPath = vi.fn();
+    render(pane(onOpenPath, "/repo"));
+    await flushFrame();
+    setWrappedLine(WRAPPED);
+
+    const [link] = linksOn(1);
+    expect(link.text).toBe(WRAPPED_PATH);
+    // 1-based, inclusive: starts after "shut (" on row 1, ends before the ")".
+    expect(link.range.start).toEqual({ x: "shut (".length + 1, y: 1 });
+    expect(link.range.end).toEqual({
+      x: ((WRAPPED.length - 1 - 1) % TEST_COLS) + 1,
+      y: bufferRows.length,
+    });
   });
 });

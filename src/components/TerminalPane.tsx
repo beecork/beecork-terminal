@@ -458,14 +458,53 @@ export default function TerminalPane({
 
     // Clickable links in output: http(s) URLs (→ browser) and file:line paths
     // (click → editor, ⌘/Ctrl-click → reveal in Finder).
+    //
+    // Matching runs over the whole LOGICAL line, never the row under the mouse.
+    // xterm hands the provider one buffer ROW at a time, and a long path wraps —
+    // `…/T/claude-c` + `hrome-screenshots-lUHh5e/shot.jpg`. Per row, the head has
+    // no extension so PATH_RE ignores it, and the tail matches as a RELATIVE
+    // path, which `openToken` then resolves against the session cwd: the click
+    // opens a file that does not exist ("No preview available") instead of the
+    // one on screen. Rejoin the wrapped rows first; an xterm link range may span
+    // rows (`_linkAtPosition` compares flat buffer offsets), so hover, underline
+    // and click all follow the path across the wrap.
+    const logicalLine = (row: number) => {
+      const buf = term.buffer.active;
+      // A continuation row points back at its head; walk up to it.
+      let first = row;
+      while (first > 0 && buf.getLine(first)?.isWrapped) first--;
+      const starts: number[] = [];
+      let text = "";
+      for (let i = first; i < buf.length; i++) {
+        const line = buf.getLine(i);
+        if (!line) break;
+        const last = !buf.getLine(i + 1)?.isWrapped;
+        starts.push(text.length);
+        // A continuation row must contribute its FULL width — no right-trim, and
+        // `cols` explicitly, because a line's cell array can stay wider than the
+        // pane after a resize. Trim either one and every offset past the join
+        // shifts, which lands the link's range on the wrong cells.
+        text += line.translateToString(last, 0, term.cols);
+        if (last) break;
+      }
+      return { first, starts, text };
+    };
+
+    /** 1-based { x, y } link coordinates for a 0-based offset into that text. */
+    const at = (line: { first: number; starts: number[] }, offset: number) => {
+      let k = line.starts.length - 1;
+      while (k > 0 && line.starts[k] > offset) k--;
+      return { x: offset - line.starts[k] + 1, y: line.first + k + 1 };
+    };
+
     const linkProvider = term.registerLinkProvider({
       provideLinks(y, callback) {
-        const bufLine = term.buffer.active.getLine(y - 1);
-        if (!bufLine) {
+        const line = logicalLine(y - 1);
+        const text = line.text;
+        if (!text) {
           callback(undefined);
           return;
         }
-        const text = bufLine.translateToString(true);
         const links = [];
         const urlRanges: Array<[number, number]> = [];
         let m: RegExpExecArray | null;
@@ -480,7 +519,8 @@ export default function TerminalPane({
           urlRanges.push([start, end]);
           links.push({
             text: token,
-            range: { start: { x: start + 1, y }, end: { x: end, y } },
+            // `end - 1` is the token's LAST cell; the range end is inclusive.
+            range: { start: at(line, start), end: at(line, end - 1) },
             activate: () => void openUrl(token).catch(() => {}),
           });
         }
@@ -495,7 +535,7 @@ export default function TerminalPane({
           if (urlRanges.some(([s, e]) => start < e && end > s)) continue;
           links.push({
             text: token,
-            range: { start: { x: start + 1, y }, end: { x: end, y } },
+            range: { start: at(line, start), end: at(line, end - 1) },
             activate: (e: MouseEvent) => openToken(token, e.metaKey || e.ctrlKey),
           });
         }

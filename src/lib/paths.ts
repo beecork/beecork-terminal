@@ -127,11 +127,19 @@ export function relativePath(full: string, root: string): string {
 }
 
 /** Matches file-ish tokens (optionally with :line[:col]) in terminal output,
- *  POSIX or Windows — an optional drive prefix, then segments separated by
+ *  POSIX or Windows — an optional ROOT (a drive prefix, the leading `/` of an
+ *  absolute POSIX path, or the `\\` of a UNC share), then segments separated by
  *  either slash. The drive's own colon can't be mistaken for the `:line`
- *  suffix, since that suffix is only recognised at the very end of the token. */
+ *  suffix, since that suffix is only recognised at the very end of the token.
+ *
+ *  The leading separator is part of the match, and that alternative is the
+ *  whole point of it: a segment loop that can only start at a word character
+ *  matches `Users/me/a.ts` inside `/Users/me/a.ts`, and the token it hands back
+ *  is RELATIVE. `openToken` then re-roots every clicked absolute path at the
+ *  session's cwd and opens a file that cannot exist. Pinned by the absolute /
+ *  UNC cases in `paths.test.ts`. */
 export const PATH_RE =
-  /(?:[A-Za-z]:[\\/])?(?:[\w.@~-]+[\\/])*[\w.@~-]+\.[A-Za-z]{1,10}(?::\d+(?::\d+)?)?/g;
+  /(?:[A-Za-z]:[\\/]|[\\/]{1,2})?(?:[\w.@~-]+[\\/])*[\w.@~-]+\.[A-Za-z]{1,10}(?::\d+(?::\d+)?)?/g;
 
 /** Matches http(s) URLs (incl. localhost) in terminal output, up to whitespace/
  *  quotes/brackets. The final char excludes trailing sentence punctuation so
