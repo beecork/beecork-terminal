@@ -1467,6 +1467,14 @@ body {
 .modal {
   width: 420px;
   max-width: 90vw;
+  /* Never taller than the window. The overlay centres the modal, so a modal
+     taller than the viewport loses its TOP — the header and the Default folder
+     row — off-screen with no way to scroll to it. That was every Windows laptop
+     at 125–150% display scaling (the window min height is 400px). The body
+     scrolls instead; the header stays put. */
+  max-height: calc(100vh - 32px);
+  display: flex;
+  flex-direction: column;
   background: var(--panel);
   color: var(--fg);
   border: 1px solid var(--border);
@@ -1499,6 +1507,15 @@ body {
   display: flex;
   flex-direction: column;
   gap: 18px;
+  /* the scroll box when the modal hits its max-height; min-height:0 lets the
+     flex child shrink below its content. Gutter reserved: the diagnostics line
+     fills in after mount, and on Windows a classic bar appearing would reflow. */
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+.modal-header {
+  flex: 0 0 auto;
 }
 
 /* confirm dialog */

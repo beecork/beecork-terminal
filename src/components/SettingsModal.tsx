@@ -19,8 +19,20 @@ export default function SettingsModal({ onClose }: { onClose: () => void }) {
   }, []);
 
   async function pickFolder() {
-    const chosen = await open({ directory: true, defaultPath: settings.defaultCwd });
-    if (typeof chosen === "string") update({ defaultCwd: chosen });
+    // An empty or unparseable defaultPath (a cleared field, a path typed on
+    // another OS) must not stop the picker opening — fall back to none.
+    const start = settings.defaultCwd?.trim() || undefined;
+    try {
+      const chosen = await open({ directory: true, defaultPath: start });
+      if (typeof chosen === "string") update({ defaultCwd: chosen });
+    } catch {
+      try {
+        const chosen = await open({ directory: true });
+        if (typeof chosen === "string") update({ defaultCwd: chosen });
+      } catch {
+        /* no picker available — the text field still works */
+      }
+    }
   }
 
   return (
