@@ -17,4 +17,17 @@ ignore = [
   # updater speaks JSON, and we never parse untrusted XML. Recheck on tauri bumps.
   "RUSTSEC-2026-0194", # quick-xml: quadratic run time on duplicate attribute names
   "RUSTSEC-2026-0195", # quick-xml: unbounded namespace-declaration allocation (DoS)
+
+  # zip <9 extraction advisories, reached only via tauri-plugin-updater 2.10.
+  # The fix (updater 2.14, zip ^9) requires tauri ^2.12 + reqwest 0.13 — a core
+  # upgrade, to be done on its own. Not reachable here: the updater calls
+  # `ZipArchive::extract` only on Windows (`extract_zip`, behind the `zip`
+  # feature), only AFTER `verify_signature` has checked the bytes against our
+  # minisign pubkey — so the archive is ours, never attacker-chosen — and with
+  # `createUpdaterArtifacts: true` our Windows artifacts are the raw .exe/.msi,
+  # not zips. SUID/symlink handling is a unix concern; extraction is Windows-
+  # only. Drop these the moment tauri-plugin-updater is bumped.
+  "RUSTSEC-2026-0367", # zip: symlink targets outside the destination directory
+  "RUSTSEC-2026-0368", # zip: SUID/SGID bits preserved on extraction
+  "RUSTSEC-2026-0369", # zip: permissions applied through symlinks
 ]
