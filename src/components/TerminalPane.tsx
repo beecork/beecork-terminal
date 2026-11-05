@@ -19,6 +19,8 @@ import {
 import { resumeCommand } from "../lib/sessions";
 import { useContextMenu } from "../lib/useContextMenu";
 import { copyText, readText } from "../lib/clipboard";
+import { clipboardKeyAction } from "../lib/termKeys";
+import { withGeorgian } from "../lib/fonts";
 import * as sound from "../lib/sound";
 import ContextMenu, { type MenuEntry } from "./ContextMenu";
 import ZoomControl from "./ZoomControl";
@@ -285,7 +287,7 @@ export default function TerminalPane({
     return [
       {
         label: "Copy",
-        hint: "⌘C",
+        hint: IS_WINDOWS ? "Ctrl+C" : "⌘C",
         disabled: !hasSelection,
         onSelect: () => {
           const sel = term?.getSelection() ?? "";
@@ -295,7 +297,7 @@ export default function TerminalPane({
       },
       {
         label: "Paste",
-        hint: "⌘V",
+        hint: IS_WINDOWS ? "Ctrl+V" : "⌘V",
         onSelect: () => {
           readText().then((t) => {
             if (t) term?.paste(t);
@@ -370,7 +372,7 @@ export default function TerminalPane({
 
     const { theme, settings } = lookRef.current;
     const term = new Terminal({
-      fontFamily: settings.fontFamily,
+      fontFamily: withGeorgian(settings.fontFamily),
       fontSize: settings.terminalFontSize,
       cursorBlink: true,
       allowProposedApi: true,
@@ -385,6 +387,25 @@ export default function TerminalPane({
     // Let the app own ⌘+/⌘-/⌘0 (zoom) — don't forward them to the shell.
     term.attachCustomKeyEventHandler((e) => {
       if ((e.metaKey || e.ctrlKey) && ["+", "=", "-", "_", "0"].includes(e.key)) {
+        return false;
+      }
+      // Windows clipboard chords (see lib/termKeys). Returning false keeps
+      // xterm from sending ^C/^V to the shell; it's called for keydown,
+      // keypress AND keyup, so every phase must be swallowed, but act once.
+      const action = clipboardKeyAction(e, term.hasSelection(), IS_WINDOWS);
+      if (action === "copy") {
+        if (e.type === "keydown") {
+          e.preventDefault();
+          const sel = term.getSelection();
+          if (sel) copyText(sel);
+          term.clearSelection();
+        }
+        return false;
+      }
+      if (action === "paste") {
+        // Don't preventDefault: the webview's native paste event then fires on
+        // xterm's textarea and xterm pastes it (bracketed-paste aware), with no
+        // clipboard-read permission needed.
         return false;
       }
       return true;
@@ -827,7 +848,7 @@ export default function TerminalPane({
     if (!term) return;
     term.options.theme = xtermTheme(theme);
     term.options.fontSize = settings.terminalFontSize;
-    term.options.fontFamily = settings.fontFamily;
+    term.options.fontFamily = withGeorgian(settings.fontFamily);
     // Scroll tuning applies live (no remount).
     term.options.scrollSensitivity = settings.scrollSpeed;
     term.options.fastScrollSensitivity = settings.scrollSpeed * 4;
