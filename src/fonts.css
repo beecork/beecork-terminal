@@ -1,0 +1,42 @@
+/* Bundled Georgian monospace glyphs ("BPG 2017 DejaVu Sans Mono", Bitstream
+   Vera / DejaVu license — see assets/fonts/LICENSE-bpg-dejavu.txt).
+
+   No common monospace font (Menlo, SF Mono, Cascadia, Consolas) has Georgian,
+   so the OS fell back to a proportional font (Sylfaen on Windows) whose glyphs
+   are wider than a terminal cell — letters overlapped. This face is limited by
+   unicode-range to the Georgian blocks and is put FIRST in every font stack
+   (lib/fonts.ts), so Georgian comes from here while everything else still uses
+   the user's chosen font. The family name is app-internal on purpose, so it
+   never collides with a copy the user installed system-wide. */
+
+@font-face {
+  font-family: "Beecork Georgian";
+  src: url("./assets/fonts/bpg-dejavu-sans-mono.ttf") format("truetype");
+  font-weight: normal;
+  font-style: normal;
+  unicode-range: U+10A0-10FF, U+1C90-1CBF, U+2D00-2D2F;
+}
+
+@font-face {
+  font-family: "Beecork Georgian";
+  src: url("./assets/fonts/bpg-dejavu-sans-mono-bold.ttf") format("truetype");
+  font-weight: bold;
+  font-style: normal;
+  unicode-range: U+10A0-10FF, U+1C90-1CBF, U+2D00-2D2F;
+}
+
+@font-face {
+  font-family: "Beecork Georgian";
+  src: url("./assets/fonts/bpg-dejavu-sans-mono-oblique.ttf") format("truetype");
+  font-weight: normal;
+  font-style: italic;
+  unicode-range: U+10A0-10FF, U+1C90-1CBF, U+2D00-2D2F;
+}
+
+@font-face {
+  font-family: "Beecork Georgian";
+  src: url("./assets/fonts/bpg-dejavu-sans-mono-boldoblique.ttf") format("truetype");
+  font-weight: bold;
+  font-style: italic;
+  unicode-range: U+10A0-10FF, U+1C90-1CBF, U+2D00-2D2F;
+}

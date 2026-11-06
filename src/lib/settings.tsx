@@ -8,6 +8,7 @@ import {
   type ReactNode,
 } from "react";
 import { lsGet, lsSet } from "./persist";
+import { withGeorgian } from "./fonts";
 
 export interface TerminalTheme {
   background: string;
@@ -251,7 +252,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     for (const [k, v] of Object.entries(theme.ui)) {
       root.style.setProperty(`--${k}`, v);
     }
-    root.style.setProperty("--font-mono", settings.fontFamily);
+    root.style.setProperty("--font-mono", withGeorgian(settings.fontFamily));
     root.style.setProperty("--editor-font-size", `${settings.editorFontSize}px`);
     // Exact terminal background, so the container behind the xterm canvas blends
     // seamlessly during a resize (no seam/flash when the panel opens or closes).
