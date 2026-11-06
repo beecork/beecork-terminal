@@ -26,8 +26,10 @@ ignore = [
   # minisign pubkey — so the archive is ours, never attacker-chosen — and with
   # `createUpdaterArtifacts: true` our Windows artifacts are the raw .exe/.msi,
   # not zips. SUID/symlink handling is a unix concern; extraction is Windows-
-  # only. Drop these the moment tauri-plugin-updater is bumped.
+  # only. The worst the abort one (0429) can do is crash the updater on an archive we
+  # signed ourselves. Drop these the moment tauri-plugin-updater is bumped.
   "RUSTSEC-2026-0367", # zip: symlink targets outside the destination directory
   "RUSTSEC-2026-0368", # zip: SUID/SGID bits preserved on extraction
   "RUSTSEC-2026-0369", # zip: permissions applied through symlinks
+  "RUSTSEC-2026-0429", # zip: `extract` aborts on a symlink entry with a large declared size
 ]
