@@ -43,6 +43,12 @@ cd src-tauri && cargo test   # Rust unit tests
 
 Releasing is automated — see [RELEASING.md](./RELEASING.md).
 
+## Contributors
+
+Thank you to everyone who has helped make Beecork Terminal better:
+
+- [@gevargi](https://github.com/gevargi): Windows Ctrl+C/Ctrl+V clipboard shortcuts, and a bundled Georgian monospace font so Georgian text no longer overlaps ([#5](https://github.com/beecork/beecork-terminal/pull/5))
+
 ## License
 
 © Beecork.
