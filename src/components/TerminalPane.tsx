@@ -19,7 +19,7 @@ import {
 import { resumeCommand } from "../lib/sessions";
 import { useContextMenu } from "../lib/useContextMenu";
 import { copyText, readText } from "../lib/clipboard";
-import { clipboardKeyAction } from "../lib/termKeys";
+import { clipboardKeyAction, isModifierOnly, keySelRange, shiftArrowDir } from "../lib/termKeys";
 import { withGeorgian } from "../lib/fonts";
 import * as sound from "../lib/sound";
 import ContextMenu, { type MenuEntry } from "./ContextMenu";
@@ -384,10 +384,46 @@ export default function TerminalPane({
     });
     termRef.current = term;
 
+    // Shift+Left/Right keyboard selection (see lib/termKeys). `anchor` is the
+    // cursor's linear offset when the selection began, `head` where the arrows
+    // have moved it. Lives only in this closure: one per terminal.
+    let keySel: { anchor: number; head: number } | null = null;
+    const applyKeySel = () => {
+      const range = keySel && keySelRange(keySel.anchor, keySel.head);
+      if (!range) {
+        term.clearSelection();
+        return;
+      }
+      const cols = term.cols;
+      term.select(range.start % cols, Math.floor(range.start / cols), range.length);
+    };
+
     // Let the app own ⌘+/⌘-/⌘0 (zoom) — don't forward them to the shell.
     term.attachCustomKeyEventHandler((e) => {
       if ((e.metaKey || e.ctrlKey) && ["+", "=", "-", "_", "0"].includes(e.key)) {
         return false;
+      }
+      // Windows only, and only on the normal buffer — a full-screen program
+      // (vim, less) on the alternate screen owns Shift+arrows itself. The key
+      // still goes to the program (return true); the highlight is applied in a
+      // microtask because xterm clears any selection when it sends user input,
+      // which happens right after this handler returns.
+      if (IS_WINDOWS && e.type === "keydown") {
+        const dir = shiftArrowDir(e);
+        if (dir && term.buffer.active.type === "normal") {
+          const buf = term.buffer.active;
+          const cols = term.cols;
+          if (!keySel) {
+            const at = (buf.baseY + buf.cursorY) * cols + Math.min(buf.cursorX, cols - 1);
+            keySel = { anchor: at, head: at };
+          }
+          keySel.head = Math.max(0, Math.min(buf.length * cols, keySel.head + dir));
+          queueMicrotask(applyKeySel);
+          return true;
+        }
+        // Any other real key ends it (xterm drops the highlight itself when that
+        // key reaches the shell; Ctrl+C below copies it first).
+        if (!isModifierOnly(e)) keySel = null;
       }
       // Windows clipboard chords (see lib/termKeys). Returning false keeps
       // xterm from sending ^C/^V to the shell; it's called for keydown,
