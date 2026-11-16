@@ -538,10 +538,11 @@ body {
   overflow: auto;
   /* Same reflow trap as `.tree-scroll`: opening or closing a session changes the
      list's height, the scrollbar appears or vanishes, and on Windows (classic,
-     space-taking bars) every row reflows. Gutter only, deliberately NOT themed
-     via `::-webkit-scrollbar` — styling it would convert macOS's zero-width
-     overlay bar into a classic one and cost 8px of a narrow rail permanently,
-     which is a real loss for a flicker macOS cannot have. */
+     space-taking bars) every row reflows. The gutter is all that is set HERE,
+     deliberately: a `::-webkit-scrollbar` rule on this element would convert
+     macOS's zero-width overlay bar into a classic one and cost 8px of a narrow
+     rail permanently, a real loss for a flicker macOS cannot have. The bar is
+     themed only where it takes room already — see "scrollbars", at the end. */
   scrollbar-gutter: stable;
   padding: 6px;
   display: flex;
@@ -1674,6 +1675,24 @@ body {
 }
 .tree-scroll::-webkit-scrollbar-thumb,
 .cm-scroller::-webkit-scrollbar-thumb {
+  background: var(--selected);
+  border-radius: 4px;
+}
+/* Every other box that scrolls gets that same bar — but only where scrollbars
+   take room (`data-classic-scrollbars`, measured by `watchScrollbarKind`).
+   There, a bar left alone is the platform's own: on Windows a white 15px slab
+   with arrow buttons, in a dark panel, beside the tree's thin one. Where bars
+   are zero-width overlays these rules must NOT apply: a `::-webkit-scrollbar`
+   rule turns an overlay bar into a classic one and takes its 8px from the pane
+   for good, which is why `.rail-list` was left bare — and on such a machine
+   still is. */
+:root[data-classic-scrollbars]
+  :is(.rail-list, .modal-body, .pane-menu, .media-body, .crash-msg)::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+:root[data-classic-scrollbars]
+  :is(.rail-list, .modal-body, .pane-menu, .media-body, .crash-msg)::-webkit-scrollbar-thumb {
   background: var(--selected);
   border-radius: 4px;
 }
