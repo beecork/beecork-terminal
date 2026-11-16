@@ -377,7 +377,10 @@ body {
 .term-zoom {
   position: absolute;
   bottom: 10px;
-  right: 12px;
+  /* 18, like the close ✕ above it: xterm's scrollbar runs in a lane that ends
+     16px in from this edge (see `.terminal-mount`), and at 12 this sat on the
+     last 4px of it — over the slider whenever the view is at the bottom. */
+  right: 18px;
   z-index: 15;
   background: color-mix(in srgb, var(--panel-header) 82%, transparent);
   border: 1px solid var(--border);
@@ -486,6 +489,16 @@ body {
    black band in the scrollbar gutter. */
 .terminal-mount .xterm-viewport {
   background: transparent !important;
+}
+/* …and it draws no scrollbar. xterm 6 scrolls `.xterm-scrollable-element`; this
+   element is a leftover that holds nothing and scrolls nothing, yet xterm.css
+   still gives it `overflow-y: scroll`. Where scrollbars are classic (Windows)
+   that is a real, empty bar down its right edge. The rows cover all of it except
+   the strip under the last one, and there its down-arrow showed: a white box in
+   the corner of every pane, under the zoom control. This is NOT the terminal's
+   scrollbar — that is the slider, themed in `xtermTheme()`, and it is untouched. */
+.terminal-mount .xterm-viewport {
+  scrollbar-width: none;
 }
 
 /* ---- session rail (left) ---- */
