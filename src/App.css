@@ -1673,10 +1673,31 @@ body {
   width: 8px;
   height: 8px;
 }
+/* One colour for every bar, and it is the terminal's. `xtermTheme()` gives
+   xterm's own slider the muted colour at 35%, at 70% under the pointer, and the
+   accent at 80% while it is dragged; these are the same three, so the bar beside
+   the text and the bars beside the panels match on every theme and answer the
+   pointer alike. (`--selected`, which the panels used, is within a shade of the
+   first on the dark themes — and all but invisible on the light one, where the
+   terminal's bar was a plain grey beside it.) Change them here and in
+   `xtermTheme()` together. */
+:root {
+  --scroll-thumb: color-mix(in srgb, var(--muted) 35%, transparent);
+  --scroll-thumb-hover: color-mix(in srgb, var(--muted) 70%, transparent);
+  --scroll-thumb-active: color-mix(in srgb, var(--accent) 80%, transparent);
+}
 .tree-scroll::-webkit-scrollbar-thumb,
 .cm-scroller::-webkit-scrollbar-thumb {
-  background: var(--selected);
+  background: var(--scroll-thumb);
   border-radius: 4px;
+}
+.tree-scroll::-webkit-scrollbar-thumb:hover,
+.cm-scroller::-webkit-scrollbar-thumb:hover {
+  background: var(--scroll-thumb-hover);
+}
+.tree-scroll::-webkit-scrollbar-thumb:active,
+.cm-scroller::-webkit-scrollbar-thumb:active {
+  background: var(--scroll-thumb-active);
 }
 /* Every other box that scrolls gets that same bar — but only where scrollbars
    take room (`data-classic-scrollbars`, measured by `watchScrollbarKind`).
@@ -1685,16 +1706,29 @@ body {
    are zero-width overlays these rules must NOT apply: a `::-webkit-scrollbar`
    rule turns an overlay bar into a classic one and takes its 8px from the pane
    for good, which is why `.rail-list` was left bare — and on such a machine
-   still is. */
-:root[data-classic-scrollbars]
+   still is.
+
+   `html[…]`, not `:root[…]`: in a scrollbar selector that also names a state
+   (`:hover`, `:active`) Chromium reads EVERY pseudo-class as a scrollbar state,
+   so `:root` matches nothing and the rule quietly never applies — the bar is
+   drawn but no longer answers the pointer. */
+html[data-classic-scrollbars]
   :is(.rail-list, .modal-body, .pane-menu, .media-body, .crash-msg)::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
-:root[data-classic-scrollbars]
+html[data-classic-scrollbars]
   :is(.rail-list, .modal-body, .pane-menu, .media-body, .crash-msg)::-webkit-scrollbar-thumb {
-  background: var(--selected);
+  background: var(--scroll-thumb);
   border-radius: 4px;
+}
+html[data-classic-scrollbars]
+  :is(.rail-list, .modal-body, .pane-menu, .media-body, .crash-msg)::-webkit-scrollbar-thumb:hover {
+  background: var(--scroll-thumb-hover);
+}
+html[data-classic-scrollbars]
+  :is(.rail-list, .modal-body, .pane-menu, .media-body, .crash-msg)::-webkit-scrollbar-thumb:active {
+  background: var(--scroll-thumb-active);
 }
 /* The terminal's scrollbar is xterm 6's own (a themed .xterm-scrollable-element
    slider — see xtermTheme() in TerminalPane); we don't hide it or reimplement it.

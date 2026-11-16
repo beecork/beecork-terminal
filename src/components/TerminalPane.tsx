@@ -129,7 +129,8 @@ function resyncAtlasTextures(term: Terminal | null, theme: Theme) {
 /** Build xterm's theme from the app theme, including its built-in scrollbar. The
  *  slider is drawn from the themed `muted`/`accent` colors with alpha (8-digit
  *  hex) so it's a subtle-but-visible, draggable bar that brightens on hover/drag —
- *  on every theme, dark or light. */
+ *  on every theme, dark or light. The panels' own scrollbars use the same three
+ *  (`--scroll-thumb*` in App.css) so the bars match: change both together. */
 function xtermTheme(theme: Theme): ITheme {
   return {
     background: theme.terminal.background,
