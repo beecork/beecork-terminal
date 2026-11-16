@@ -652,30 +652,37 @@ body {
    Meaning is the user's ("waiting for merge", "waiting for deploy", …); the app
    only carries them. Deliberately clear of the status dot's amber (needs you)
    and blue (busy) — a mark that can be mistaken for the attention signal is
-   worse than no mark. */
+   worse than no mark. `marks.test.tsx` measures that, against its own copies of
+   the dot's two colours above: change them together. */
 .rail-marks {
   display: flex;
   flex-direction: column;
   gap: 1px;
   align-self: stretch;
-  width: 3px;
+  /* Width and right margin add up to 6px, as they always have: a wider stripe
+     takes the room from its own margin and moves nothing else in the row. */
+  width: 4px;
   flex: 0 0 auto;
   border-radius: 2px;
   overflow: hidden;
   /* Pull it to the row's leading edge, inside the row padding, so the stripe
      reads as a property OF the row rather than another item in it. */
   margin-left: -6px;
-  margin-right: 3px;
+  margin-right: 2px;
 }
 .rail-marks > i {
   flex: 1 1 0;
   min-height: 3px;
 }
-/* One set of colours for both the stripe segments and the picker buttons. */
-.mark-red { background: #f38ba8; }
-.mark-green { background: #a6e3a1; }
-.mark-purple { background: #cba6f7; }
-.mark-teal { background: #94e2d5; }
+/* One set of colours for both the stripe segments and the picker buttons:
+   `MARK_SHADES` in settings.tsx, which `SettingsProvider` puts on the root as
+   `--mark-*` together with the theme. The shades live there, with the reasons
+   for them — a set for dark themes and another for light — so nothing in this
+   file names a mark's colour. */
+.mark-red { background: var(--mark-red); }
+.mark-green { background: var(--mark-green); }
+.mark-purple { background: var(--mark-purple); }
+.mark-teal { background: var(--mark-teal); }
 
 /* The picker: hidden until the pointer is on the row, because that is where it
    already is when you go to click. Four permanent buttons per row would crowd a
@@ -698,15 +705,19 @@ body {
   cursor: pointer;
   flex: 0 0 auto;
   /* Unset reads as an outline of its own colour — you can see WHICH colour each
-     button is without setting it. Set fills in. */
-  border: 1.5px solid currentColor;
+     button is without setting it. Set fills in. The outline is thick and close
+     to full strength because it is all an unset button has to show: a hairline
+     at half opacity greys out, and the four stop reading as four colours. (A
+     <button> is border-box, so the ring thickens inward and the button stays
+     10px — the row's hover controls are no wider for it.) */
+  border: 2px solid currentColor;
   background: transparent !important;
-  opacity: 0.55;
+  opacity: 0.9;
 }
-.rail-mark-btn.mark-red { color: #f38ba8; }
-.rail-mark-btn.mark-green { color: #a6e3a1; }
-.rail-mark-btn.mark-purple { color: #cba6f7; }
-.rail-mark-btn.mark-teal { color: #94e2d5; }
+.rail-mark-btn.mark-red { color: var(--mark-red); }
+.rail-mark-btn.mark-green { color: var(--mark-green); }
+.rail-mark-btn.mark-purple { color: var(--mark-purple); }
+.rail-mark-btn.mark-teal { color: var(--mark-teal); }
 .rail-mark-btn:hover {
   opacity: 1;
   transform: scale(1.15);

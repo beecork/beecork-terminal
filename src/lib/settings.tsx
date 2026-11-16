@@ -9,6 +9,7 @@ import {
 } from "react";
 import { lsGet, lsSet } from "./persist";
 import { withGeorgian } from "./fonts";
+import type { Mark } from "./sessions";
 
 export interface TerminalTheme {
   background: string;
@@ -139,6 +140,25 @@ export const THEMES: Theme[] = [
   },
 ];
 
+/** The session marks' shades, put on the root as `--mark-<name>` for App.css.
+ *  One set per KIND of theme, not per theme: all a mark needs to know about its
+ *  row is whether it is dark or light, and a set inside each theme would be one
+ *  more thing every new theme has to get right.
+ *
+ *  The shades are measured, not picked. A mark is only a few pixels across, and
+ *  at that size a difference in brightness survives where a difference in tint
+ *  does not. The first set was four pastels: its green and teal were exactly as
+ *  bright as each other and a tint apart, and read as one mark — and against a
+ *  light theme's near-white rows all four washed out. Hence a bright green
+ *  against a deep teal, a red that is red rather than pink so it cannot pass
+ *  for the purple, and a darker set for light rows. All of them keep their
+ *  distance from the status dot's amber and blue (see `MARKS`). Pinned by
+ *  `marks.test.tsx`; retune the shades freely inside it. */
+export const MARK_SHADES: Record<Theme["editor"], Record<Mark, string>> = {
+  dark: { red: "#fa676e", green: "#41df20", purple: "#be76ff", teal: "#1da89d" },
+  light: { red: "#e5484d", green: "#02870c", purple: "#922adf", teal: "#0d5665" },
+};
+
 export interface Settings {
   themeId: string;
   /** terminal (xterm) font size — zoomable independently */
@@ -251,6 +271,9 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     const root = document.documentElement;
     for (const [k, v] of Object.entries(theme.ui)) {
       root.style.setProperty(`--${k}`, v);
+    }
+    for (const [mark, shade] of Object.entries(MARK_SHADES[theme.editor])) {
+      root.style.setProperty(`--mark-${mark}`, shade);
     }
     root.style.setProperty("--font-mono", withGeorgian(settings.fontFamily));
     root.style.setProperty("--editor-font-size", `${settings.editorFontSize}px`);
