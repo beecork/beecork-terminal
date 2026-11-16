@@ -548,6 +548,16 @@ body {
   flex-direction: column;
   gap: 2px;
 }
+/* Collapsed, the rail is 48px wide and a classic scrollbar's gutter (Windows:
+   15px) is a third of it. What is left is narrower than a row's dot and number,
+   which are centred and so spill out of both sides of the row. Rather than
+   reserve room for a bar this rail cannot afford, the collapsed list shows none
+   — it still scrolls — and with no bar to appear or vanish there is no reflow
+   left to guard against. Where bars are zero-width overlays already (macOS),
+   all this costs is the indicator that fades in while scrolling. */
+.session-rail.collapsed .rail-list {
+  scrollbar-width: none;
+}
 .rail-item {
   display: flex;
   align-items: center;
@@ -665,23 +675,23 @@ body {
      as the count changed. */
   height: 22px;
   gap: 2px;
-  /* That is taller than the row's content, so it borrows from the row's own
-     padding rather than grow the row: the negative margins make the stripe
-     count for 8px — the dot's height, which every row has anyway — and `center`
-     sets it mid-row. */
-  align-self: center;
-  margin-top: -7px;
-  margin-bottom: -7px;
-  /* Width and right margin add up to 6px, as they always have: a wider stripe
-     takes the room from its own margin and moves nothing else in the row. */
   width: 4px;
-  flex: 0 0 auto;
   border-radius: 2px;
   overflow: hidden;
-  /* Pull it to the row's leading edge, inside the row padding, so the stripe
-     reads as a property OF the row rather than another item in it. */
-  margin-left: -6px;
-  margin-right: 2px;
+  /* Pinned beside its row, not flowed inside it. As a flex item — even one
+     pulled back to zero width — the stripe's `gap` still pushed everything after
+     it: a marked row's dot and name sat 8px to the right of an unmarked row's
+     (4px in the collapsed rail, which centres its rows), and in the collapsed
+     rail the stripe itself was placed wherever that centred group happened to
+     start, which on Windows is past the window's edge. Out of the flow it moves
+     nothing and is always in the same place: in the list's padding, against the
+     row's leading edge, centred on the row (`auto` margins centre a box that
+     has a height of its own). */
+  position: absolute;
+  left: -4px;
+  top: 0;
+  bottom: 0;
+  margin: auto 0;
 }
 .rail-marks > i {
   flex: 1 1 0;

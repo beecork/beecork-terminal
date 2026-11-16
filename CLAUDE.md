@@ -174,6 +174,17 @@ read it before changing that mechanism.
   `nowrap` row, which toggled the horizontal bar, which changed the height again.
   The panel flickered on every click, on Windows only. Reserve the gutter and the
   appearance of a scrollbar reflows nothing.
+- **A session's mark stripe is pinned beside its row, and the collapsed rail
+  shows no scrollbar.** As a flex item the stripe moved its row even at zero
+  width — its `gap` still counted — so a marked row's dot and name sat 8px to the
+  right of an unmarked row's (4px collapsed). And in the collapsed rail, whose
+  rows are centred, the stripe started wherever the group did: past the window's
+  edge on Windows, where marks were never once visible. That took a second fix
+  as well: a classic bar's gutter (Windows: 15px) is a third of a 48px rail and
+  leaves a row narrower than its dot and number, so the collapsed list is
+  `scrollbar-width: none` — it still scrolls, and with no bar to appear or
+  vanish there is nothing to reserve. None of this shows on macOS (zero-width
+  overlay bars): look at both rails on Windows before touching either rule.
 - **`.xterm-viewport` must be transparent.** xterm 6 leaves it at its `#000`
   default, which reads as a black band in the scrollbar gutter.
 
