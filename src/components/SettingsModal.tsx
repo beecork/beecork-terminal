@@ -213,6 +213,21 @@ export default function SettingsModal({ onClose }: { onClose: () => void }) {
             </button>
           </div>
 
+          <div className="setting-section">Split view</div>
+
+          <label className="setting-row setting-row-inline">
+            <span className="setting-label">
+              Keep the file panel open when splitting — otherwise it folds, to give both
+              terminals the room
+            </span>
+            <input
+              type="checkbox"
+              className="setting-check"
+              checked={settings.splitKeepsPanel}
+              onChange={(e) => update({ splitKeepsPanel: e.target.checked })}
+            />
+          </label>
+
           <div className="setting-section">Diagnostics</div>
 
           <div className="setting-row">

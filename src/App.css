@@ -1608,6 +1608,11 @@ body {
   height: 16px;
   accent-color: var(--accent);
   cursor: pointer;
+  /* Never give width up to the label. The two share a flex row, and a label long
+     enough to wrap asks for more room than there is, so the box shrank with it:
+     13px wide beside a two-line label, smaller than the boxes above it and out
+     of line with them. */
+  flex: 0 0 auto;
 }
 /* group heading inside the settings body (e.g. "Sound") */
 .setting-section {
