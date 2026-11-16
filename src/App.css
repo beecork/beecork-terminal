@@ -502,8 +502,16 @@ body {
 .session-rail.collapsed {
   width: 48px;
 }
+/* Expanded, the width is the user's: dragged with the divider beside the rail
+   and set inline, together with a min-width (see useRailWidth). It is also the
+   ONE side pane allowed to shrink. A remembered width can be wider than a later,
+   smaller window has room for; the terminal keeps its own min-width, so without
+   this the row overflows and the right panel's edge leaves the window. Shrinking
+   only changes what is drawn — the remembered width comes back with the space.
+   No border here: the divider draws the edge, exactly as on the file panel. */
 .session-rail.expanded {
-  width: 200px;
+  flex-shrink: 1;
+  border-right: none;
 }
 
 .rail-top {
@@ -830,6 +838,10 @@ body {
   cursor: pointer;
   font-size: 13px;
   white-space: nowrap;
+  /* A <button> centres its text, and the label stretches to fill the row — so
+     "Settings" sat mid-rail rather than beside its gear. Barely visible at
+     200px; in a rail dragged wide it drifts far from its own icon. */
+  text-align: left;
 }
 .rail-gear:hover {
   background: var(--hover);
@@ -847,7 +859,15 @@ body {
 /* ---- terminals stack ---- */
 .terminals {
   position: relative;
-  flex: 1 1 auto;
+  /* Basis 0, not auto. It takes whatever the side panes leave either way; the
+     difference only shows when they leave too little. With `auto`, a SPLIT
+     view's basis is its pane headers' content width (several hundred px), and
+     flexbox then splits the shortfall between this and the shrinkable rail in
+     proportion — the rail is drawn narrower than the width the drag just set,
+     while the terminal is still well above its minimum. From 0 it sits on its
+     min-width and only then does the rail give way.
+     The min-width is mirrored by TERMINALS_MIN_WIDTH (lib/useRailWidth.ts). */
+  flex: 1 1 0;
   min-width: 200px;
   overflow: hidden;
   background: var(--term-bg, var(--bg));

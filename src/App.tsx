@@ -25,6 +25,7 @@ import { basename } from "./lib/paths";
 import { ptyCd, ptyInsertPaths, setWatchRoot } from "./lib/api";
 import { usePersistedState } from "./lib/persist";
 import { useDrag } from "./lib/useDrag";
+import { useRailWidth, paneRoom } from "./lib/useRailWidth";
 import { initNotifications } from "./lib/notify";
 import * as sound from "./lib/sound";
 import { useSettings, zoomFont, type Surface } from "./lib/settings";
@@ -423,9 +424,21 @@ export default function App() {
     cursor: "col-resize",
     onMove: (e) => {
       const w = window.innerWidth - e.clientX;
-      setPanelWidth(Math.min(Math.max(w, 240), window.innerWidth - 360));
+      // Never wider than the terminal can pay for. The fixed 360 below only
+      // covers a COLLAPSED rail: with the rail expanded, the panel could be
+      // dragged until the terminal hit its min-width, the row overflowed, and
+      // the panel's own right edge — its Refresh and Collapse buttons — left
+      // the window. `panelWidth` and the measured terminal come from the same
+      // committed render, so their sum is the fixed stretch the two share.
+      const terminals = terminalsRef.current?.getBoundingClientRect().width;
+      const room = terminals === undefined ? Infinity : paneRoom(panelWidth, terminals);
+      setPanelWidth(Math.min(Math.max(w, 240), window.innerWidth - 360, room));
     },
   });
+
+  // The expanded rail is as wide as the user drags it (remembered; the collapsed
+  // rail stays a fixed strip). Same divider as the file panel's, mirrored.
+  const [railWidth, startRailDrag] = useRailWidth(terminalsRef);
 
   return (
     <div className="app-root">
@@ -479,6 +492,7 @@ export default function App() {
           wantsYou={wantsYou}
           busy={busy}
           expanded={railExpanded}
+          width={railWidth}
           onSelect={(id) => {
             const switching = id !== activeId;
             setActiveId(id);
@@ -505,6 +519,12 @@ export default function App() {
           onRenameDivider={renameDivider}
           onRemoveDivider={removeDivider}
         />
+        {/* Directly after the rail: the drag measures the element before it. */}
+        {railExpanded && (
+          <div className="divider" onMouseDown={startRailDrag}>
+            <span className="divider-grip" />
+          </div>
+        )}
 
         <div className={`terminals${split ? " split" : ""}`} ref={terminalsRef}>
           {terminalOrder.map((s) => {
