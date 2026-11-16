@@ -657,8 +657,21 @@ body {
 .rail-marks {
   display: flex;
   flex-direction: column;
-  gap: 1px;
-  align-self: stretch;
+  /* The height and the gap are arithmetic, not taste: 22 + 2 is 24, which 1, 2,
+     3 and 4 all divide, so however many marks a session has, every segment is a
+     whole number of pixels — 22, 10, 6 or 4. A stripe stretched to the row's
+     content with a 1px gap gave four marks 3.75px each, drawn 4, 4, 3, 4: one
+     colour a quarter smaller than its neighbours, and never the same one twice
+     as the count changed. */
+  height: 22px;
+  gap: 2px;
+  /* That is taller than the row's content, so it borrows from the row's own
+     padding rather than grow the row: the negative margins make the stripe
+     count for 8px — the dot's height, which every row has anyway — and `center`
+     sets it mid-row. */
+  align-self: center;
+  margin-top: -7px;
+  margin-bottom: -7px;
   /* Width and right margin add up to 6px, as they always have: a wider stripe
      takes the room from its own margin and moves nothing else in the row. */
   width: 4px;
