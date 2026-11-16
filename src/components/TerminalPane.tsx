@@ -5,7 +5,14 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import { SearchAddon } from "@xterm/addon-search";
 import { invoke, Channel } from "@tauri-apps/api/core";
 import { getRoot, revealPath, openUrl, type PtyEvent } from "../lib/api";
-import { useSettings, zoomFont, SMOOTH_SCROLL_MS, type Theme, type Surface } from "../lib/settings";
+import {
+  useSettings,
+  zoomFont,
+  shellRequest,
+  SMOOTH_SCROLL_MS,
+  type Theme,
+  type Surface,
+} from "../lib/settings";
 import {
   decodeBase64,
   isAbsolute,
@@ -620,7 +627,9 @@ export default function TerminalPane({
         id: sessionId,
         cwd,
         onEvent: channel,
-        shell: null,
+        // Read through lookRef, not a prop: `spawn` is built once per mount, and
+        // a restart must honour the shell chosen in Settings since then.
+        shell: shellRequest(lookRef.current.settings),
         cols: term.cols,
         rows: term.rows,
       })

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { revealPath } from "../lib/api";
+import { revealPath, openUrl, shellInfo, type ShellInfo } from "../lib/api";
 import { diagInfo, type DiagInfo } from "../lib/diag";
 import {
   useSettings,
@@ -11,11 +11,19 @@ import {
 } from "../lib/settings";
 import * as sound from "../lib/sound";
 
+/** Microsoft's install page for PowerShell 7 on Windows. */
+const PWSH_INSTALL_URL =
+  "https://learn.microsoft.com/powershell/scripting/install/installing-powershell-on-windows";
+
 export default function SettingsModal({ onClose }: { onClose: () => void }) {
   const { settings, themes, update } = useSettings();
   const [diag, setDiag] = useState<DiagInfo | null>(null);
+  // Asked of Rust rather than guessed from the user agent: only Rust knows what
+  // is installed. Null until it answers (or off-Tauri), which hides the section.
+  const [shell, setShell] = useState<ShellInfo | null>(null);
   useEffect(() => {
     diagInfo().then(setDiag).catch(() => {});
+    shellInfo().then(setShell).catch(() => {});
   }, []);
 
   async function pickFolder() {
@@ -144,6 +152,61 @@ export default function SettingsModal({ onClose }: { onClose: () => void }) {
               onChange={(e) => update({ smoothScroll: e.target.checked })}
             />
           </label>
+
+          {shell?.windows && (
+            <>
+              <div className="setting-section">Shell</div>
+
+              <div className="setting-row">
+                <span className="setting-label">
+                  What new terminals open with — choose one. Terminals already open keep
+                  theirs.
+                </span>
+                <div className="folder-row">
+                  <button
+                    className={`btn ${settings.windowsShell === "powershell" ? "primary" : "ghost"}`}
+                    aria-pressed={settings.windowsShell === "powershell"}
+                    onClick={() => update({ windowsShell: "powershell" })}
+                  >
+                    PowerShell
+                  </button>
+                  <button
+                    className={`btn ${settings.windowsShell === "cmd" ? "primary" : "ghost"}`}
+                    aria-pressed={settings.windowsShell === "cmd"}
+                    onClick={() => update({ windowsShell: "cmd" })}
+                  >
+                    Command Prompt
+                  </button>
+                </div>
+              </div>
+
+              {/* Shown when PowerShell 7 is not what runs — and then for BOTH choices,
+                  dimmed for Command Prompt the way the Sound rows dim. Nothing in
+                  this section may come and go with the choice itself: a line that
+                  did ("Using PowerShell 7.") made the whole window change height on
+                  every click of the two buttons. */}
+              {!shell.pwsh && (
+                <div
+                  className={`setting-row setting-row-inline${
+                    settings.windowsShell === "powershell" ? "" : " setting-disabled"
+                  }`}
+                >
+                  <span className="setting-label">
+                    PowerShell here is {shell.default_name}, the older one that comes with
+                    Windows. PowerShell 7 is the current version: once it is installed,
+                    Beecork uses it automatically (restart Beecork after installing).
+                  </span>
+                  <button
+                    className="btn ghost"
+                    title="Open Microsoft's PowerShell 7 install page"
+                    onClick={() => void openUrl(PWSH_INSTALL_URL).catch(() => {})}
+                  >
+                    Get PowerShell 7…
+                  </button>
+                </div>
+              )}
+            </>
+          )}
 
           <div className="setting-section">Sound</div>
 

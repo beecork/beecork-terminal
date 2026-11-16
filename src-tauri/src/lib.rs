@@ -3,6 +3,7 @@ mod diag;
 mod fs;
 mod git;
 mod pty;
+mod shell;
 mod sound;
 mod watcher;
 
@@ -67,6 +68,12 @@ pub fn run() {
 
             let handle = app.handle().clone();
             std::thread::spawn(move || watcher::watch_project(handle));
+            // Resolve the default shell (a PATH walk on Windows) now, off the
+            // IPC thread, so the first `pty_spawn` — a sync command — finds it
+            // cached. See `shell::default_candidates`.
+            std::thread::spawn(|| {
+                let _ = shell::default_candidates();
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -77,6 +84,7 @@ pub fn run() {
             pty::pty_resize,
             pty::pty_kill,
             pty::pty_status_all,
+            shell::shell_info,
             sound::play_sound,
             fs::get_root,
             fs::home_dir,

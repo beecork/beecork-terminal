@@ -25,6 +25,21 @@ read it before changing that mechanism.
   keyed on `ShellKind`. Never emit POSIX single quotes unconditionally; cmd takes
   them literally. The webview must not make this decision — it can only guess
   from a user-agent string, and "Windows" is two incompatible shells.
+- **Windows sessions run PowerShell — and a bare PowerShell breaks two things**
+  (`shell.rs`). The default chain is `pwsh` 7 (PATH, absolute entries only, then
+  Program Files) → Windows PowerShell 5.1 by absolute path → `COMSPEC`; each is
+  tried until one starts, so a broken pwsh degrades instead of bricking the pane.
+  Settings' "Command Prompt" sends `shell: "cmd"`, which Rust maps to `COMSPEC`.
+  `POWERSHELL_HOOK` runs via `-NoExit -Command`, after the user's profile:
+  (1) `Set-Location` never moves the PROCESS cwd, which is what the status poll
+  reads — the hook wraps `prompt` and copies `$PWD` into it, or the file panel and
+  git status freeze on the start folder (it restores `$?` for the user's prompt);
+  (2) 5.1's untouched default policy is `Restricted`, and npm/npx/pnpm/yarn are
+  `.ps1` shims PowerShell prefers over their `.cmd` twins, so `npm` fails — only
+  when NO scope sets a policy does the session get Process-scope `RemoteSigned`.
+  The hook must stay one line with no `"` (CreateProcess quoting) — pinned. The
+  end-to-end proof, `powershell_sessions_follow_cd_and_can_run_local_scripts`, is
+  Windows-only and CI never runs it: run `cargo test` on Windows when touching it.
 - **Spawn a login shell (`-l`) on unix.** Without it `~/.zprofile` never runs,
   Homebrew never enters PATH, and CLIs report `ffmpeg`/`sox`/`gh` as missing
   though they're installed.
@@ -284,7 +299,10 @@ and no devtools — so without this file a crash report is the words "it crashed
     means claiming the id atomically under ONE guard first. The same
     serialization guarantees a `pty_kill(id)` issued before a `pty_spawn(id)`
     (HMR remount, ErrorBoundary "Try again") cannot land after it and kill the
-    fresh shell. Neither blocks: the kill+wait is detached.
+    fresh shell. Neither blocks: the kill+wait is detached. `pty_spawn`'s
+    shell lookup is a `OnceLock` warmed on a thread in `setup`
+    (`shell::default_candidates`) — keep it cached; finding pwsh walks `PATH`,
+    and one entry on a dead network share stalls the IPC thread.
 
 ## Linux (`src-tauri/src/lib.rs`, `src-tauri/src/fs.rs`)
 

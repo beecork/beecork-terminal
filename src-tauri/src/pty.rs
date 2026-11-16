@@ -71,16 +71,17 @@ struct PtyHandle {
     token: u64,
 }
 
-/// Shell families that disagree about quoting.
+/// Shell families that disagree about quoting (and, for PowerShell, about how it
+/// is launched — see `shell::launch_args`).
 #[derive(Clone, Copy, PartialEq, Debug)]
-enum ShellKind {
+pub(crate) enum ShellKind {
     Posix,
     Cmd,
     PowerShell,
 }
 
 /// Classify a shell by the basename of its program path.
-fn shell_kind(program: &str) -> ShellKind {
+pub(crate) fn shell_kind(program: &str) -> ShellKind {
     let base = basename(program).to_ascii_lowercase();
     let stem = base.strip_suffix(".exe").unwrap_or(&base);
     match stem {
@@ -116,15 +117,6 @@ fn size(cols: u16, rows: u16) -> PtySize {
         cols,
         pixel_width: 0,
         pixel_height: 0,
-    }
-}
-
-/// Platform-appropriate default shell when the webview doesn't specify one.
-fn default_shell() -> String {
-    if cfg!(target_os = "windows") {
-        std::env::var("COMSPEC").unwrap_or_else(|_| "powershell.exe".into())
-    } else {
-        std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into())
     }
 }
 
@@ -210,43 +202,9 @@ pub fn kill_by_owner(state: &PtyState, label: &str) {
     }
 }
 
-#[tauri::command]
-pub fn pty_spawn(
-    state: tauri::State<PtyState>,
-    app: AppHandle,
-    window: tauri::Window,
-    id: String,
-    on_event: Channel<PtyEvent>,
-    cwd: Option<String>,
-    shell: Option<String>,
-    cols: u16,
-    rows: u16,
-) -> Result<(), String> {
-    let owner = window.label().to_string();
-    // Replacing an existing session with this id is only legitimate when it's our
-    // OWN window remounting (dev HMR, a pane restart) — then reap and re-open it.
-    // A session with this id owned by a DIFFERENT window belongs to a window
-    // that's actively using it: reaping it would SIGHUP its shell and kill
-    // whatever's running (the ⌘N "lost Claude Code" bug). Refuse instead. The
-    // frontend already keeps ids window-local, so this only ever guards a
-    // regression, never normal use.
-    match sessions(&state).get(&id).map(|h| h.owner.clone()) {
-        Some(existing) if existing != owner => {
-            return Err(format!(
-                "session {id} is already open in another window ({existing})"
-            ));
-        }
-        _ => {}
-    }
-    take_and_reap(&state, &id);
-
-    let pty_system = native_pty_system();
-    let pair = pty_system
-        .openpty(size(cols, rows))
-        .map_err(|e| e.to_string())?;
-
-    let program = shell.unwrap_or_else(default_shell);
-    let mut cmd = CommandBuilder::new(program.clone());
+/// The command line and environment for one shell session in `dir`.
+fn shell_command(program: &str, dir: &str) -> CommandBuilder {
+    let mut cmd = CommandBuilder::new(program);
     // Spawn a LOGIN shell, exactly like Terminal.app and iTerm2 do. A
     // Finder/Dock-launched .app starts from launchd's minimal environment; only a
     // login shell sources the profile files that repair PATH — /etc/zprofile's
@@ -325,11 +283,78 @@ pub fn pty_spawn(
         let utf8 = if cfg!(target_os = "macos") { "en_US.UTF-8" } else { "C.UTF-8" };
         cmd.env("LC_CTYPE", utf8);
     }
-    let dir = cwd.unwrap_or_else(fallback_cwd);
+    // PowerShell on Windows gets the prompt hook (folder tracking + the npm
+    // execution-policy fix) — see `shell::POWERSHELL_HOOK`.
+    cmd.args(crate::shell::launch_args(program));
     cmd.cwd(dir);
+    cmd
+}
 
-    let child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
+#[tauri::command]
+pub fn pty_spawn(
+    state: tauri::State<PtyState>,
+    app: AppHandle,
+    window: tauri::Window,
+    id: String,
+    on_event: Channel<PtyEvent>,
+    cwd: Option<String>,
+    shell: Option<String>,
+    cols: u16,
+    rows: u16,
+) -> Result<(), String> {
+    let owner = window.label().to_string();
+    // Replacing an existing session with this id is only legitimate when it's our
+    // OWN window remounting (dev HMR, a pane restart) — then reap and re-open it.
+    // A session with this id owned by a DIFFERENT window belongs to a window
+    // that's actively using it: reaping it would SIGHUP its shell and kill
+    // whatever's running (the ⌘N "lost Claude Code" bug). Refuse instead. The
+    // frontend already keeps ids window-local, so this only ever guards a
+    // regression, never normal use.
+    match sessions(&state).get(&id).map(|h| h.owner.clone()) {
+        Some(existing) if existing != owner => {
+            return Err(format!(
+                "session {id} is already open in another window ({existing})"
+            ));
+        }
+        _ => {}
+    }
+    take_and_reap(&state, &id);
+
+    let pty_system = native_pty_system();
+    let pair = pty_system
+        .openpty(size(cols, rows))
+        .map_err(|e| e.to_string())?;
+
+    let dir = cwd.unwrap_or_else(fallback_cwd);
+    // Start the first candidate shell that launches (see `shell::candidates`):
+    // on Windows the default is PowerShell 7 → Windows PowerShell → cmd, so a
+    // pwsh that is on PATH but broken degrades to a working shell instead of a
+    // pane that fails on every keypress. An explicit choice is a single entry.
+    let mut failures: Vec<String> = Vec::new();
+    let mut started = None;
+    for program in crate::shell::candidates(shell.as_deref()) {
+        match pair.slave.spawn_command(shell_command(&program, &dir)) {
+            Ok(child) => {
+                started = Some((program, child));
+                break;
+            }
+            Err(e) => failures.push(format!("{program}: {e}")),
+        }
+    }
     drop(pair.slave);
+    let Some((program, child)) = started else {
+        return Err(failures.join("; "));
+    };
+    if !failures.is_empty() {
+        // Worth a line in the local log — "why is my tab cmd?" — but off this
+        // (IPC) thread, since it is file I/O.
+        let note = format!("started {program} after: {}", failures.join("; "));
+        thread::spawn(move || crate::diag::note("shell-fallback", &note));
+    }
+    if shell.is_none() {
+        // So Settings names what really runs (see `shell::shell_info`).
+        crate::shell::record_started_default(&program);
+    }
 
     // From here the child is RUNNING but is not yet in the session map, so
     // nothing else will ever reap it: an early return that merely drops `child`
@@ -936,6 +961,144 @@ mod tests {
             busy.is_some() && busy != Some(shell_pid),
             "while `sleep` runs the fg group should differ from the shell (idle={idle:?}, busy={busy:?})"
         );
+    }
+
+    // End-to-end proof of `shell::POWERSHELL_HOOK`, through a real ConPTY with
+    // the exact command line `pty_spawn` builds, for every PowerShell installed
+    // (5.1 always; 7 when present). Two promises:
+    //  1. after a `cd`, the folder the status poll reads (`statuses_for` — the
+    //     OS-level process cwd) follows it, because a bare PowerShell's never
+    //     does. The target has a space, `[ ]`, `$` and Georgian in it.
+    //  2. on a machine with no execution policy set anywhere, the session can
+    //     run local scripts (npm's `.ps1` shims); with any explicit policy, the
+    //     session leaves it alone.
+    // Windows-only: CI's Windows job only type-checks it, so run it locally.
+    #[cfg(windows)]
+    #[test]
+    fn powershell_sessions_follow_cd_and_can_run_local_scripts() {
+        use portable_pty::{native_pty_system, PtySize};
+        use std::io::{Read, Write};
+        use std::sync::{Arc, Mutex};
+        use std::time::{Duration, Instant};
+
+        let shells: Vec<String> = crate::shell::default_candidates()
+            .iter()
+            .filter(|p| super::shell_kind(p) == super::ShellKind::PowerShell)
+            .cloned()
+            .collect();
+        assert!(!shells.is_empty(), "Windows PowerShell ships with Windows");
+
+        for program in shells {
+            let tag = format!("{}-{}", std::process::id(), super::basename(&program));
+            let start = std::env::temp_dir().join(format!("beecork-ps-start-{tag}"));
+            let target = std::env::temp_dir()
+                .join(format!("beecork ps [x] $y \u{10E5}\u{10D0}\u{10E0}\u{10D7}-{tag}"));
+            std::fs::create_dir_all(&start).unwrap();
+            std::fs::create_dir_all(&target).unwrap();
+            let target_s = target.to_string_lossy().into_owned();
+
+            let pair = native_pty_system()
+                .openpty(PtySize { rows: 30, cols: 200, pixel_width: 0, pixel_height: 0 })
+                .unwrap();
+            let mut cmd = super::shell_command(&program, &start.to_string_lossy());
+            // A Process-scope policy inherited from whatever runs the tests
+            // (`powershell -ExecutionPolicy Bypass`) would mask the default case.
+            cmd.env_remove("PSExecutionPolicyPreference");
+            let mut child = pair.slave.spawn_command(cmd).unwrap();
+            drop(pair.slave);
+            let pid = child.process_id().unwrap();
+
+            let out = Arc::new(Mutex::new(String::new()));
+            let mut reader = pair.master.try_clone_reader().unwrap();
+            let sink = Arc::clone(&out);
+            std::thread::spawn(move || {
+                let mut buf = [0u8; 8192];
+                while let Ok(n) = reader.read(&mut buf) {
+                    if n == 0 {
+                        break;
+                    }
+                    sink.lock().unwrap().push_str(&String::from_utf8_lossy(&buf[..n]));
+                }
+            });
+            let mut writer = pair.master.take_writer().unwrap();
+            let mut send = |line: &str| {
+                writer.write_all(line.as_bytes()).unwrap();
+                writer.flush().unwrap();
+            };
+            // Wait for `needle` in the output. Markers are built by concatenation
+            // so the typed echo never matches — only the evaluated result does.
+            let wait_for = |needle: &str| {
+                let deadline = Instant::now() + Duration::from_secs(45);
+                while Instant::now() < deadline {
+                    if out.lock().unwrap().contains(needle) {
+                        return true;
+                    }
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+                false
+            };
+
+            send("'BCK' + '-READY'\r");
+            assert!(wait_for("BCK-READY"), "{program} never became ready");
+
+            // 1. Folder tracking, via the exact line `pty_cd` sends.
+            send(&super::cd_line(&program, &target_s));
+            let deadline = Instant::now() + Duration::from_secs(20);
+            let mut seen = None;
+            while Instant::now() < deadline {
+                let m = super::statuses_for(vec![("s".into(), pid, None)], false);
+                seen = m.get("s").and_then(|s| s.cwd.clone());
+                if seen.as_deref().map(|c| c.trim_end_matches('\\')) == Some(target_s.as_str()) {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            assert_eq!(
+                seen.as_deref().map(|c| c.trim_end_matches('\\')),
+                Some(target_s.as_str()),
+                "{program}: the polled cwd must follow Set-Location"
+            );
+
+            // 2. Execution policy. Report: how many non-Process scopes set a
+            // policy, and the Process scope's value.
+            send(
+                "$s = Get-ExecutionPolicy -List; 'BCK' + '-POL=' + \
+                 @($s | Where-Object { $_.Scope -ne 'Process' -and $_.ExecutionPolicy -ne 'Undefined' }).Count + \
+                 '=' + ($s | Where-Object { $_.Scope -eq 'Process' }).ExecutionPolicy + '=END'\r",
+            );
+            assert!(wait_for("=END"), "{program}: no policy report");
+            let text = out.lock().unwrap().clone();
+            let report = text
+                .match_indices("BCK-POL=")
+                .map(|(i, _)| &text[i + "BCK-POL=".len()..])
+                .find(|rest| rest.starts_with(|c: char| c.is_ascii_digit()))
+                .and_then(|rest| rest.split("=END").next())
+                .unwrap_or_else(|| panic!("{program}: unreadable policy report"))
+                .to_string();
+            let (set_scopes, process) = report.split_once('=').unwrap();
+            if set_scopes == "0" {
+                assert_eq!(process, "RemoteSigned", "{program}: untouched default must be relaxed");
+            } else {
+                assert_eq!(process, "Undefined", "{program}: an explicit policy must be left alone");
+            }
+
+            // Nothing the hook did may surface as an error record.
+            assert!(
+                !text.contains("CategoryInfo"),
+                "{program}: the hook printed an error:\n{text}"
+            );
+
+            let _ = child.kill();
+            let _ = child.wait();
+            // The process held `target` as its cwd; give Windows a moment to let go.
+            for _ in 0..20 {
+                if std::fs::remove_dir_all(&target).is_ok() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            let _ = std::fs::remove_dir_all(&start);
+        }
     }
 
     #[test]

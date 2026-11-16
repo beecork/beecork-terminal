@@ -1603,6 +1603,11 @@ body {
   align-items: center;
   justify-content: space-between;
 }
+/* the label wraps, the button never does ("Get PowerShell 7…" broke over three lines) */
+.setting-row-inline .btn {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
 .setting-check {
   width: 16px;
   height: 16px;

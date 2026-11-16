@@ -164,6 +164,21 @@ export interface Settings {
   treeDiff: boolean;
   /** show line diffs vs HEAD in the editor (auto-diff + per-file Diff/Edit toggle) */
   editorDiff: boolean;
+  /** Windows only: what a new terminal runs. Rust resolves the actual program
+   *  (PowerShell 7 if installed, else Windows PowerShell; `COMSPEC` for cmd) —
+   *  see `shell.rs`. Ignored on macOS/Linux. */
+  windowsShell: WindowsShell;
+}
+
+export type WindowsShell = "powershell" | "cmd";
+
+/**
+ * The `shell` argument `pty_spawn` gets for these settings: `"cmd"` is the one
+ * shell NAME the backend understands (it maps it to `COMSPEC`, and ignores it
+ * off Windows); `null` is the platform default, which on Windows is PowerShell.
+ */
+export function shellRequest(s: Pick<Settings, "windowsShell">): string | null {
+  return s.windowsShell === "cmd" ? "cmd" : null;
 }
 
 export const MIN_FONT = 9;
@@ -189,6 +204,7 @@ const DEFAULTS: Settings = {
   keyClicks: true,
   treeDiff: true,
   editorDiff: true,
+  windowsShell: "powershell",
 };
 
 const STORAGE_KEY = "beecork.settings";
@@ -203,6 +219,11 @@ function load(): Settings {
       if (parsed.terminalFontSize == null) parsed.terminalFontSize = parsed.fontSize;
       if (parsed.editorFontSize == null) parsed.editorFontSize = parsed.fontSize;
       delete parsed.fontSize;
+    }
+    // Only two shells exist; anything else (a hand-edited value, a future build's
+    // choice after a downgrade) means the default, not a spawn of something odd.
+    if (parsed.windowsShell !== "powershell" && parsed.windowsShell !== "cmd") {
+      delete parsed.windowsShell;
     }
     return { ...DEFAULTS, ...parsed };
   } catch {
