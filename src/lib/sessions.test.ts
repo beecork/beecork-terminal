@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   displayName,
+  nameFromTitle,
   wantsAttention,
   resumeCommand,
   isResumableAgent,
@@ -47,6 +48,74 @@ describe("displayName", () => {
 
   it("handles a root cwd", () => {
     expect(displayName({ ...base, cwd: "/" })).toBe("/");
+  });
+});
+
+// Every title below is a real capture from ConPTY on Windows 11, not a guess at
+// a format — the doubled space after the command's first word included.
+describe("nameFromTitle", () => {
+  const CMD = "C:\\WINDOWS\\system32\\cmd.exe";
+
+  it("counts a console's placeholder — the path of its shell — as no title", () => {
+    for (const placeholder of [
+      CMD,
+      "C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+      "C:\\Program Files\\WindowsApps\\Microsoft.PowerShell_7.7.0.0_x64__8wekyb3d8bbwe\\pwsh.exe",
+    ]) {
+      expect(nameFromTitle(placeholder)).toBe("");
+    }
+    // Not captured, but the same thing by construction: a shell on a share, a
+    // path spelled with forward slashes, one with ` - ` in a folder name.
+    expect(nameFromTitle("\\\\server\\tools\\nu.exe")).toBe("");
+    expect(nameFromTitle("c:/tools/nu.exe")).toBe("");
+    expect(nameFromTitle("C:\\My - Tools\\cmd.exe")).toBe("");
+  });
+
+  // The point of the whole function: with the placeholder gone, `displayName`
+  // reaches the folder — on Windows it never did.
+  it("so a session at its prompt is named after its folder", () => {
+    const s: Session = { id: "1", name: "Session 1", cwd: "C:\\Users\\me\\project" };
+    expect(displayName({ ...s, dynamic: CMD })).toBe(CMD);
+    expect(displayName({ ...s, dynamic: nameFromTitle(CMD) || undefined })).toBe("project");
+  });
+
+  it("keeps the command cmd appends to its placeholder while one runs", () => {
+    expect(nameFromTitle(`${CMD} - ping  -n 3 localhost`)).toBe("ping  -n 3 localhost");
+    // The path ends at the FIRST `.exe` a command can follow, so a command that
+    // names an executable of its own survives whole.
+    expect(nameFromTitle(`${CMD} - C:\\tools\\build.exe - fast`)).toBe("C:\\tools\\build.exe - fast");
+  });
+
+  it("lets through every title somebody chose", () => {
+    for (const chosen of [
+      "My Work", // cmd's `title My Work`…
+      "My Work - ping  -n 2 localhost", // …and what cmd makes of it while a command runs
+      "✳ Claude Code",
+      "~/project",
+      "MINGW64:/c/Users/me",
+      "C:\\Users\\me\\project", // a folder, not a program
+      "cmd.exe", // a bare name is not a path
+      "C:\\notes.exe.txt - Notepad", // `.exe` in the middle of a name ends nothing
+    ]) {
+      expect(nameFromTitle(chosen)).toBe(chosen);
+    }
+  });
+
+  // Windows puts this prefix on an elevated console's title itself. Dropping
+  // the placeholder here would drop the only sign on the tab that it is elevated.
+  it("leaves an elevated console's title alone", () => {
+    const elevated = `Administrator: ${CMD}`;
+    expect(nameFromTitle(elevated)).toBe(elevated);
+  });
+
+  // A title is terminal output — hostile input — and xterm lets one run to
+  // megabytes. Without the `s` flag this one is rescanned from every `.exe` in
+  // it: seconds here, and minutes at the size a program can really send.
+  it("is not slowed down by a title built to backtrack", () => {
+    const hostile = "C:\\" + ".exe - x".repeat(20_000) + "\u2028y";
+    const started = performance.now();
+    nameFromTitle(hostile);
+    expect(performance.now() - started).toBeLessThan(1000);
   });
 });
 

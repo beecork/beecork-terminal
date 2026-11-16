@@ -16,7 +16,7 @@ import {
   splitFileLine,
   parseOsc7,
 } from "../lib/paths";
-import { resumeCommand } from "../lib/sessions";
+import { nameFromTitle, resumeCommand } from "../lib/sessions";
 import { useContextMenu } from "../lib/useContextMenu";
 import { copyText, readText } from "../lib/clipboard";
 import { clipboardKeyAction } from "../lib/termKeys";
@@ -666,8 +666,10 @@ export default function TerminalPane({
       // and cap the length before it reaches the session/window title. The
       // control characters in this class are the point, not an accident.
       // eslint-disable-next-line no-control-regex
-      const clean = t.replace(/[\u0000-\u001f\u007f]/g, "").slice(0, 120);
-      cbRef.current.onTitle(sessionId, clean);
+      const clean = t.replace(/[\u0000-\u001f\u007f]/g, "");
+      // The name is taken BEFORE the cap: a console's placeholder title is
+      // recognised by how it ends, and a long path cut at 120 no longer ends.
+      cbRef.current.onTitle(sessionId, nameFromTitle(clean).slice(0, 120));
     });
 
     // OSC 7: shells with integration push their cwd instantly.

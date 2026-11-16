@@ -16,6 +16,8 @@ type TermLink = {
 };
 type LinkProvider = { provideLinks(y: number, cb: (links?: TermLink[]) => void): void };
 let provider: LinkProvider | null = null;
+// What the pane subscribed to xterm's title event with, so a test can fire it.
+let titleChanged: ((title: string) => void) | null = null;
 
 // The link provider reads the BUFFER, not one string: a long path wraps and has
 // to be rejoined across rows, so the fake buffer has to be able to wrap. Rows
@@ -103,7 +105,8 @@ vi.mock("@xterm/xterm", () => {
     onBell() {
       return { dispose: () => {} };
     }
-    onTitleChange() {
+    onTitleChange(cb: (title: string) => void) {
+      titleChanged = cb;
       return { dispose: () => {} };
     }
     onData() {
@@ -481,5 +484,45 @@ describe("clicked-path resolution", () => {
       x: ((WRAPPED.length - 1 - 1) % TEST_COLS) + 1,
       y: bufferRows.length,
     });
+  });
+});
+
+// A title reaches the session through one handler, and what happens to it there
+// happens in an order that matters: control characters out, the console's
+// placeholder dropped, and only THEN the cap.
+describe("terminal title", () => {
+  beforeEach(() => {
+    invoke.mockClear();
+    terminals.length = 0;
+    titleChanged = null;
+  });
+
+  /** What the session is told when the terminal reports `raw` as its title. */
+  async function named(raw: string) {
+    const onTitle = vi.fn();
+    render(
+      <SettingsProvider>
+        <TerminalPane {...props} visible onTitle={onTitle} />
+      </SettingsProvider>
+    );
+    await flushFrame();
+    titleChanged!(raw);
+    return onTitle.mock.calls[onTitle.mock.calls.length - 1];
+  }
+
+  // On Windows every tab was named `C:\WINDOWS\system32\cmd.exe`.
+  it("reports a console's placeholder title as no title at all", async () => {
+    expect(await named("C:\\WINDOWS\\system32\\cmd.exe")).toEqual(["s1", ""]);
+  });
+
+  // The placeholder is known by how it ends. Capped first, a path this long has
+  // lost its ending, and the tab is named after 120 characters of AppData.
+  it("recognises a placeholder that is longer than the cap", async () => {
+    const long = `C:\\Users\\${"a".repeat(120)}\\AppData\\Local\\Microsoft\\WindowsApps\\pwsh.exe`;
+    expect(await named(long)).toEqual(["s1", ""]);
+  });
+
+  it("still strips control characters from, and caps, a title a program chose", async () => {
+    expect(await named(`build\u0007 ${"x".repeat(200)}`)).toEqual(["s1", `build ${"x".repeat(114)}`]);
   });
 });

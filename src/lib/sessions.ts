@@ -137,6 +137,29 @@ export function resumeCommand(agent: string, sessionId?: string): string | null 
   return sessionId ? withId[agent](sessionId) : latest[agent];
 }
 
+/** The name a terminal title gives a session — "" when it gives none.
+ *
+ *  A Windows console is never untitled. Until a program sets a title it reports
+ *  the path of the program it hosts (`C:\WINDOWS\system32\cmd.exe`, or
+ *  PowerShell's), and cmd appends ` - <command>` to that while one runs. The
+ *  path is a placeholder, not a title — but `displayName` ranks ANY title above
+ *  the folder, so on Windows every tab was named after its shell and none after
+ *  where it was. So the placeholder counts as no title, which lets the folder
+ *  name the tab, and of cmd's form only the command is kept.
+ *
+ *  Everything else passes through untouched — including an elevated console's
+ *  `Administrator: C:\…\cmd.exe`, where that prefix is the only sign on the tab
+ *  that it is elevated.
+ *
+ *  The `s` flag is not decoration. A title is terminal output, so hostile
+ *  input, and xterm lets one run to megabytes: without it `(.+)` stops at a
+ *  U+2028, `$` fails, and a title built of repeated `.exe - x` is rescanned
+ *  from every one of them — quadratic, on the UI thread. */
+export function nameFromTitle(title: string): string {
+  const placeholder = /^(?:[a-z]:[\\/]|\\\\).*?\.exe(?: - (.+))?$/is.exec(title.trim());
+  return placeholder ? (placeholder[1] ?? "") : title;
+}
+
 /** Priority: your rename → terminal title → running tool → folder → base name. */
 export function displayName(s: Session): string {
   return s.custom || s.dynamic || s.running || (s.cwd ? basename(s.cwd) : "") || s.name;
