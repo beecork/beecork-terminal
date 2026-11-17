@@ -2,8 +2,10 @@ import { describe, it, expect } from "vitest";
 import {
   isModifierOnly,
   isSelectionKey,
+  keySelErase,
   keySelPress,
   keySelRange,
+  keySelReplaces,
   keySelSync,
   KEY_SEL_FOLLOW_MS,
   type KeySel,
@@ -30,6 +32,11 @@ class Screen implements KeySelScreen {
   rows: string[] = [];
   /** cells whose background is not the default, by offset */
   painted = new Map<number, string>();
+  /** cells that hold something other than one character of their row's text:
+   *  "" for the second cell of a wide character, or a cell's whole content */
+  special = new Map<number, string>();
+  /** rows the terminal wrapped onto: they carry on the row above */
+  wraps = new Set<number>();
   row = 0;
   col = 0;
 
@@ -44,7 +51,16 @@ class Screen implements KeySelScreen {
     return this.row * this.cols + this.col;
   }
   cell(offset: number) {
+    const special = this.special.get(offset);
+    if (special !== undefined) return special;
     return (this.rows[Math.floor(offset / this.cols)] ?? "").charAt(offset % this.cols);
+  }
+  width(offset: number) {
+    if (this.special.get(offset) === "") return 0;
+    return this.special.get(offset + 1) === "" ? 2 : 1;
+  }
+  wrapped(offset: number) {
+    return this.wraps.has(Math.floor(offset / this.cols));
   }
   backdrop(offset: number) {
     return this.painted.get(offset) ?? "default";
@@ -71,6 +87,21 @@ class Screen implements KeySelScreen {
   }
   at(row: number, col: number) {
     return row * this.cols + col;
+  }
+  /** The character at (row, col) is a wide one: the next cell is its second. */
+  wide(row: number, col: number) {
+    this.special.set(this.at(row, col + 1), "");
+    return this;
+  }
+  /** The cell at (row, col) holds `chars` — more than one UTF-16 unit, say. */
+  holds(row: number, col: number, chars: string) {
+    this.special.set(this.at(row, col), chars);
+    return this;
+  }
+  /** The terminal wrapped the text onto `row`. */
+  wrapOnto(row: number) {
+    this.wraps.add(row);
+    return this;
   }
   /** The text a selection covers on its (single) row. */
   text(sel: KeySel | null) {
@@ -481,5 +512,149 @@ describe("the next selection key", () => {
     const next = keySelPress(null, s, 10); // …and selects again
     expect(next.seen).not.toBe(first.seen);
     expect(s.text(answer(s, next, 5, 16, 11).sel)).toBe("s");
+  });
+});
+
+describe("keys that replace a selection", () => {
+  it("are Delete and Backspace, which remove it", () => {
+    expect(keySelReplaces(key("Delete"))).toBe("erase");
+    expect(keySelReplaces(key("Backspace"))).toBe("erase");
+  });
+
+  it("are typed characters, which take its place", () => {
+    for (const k of ["a", "Z", " ", "7", "/", "\u10db"]) {
+      expect(keySelReplaces(key(k)), JSON.stringify(k)).toBe("type");
+    }
+    // Shift is how a capital is typed.
+    expect(keySelReplaces(key("A", { shiftKey: true }))).toBe("type");
+  });
+
+  // These are commands of the program (delete a word, cut, kill the line), or
+  // not characters at all. They end the selection and go on alone, as before.
+  it("are nothing with Ctrl, Alt or Meta held, and no key that types nothing", () => {
+    expect(keySelReplaces(key("Backspace", { ctrlKey: true }))).toBeNull();
+    expect(keySelReplaces(key("Delete", { ctrlKey: true }))).toBeNull();
+    expect(keySelReplaces(key("Delete", { shiftKey: true }))).toBeNull(); // "cut"
+    expect(keySelReplaces(key("d", { altKey: true }))).toBeNull();
+    expect(keySelReplaces(key("v", { ctrlKey: true }))).toBeNull();
+    expect(keySelReplaces(key("a", { metaKey: true }))).toBeNull();
+    // AltGr reports Ctrl and Alt both.
+    expect(keySelReplaces(key("@", { ctrlKey: true, altKey: true }))).toBeNull();
+    for (const k of ["Enter", "Tab", "Escape", "ArrowLeft", "Home", "F5", "Dead", "Process"]) {
+      expect(keySelReplaces(key(k)), k).toBeNull();
+    }
+  });
+});
+
+describe("deleting the selected text", () => {
+  const DEL = "\x1b[3~";
+  const BS = "\x7f";
+
+  /** "Molecule" at the prompt with `n` characters selected leftwards from its
+   *  end: the cursor is at the selection's start. */
+  function selectedLeft(s: Screen, row: number, endCol: number, n: number) {
+    s.to(row, endCol);
+    return answer(s, keySelPress(null, s, 0), row, endCol - n).sel!;
+  }
+
+  // "hello Molecule" with "cule" selected became "hello Moleule": the program
+  // has no selection, so Delete was one ordinary delete to it.
+  it("is forward deletes when the cursor is at the selection's start", () => {
+    const s = prompt("Molecule");
+    const sel = selectedLeft(s, 5, 16, 4);
+    expect(s.text(sel)).toBe("cule");
+    expect(keySelErase(sel, s)).toBe(DEL.repeat(4));
+  });
+
+  it("is backspaces when the cursor is at its end", () => {
+    const s = prompt("Molecule").to(5, 8);
+    const sel = answer(s, keySelPress(null, s, 0), 5, 12).sel!;
+    expect(s.text(sel)).toBe("Mole");
+    expect(keySelErase(sel, s)).toBe(BS.repeat(4));
+  });
+
+  it("is nothing when nothing is selected", () => {
+    const s = prompt("Molecule");
+    expect(keySelErase(keySelPress(null, s, 0), s)).toBeNull();
+  });
+
+  // Deleting starts from the cursor. One that has gone elsewhere (a click the
+  // program took, a paste) would delete other text than the highlighted.
+  it("is nothing when the cursor is no longer at the head", () => {
+    const s = prompt("Molecule");
+    const sel = selectedLeft(s, 5, 16, 4);
+    s.to(5, 9);
+    expect(keySelErase(sel, s)).toBeNull();
+  });
+
+  it("is nothing when the text is not what the selection key saw", () => {
+    const s = prompt("Molecule");
+    const sel = selectedLeft(s, 5, 16, 4);
+    s.put(5, "C:\\dir> Molepqrs");
+    expect(keySelErase(sel, s)).toBeNull();
+  });
+
+  // PowerShell replaces its own selection on the same key. Deletes on top of
+  // that would take the text beside it.
+  it("is nothing where the program painted a selection of its own", () => {
+    const s = prompt("Molecule");
+    const sel = selectedLeft(s, 5, 16, 4);
+    s.paint(5, 12, 16);
+    expect(keySelErase(sel, s)).toBeNull();
+  });
+
+  it("counts a wide character once, though it takes two cells", () => {
+    // "ab" + a wide character over cells 10 and 11 + "cd"
+    const s = prompt("abW cd").wide(5, 10);
+    const sel = selectedLeft(s, 5, 14, 4); // cells 10..13: the wide one, "c", "d"
+    expect(keySelRange(sel)!.length).toBe(4);
+    expect(keySelErase(sel, s)).toBe(DEL.repeat(3));
+  });
+
+  // An emoji is two UTF-16 units in one cell; a letter with a combining mark,
+  // more. Whether that is one press of Delete or two depends on the program.
+  it("is nothing when a cell holds more than one UTF-16 unit", () => {
+    const s = prompt("Molecule").holds(5, 13, "\ud83d\ude00");
+    const sel = selectedLeft(s, 5, 16, 4);
+    expect(keySelErase(sel, s)).toBeNull();
+  });
+
+  describe("across rows", () => {
+    /** A line that fills row 5 and carries on, on row 6, with "tail". */
+    function twoRows() {
+      const s = new Screen();
+      s.put(5, "C:\\dir> " + "x".repeat(COLS - 8)).put(6, "tail");
+      return s;
+    }
+
+    it("counts straight through where the terminal wrapped the line", () => {
+      const s = twoRows().wrapOnto(6);
+      const sel = selectedLeft(s, 6, 4, 7); // "xxx" + "tail"
+      expect(keySelRange(sel)).toEqual({ start: s.at(5, COLS - 3), length: 7 });
+      expect(keySelErase(sel, s)).toBe(DEL.repeat(7));
+    });
+
+    // An agent's input box breaks its own lines, at words and with an indent:
+    // there the cells between two ends are not the characters between them.
+    it("is nothing where the program broke the line itself", () => {
+      const s = twoRows();
+      const sel = selectedLeft(s, 6, 4, 7);
+      expect(keySelErase(sel, s)).toBeNull();
+    });
+
+    it("is nothing when the selection takes in cells nothing was written to", () => {
+      // "word" ends short of the edge; the box carries on below, indented.
+      const s = new Screen();
+      s.put(5, "> some word").put(6, "  next").wrapOnto(6);
+      s.to(6, 6);
+      const sel = answer(s, keySelPress(null, s, 0), 5, 7).sel!;
+      expect(keySelErase(sel, s)).toBeNull();
+    });
+
+    it("still deletes a selection that only reaches the start of its row", () => {
+      const s = twoRows(); // row 6 is not marked as wrapped
+      const sel = selectedLeft(s, 6, 4, 4); // "tail": no row boundary inside it
+      expect(keySelErase(sel, s)).toBe(DEL.repeat(4));
+    });
   });
 });

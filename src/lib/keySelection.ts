@@ -46,6 +46,17 @@
 // Positions are LINEAR buffer offsets (row * cols + col, rows counted from the
 // top of the buffer), so a selection runs across a wrapped line the same way
 // the cursor does.
+//
+// REPLACING IT. In an editor Delete or Backspace removes the selection and a
+// typed character takes its place. A program with no selection knows nothing of
+// that: Delete reached it as one ordinary delete ("hello Molecule" with "cule"
+// selected became "hello Moleule") and the highlight just went away. So for
+// those keys the terminal first sends the program the deletes that remove the
+// selected text — forward deletes when its cursor is at the selection's start,
+// backspaces when it is at the end — and only then, for a typed character, the
+// key itself. This is the one place the terminal sends keys nobody pressed, so
+// it does so only when it can vouch for every one of them (`keySelErase`), and
+// otherwise changes nothing: the key goes to the program as it always did.
 
 type KeyLike = Pick<KeyboardEvent, "key" | "ctrlKey" | "shiftKey" | "altKey" | "metaKey">;
 
@@ -60,6 +71,19 @@ export function isSelectionKey(e: KeyLike): boolean {
  *  not end a keyboard selection that's in progress. */
 export function isModifierOnly(e: Pick<KeyboardEvent, "key">): boolean {
   return e.key === "Shift" || e.key === "Control" || e.key === "Alt" || e.key === "Meta";
+}
+
+/** Does this key replace a selection, in an editor? Delete and Backspace remove
+ *  it ("erase"); a typed character goes in its place ("type"). Unmodified keys
+ *  only — Ctrl+Backspace, Alt+D and the like are the program's own commands, and
+ *  Shift+Delete is "cut" to anything that knows the chord. (AltGr reports Ctrl
+ *  and Alt both held, so a character typed with it is left alone as well: it
+ *  ends the selection and is inserted, as before.) A key being composed by an
+ *  input method names itself "Process" or "Dead" and is not a character yet. */
+export function keySelReplaces(e: KeyLike): "erase" | "type" | null {
+  if (e.ctrlKey || e.altKey || e.metaKey) return null;
+  if (e.key === "Delete" || e.key === "Backspace") return e.shiftKey ? null : "erase";
+  return e.key.length === 1 ? "type" : null;
 }
 
 /** How long after a selection key a cursor move still counts as the program's
@@ -85,6 +109,12 @@ export interface KeySelScreen {
   cursor: number;
   /** the characters in the cell at `offset` — "" when it holds none */
   cell(offset: number): string;
+  /** how many cells the character at `offset` takes: 2 for a wide one, whose
+   *  second cell answers 0; 1 for any other cell, written or not */
+  width(offset: number): number;
+  /** does the row holding `offset` carry on the row above it — the TERMINAL
+   *  wrapped the text there; no line break and no cursor move put it there? */
+  wrapped(offset: number): boolean;
   /** the cell's background, as any value two equal backgrounds share: colour
    *  and whether it is drawn inverse. Not its text colour — a program recolours
    *  text as you type, but only a selection changes what is behind it. */
@@ -254,4 +284,42 @@ export function keySelSync(
   // Once the screen has settled, redraw whatever the verdict: the highlight was
   // taken off while waiting.
   return { sel: next, redraw: settled || next !== sel, wait: false };
+}
+
+/** The keys that delete, as the terminal sends them when they are pressed. */
+const ERASE_KEYS = { backspace: "\x7f", delete: "\x1b[3~" } as const;
+
+/**
+ * What to send the program so that IT deletes the selected text — or null when
+ * that cannot be vouched for, and the key must go on alone as it always did.
+ * Deleting too much is the one thing this must never do, so everything here is
+ * a reason to answer null:
+ *
+ *  - nothing is selected, or the text is not what the last selection key saw,
+ *    or the program has painted a selection of its own since (it will replace
+ *    that itself — deletes on top would take the text beside it);
+ *  - the program's cursor is not at the head. Deleting starts from the cursor,
+ *    and only a cursor at one end of the selection deletes exactly it;
+ *  - a cell holds no character, or more than one UTF-16 unit (an emoji, a
+ *    letter with a combining mark). One cell is then not one press of a delete
+ *    key in every program, and there is no telling which this one is;
+ *  - the selection runs onto a row the terminal did not wrap by itself. An
+ *    agent's input box breaks its own lines, at words and with an indent, so
+ *    there the cells between two ends are not the characters between them.
+ */
+export function keySelErase(sel: KeySel, screen: KeySelScreen): string | null {
+  const range = keySelRange(sel);
+  if (!range || screen.cursor !== sel.head) return null;
+  if (!unchanged(screen, sel, range.start, range.length) || repainted(screen, sel, range)) {
+    return null;
+  }
+  let presses = 0;
+  for (let at = range.start; at < range.start + range.length; at++) {
+    if (at > range.start && at % screen.cols === 0 && !screen.wrapped(at)) return null;
+    if (screen.width(at) === 0) continue; // the second cell of a wide character
+    if (screen.cell(at).length !== 1) return null;
+    presses++;
+  }
+  if (presses === 0) return null;
+  return ERASE_KEYS[sel.head < sel.anchor ? "delete" : "backspace"].repeat(presses);
 }

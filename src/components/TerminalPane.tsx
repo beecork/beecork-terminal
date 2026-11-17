@@ -30,8 +30,10 @@ import { clipboardKeyAction } from "../lib/termKeys";
 import {
   isModifierOnly,
   isSelectionKey,
+  keySelErase,
   keySelPress,
   keySelRange,
+  keySelReplaces,
   keySelSync,
   type KeySel,
   type KeySelScreen,
@@ -447,6 +449,11 @@ export default function TerminalPane({
         // wrap is pending), and as an offset that is the next row's first cell.
         cursor: (buf.baseY + buf.cursorY) * cols + buf.cursorX,
         cell: (offset) => at(offset)?.getChars() ?? "",
+        width: (offset) => at(offset)?.getWidth() ?? 1,
+        wrapped: (offset) => {
+          at(offset);
+          return line?.isWrapped ?? false;
+        },
         backdrop: (offset) => {
           const c = at(offset);
           return c ? `${c.getBgColorMode()}:${c.getBgColor()}:${c.isInverse()}` : "";
@@ -548,11 +555,31 @@ export default function TerminalPane({
             keySelShown = false;
             keySelDrawn = undefined;
           } else {
+            // Delete, Backspace or a typed character replaces the selection,
+            // as in an editor: the program is sent the deletes that remove the
+            // selected text first (see "REPLACING IT" in lib/keySelection). Only
+            // for a highlight of ours that is on screen right now — never one
+            // taken off by a copy, or hidden while its text is being looked for.
+            const replaces = keySelReplaces(e);
+            const erase =
+              replaces && term.buffer.active.type === "normal" && keySelOnScreen() === "ours"
+                ? keySelErase(keySel, keySelScreen())
+                : null;
             // Any other key ends it — and takes the highlight off, because a
             // key that sends the program nothing (Caps Lock, Shift+PageUp)
             // would otherwise leave it on screen with nothing watching it.
             keySel = null;
             hideKeySel();
+            if (erase) {
+              invoke("pty_write", { id: sessionId, data: erase }).catch(() => {});
+              // The deletes ARE the answer to Delete or Backspace: the key
+              // itself would take one character more. A typed character still
+              // goes on to the program, after them.
+              if (replaces === "erase") {
+                e.preventDefault();
+                return false;
+              }
+            }
           }
         }
       }
