@@ -70,9 +70,9 @@ pub fn run() {
             std::thread::spawn(move || watcher::watch_project(handle));
             // Resolve the default shell (a PATH walk on Windows) now, off the
             // IPC thread, so the first `pty_spawn` — a sync command — finds it
-            // cached. See `shell::default_candidates`.
+            // ready. See `shell::resolved_default_candidates`.
             std::thread::spawn(|| {
-                let _ = shell::default_candidates();
+                let _ = shell::resolved_default_candidates();
             });
             Ok(())
         })
