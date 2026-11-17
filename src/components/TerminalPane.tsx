@@ -26,7 +26,18 @@ import {
 import { nameFromTitle, resumeCommand } from "../lib/sessions";
 import { useContextMenu } from "../lib/useContextMenu";
 import { copyText, readText } from "../lib/clipboard";
-import { clipboardKeyAction, isModifierOnly, keySelRange, shiftArrowDir } from "../lib/termKeys";
+import { clipboardKeyAction } from "../lib/termKeys";
+import {
+  isModifierOnly,
+  isSelectionKey,
+  keySelErase,
+  keySelPress,
+  keySelRange,
+  keySelReplaces,
+  keySelSync,
+  type KeySel,
+  type KeySelScreen,
+} from "../lib/keySelection";
 import { withGeorgian } from "../lib/fonts";
 import * as sound from "../lib/sound";
 import ContextMenu, { type MenuEntry } from "./ContextMenu";
@@ -63,6 +74,14 @@ function resetStuckModes(term: Terminal) {
  *  be a different compositing pass than the first, short enough that a pane that
  *  did lose its picture is never blank for a noticeable beat. */
 const REDRAW_SETTLE_MS = 250;
+
+/** A held keyboard selection whose text is no longer where it was is taken off
+ *  the screen and looked for again once the screen has been still this long — a
+ *  redraw can arrive in pieces, and the pieces in between say nothing — but no
+ *  later than `KEY_SEL_GIVE_UP_MS` after it went missing, so a program that
+ *  never stops printing cannot keep it in limbo. See lib/keySelection. */
+const KEY_SEL_QUIET_MS = 60;
+const KEY_SEL_GIVE_UP_MS = 500;
 
 /** Force xterm to redraw the whole viewport.
  *
@@ -392,26 +411,119 @@ export default function TerminalPane({
     });
     termRef.current = term;
 
-    // Shift+Left/Right keyboard selection (see lib/termKeys). `anchor` is the
-    // cursor's linear offset when the selection began, `head` where the
-    // PROGRAM has since put its cursor. Never a count of key presses: that
-    // walked on past the end of the typed text into blank cells and onto the
-    // lines around it while the shell's own cursor stayed put. Lives only in
-    // this closure: one per terminal.
-    let keySel: { anchor: number; head: number } | null = null;
-    const cursorOffset = () => {
+    // Keyboard selection — Shift+Left/Right, where the program at the prompt
+    // has no selection of its own (see lib/keySelection, which holds the
+    // rules). All of it lives in this closure: one per terminal.
+    let keySel: KeySel | null = null;
+    /** What xterm reported as selected right after the highlight was last
+     *  drawn; undefined while none of ours is on screen. */
+    let keySelDrawn: ReturnType<Terminal["getSelectionPosition"]>;
+    /** False between a copy, which takes the highlight off, and the next
+     *  selection key: nothing may put it back in between. */
+    let keySelShown = true;
+    let keySelSettle: ReturnType<typeof setTimeout> | undefined;
+    let keySelSettleBy = 0;
+    /** The terminal as lib/keySelection sees it: cells and a cursor, in linear
+     *  offsets. Built per use — it must not outlive a write or a resize. */
+    const keySelScreen = (): KeySelScreen => {
       const buf = term.buffer.active;
       const cols = term.cols;
-      return (buf.baseY + buf.cursorY) * cols + Math.min(buf.cursorX, cols - 1);
+      const scratch = buf.getNullCell();
+      let row = -1;
+      let line = buf.getLine(0);
+      const at = (offset: number) => {
+        const r = Math.floor(offset / cols);
+        if (r !== row) {
+          row = r;
+          // Never `getLine` for a row outside the buffer: it is a ring, and
+          // hands back some other row.
+          line = r >= 0 && r < buf.length ? buf.getLine(r) : undefined;
+        }
+        return line?.getCell(offset - r * cols, scratch);
+      };
+      return {
+        cols,
+        viewStart: buf.baseY * cols,
+        viewLength: term.rows * cols,
+        // No clamp: after the last cell of a full row `cursorX` is `cols` (the
+        // wrap is pending), and as an offset that is the next row's first cell.
+        cursor: (buf.baseY + buf.cursorY) * cols + buf.cursorX,
+        cell: (offset) => at(offset)?.getChars() ?? "",
+        width: (offset) => at(offset)?.getWidth() ?? 1,
+        wrapped: (offset) => {
+          at(offset);
+          return line?.isWrapped ?? false;
+        },
+        backdrop: (offset) => {
+          const c = at(offset);
+          return c ? `${c.getBgColorMode()}:${c.getBgColor()}:${c.isInverse()}` : "";
+        },
+      };
     };
-    const applyKeySel = () => {
-      const range = keySel && keySelRange(keySel.anchor, keySel.head);
-      if (!range) {
-        term.clearSelection();
-        return;
-      }
+    /** Is the highlight on screen still the one drawn last? xterm moves its own
+     *  copy up a row for every line trimmed off a full scrollback — right for
+     *  text that scrolled, wrong for an input box redrawn in place ("drifted":
+     *  in a long agent session the highlight slid off the text, a row per line
+     *  printed). And whatever else selects or clears — the mouse, the search
+     *  box, Select all, a paste — is not ours to undo ("theirs"). */
+    const keySelOnScreen = (): "none" | "ours" | "drifted" | "theirs" => {
+      const was = keySelDrawn;
+      if (!was) return "none";
+      const at = term.getSelectionPosition();
+      const same =
+        at &&
+        at.start.x === was.start.x &&
+        at.end.x === was.end.x &&
+        at.end.y - at.start.y === was.end.y - was.start.y;
+      if (!same) return "theirs";
+      return at.start.y === was.start.y ? "ours" : "drifted";
+    };
+    /** Take our highlight off, if it is ours that is on screen. */
+    const hideKeySel = () => {
+      const on = keySelOnScreen();
+      if (on === "ours" || on === "drifted") term.clearSelection();
+      keySelDrawn = undefined;
+    };
+    const drawKeySel = () => {
+      const range = keySel && keySelShown ? keySelRange(keySel) : null;
+      if (!range) return hideKeySel();
       const cols = term.cols;
       term.select(range.start % cols, Math.floor(range.start / cols), range.length);
+      keySelDrawn = term.getSelectionPosition();
+    };
+    /** After a write: let the selection follow the program's cursor, or find
+     *  out that the text it covered has moved or gone, or that the program
+     *  paints its own. `settled` — the screen has been still for a moment (see
+     *  KEY_SEL_QUIET_MS). */
+    const syncKeySel = (settled: boolean) => {
+      if (!keySel) return;
+      const onScreen = keySelOnScreen();
+      // Hands off when a full-screen program took over (the alternate screen:
+      // Shift+arrows are its own there, and xterm has cleared the highlight),
+      // or when the highlight on screen is no longer ours.
+      if (term.buffer.active.type !== "normal" || onScreen === "theirs") {
+        keySel = null;
+        keySelDrawn = undefined;
+        return;
+      }
+      const now = performance.now();
+      const r = keySelSync(keySel, keySelScreen(), now, settled);
+      keySel = r.sel;
+      if (!r.wait) {
+        if (r.redraw || onScreen === "drifted") drawKeySel();
+        return;
+      }
+      // The text is not where it was: show nothing rather than the wrong cells.
+      hideKeySel();
+      if (keySelSettle === undefined) keySelSettleBy = now + KEY_SEL_GIVE_UP_MS;
+      else clearTimeout(keySelSettle);
+      keySelSettle = setTimeout(
+        () => {
+          keySelSettle = undefined;
+          if (!disposed) syncKeySel(true);
+        },
+        Math.max(0, Math.min(KEY_SEL_QUIET_MS, keySelSettleBy - now))
+      );
     };
 
     // Let the app own ⌘+/⌘-/⌘0 (zoom) — don't forward them to the shell.
@@ -425,20 +537,51 @@ export default function TerminalPane({
       // microtask because xterm clears any selection when it sends user input,
       // which happens right after this handler returns.
       if (IS_WINDOWS && e.type === "keydown") {
-        const dir = shiftArrowDir(e);
-        if (dir && term.buffer.active.type === "normal") {
-          if (!keySel) {
-            const at = cursorOffset();
-            keySel = { anchor: at, head: at };
-          }
-          // Re-apply the range as it stands (sending the key clears it). The
-          // head moves only when the program moves its cursor: onCursorMove.
-          queueMicrotask(applyKeySel);
+        if (isSelectionKey(e) && term.buffer.active.type === "normal") {
+          if (keySelOnScreen() === "theirs") keySel = null;
+          keySel = keySelPress(keySel, keySelScreen(), performance.now());
+          keySelShown = true;
+          // Put the range back as it stands (sending the key clears it). The
+          // head moves only when the program moves its cursor: syncKeySel.
+          queueMicrotask(drawKeySel);
           return true;
         }
-        // Any other real key ends it (xterm drops the highlight itself when that
-        // key reaches the shell; Ctrl+C below copies it first).
-        if (!isModifierOnly(e)) keySel = null;
+        if (keySel && !isModifierOnly(e)) {
+          if (clipboardKeyAction(e, term.hasSelection(), IS_WINDOWS) === "copy") {
+            // The copy chord never reaches the program, so nothing there has
+            // changed and the next selection key carries on from this
+            // selection. The copy below takes the highlight off, and it stays
+            // off until that next key.
+            keySelShown = false;
+            keySelDrawn = undefined;
+          } else {
+            // Delete, Backspace or a typed character replaces the selection,
+            // as in an editor: the program is sent the deletes that remove the
+            // selected text first (see "REPLACING IT" in lib/keySelection). Only
+            // for a highlight of ours that is on screen right now — never one
+            // taken off by a copy, or hidden while its text is being looked for.
+            const replaces = keySelReplaces(e);
+            const erase =
+              replaces && term.buffer.active.type === "normal" && keySelOnScreen() === "ours"
+                ? keySelErase(keySel, keySelScreen())
+                : null;
+            // Any other key ends it — and takes the highlight off, because a
+            // key that sends the program nothing (Caps Lock, Shift+PageUp)
+            // would otherwise leave it on screen with nothing watching it.
+            keySel = null;
+            hideKeySel();
+            if (erase) {
+              invoke("pty_write", { id: sessionId, data: erase }).catch(() => {});
+              // The deletes ARE the answer to Delete or Backspace: the key
+              // itself would take one character more. A typed character still
+              // goes on to the program, after them.
+              if (replaces === "erase") {
+                e.preventDefault();
+                return false;
+              }
+            }
+          }
+        }
       }
       // Windows clipboard chords (see lib/termKeys). Returning false keeps
       // xterm from sending ^C/^V to the shell; it's called for keydown,
@@ -714,14 +857,32 @@ export default function TerminalPane({
       }
     });
 
-    // The other half of Shift+arrow selection: the program answers the key by
-    // moving its cursor, and the highlight follows it, so it stops wherever
-    // the program stops (the start or end of the typed text).
-    const cursorSub = term.onCursorMove(() => {
-      if (!keySel || term.buffer.active.type !== "normal") return;
-      keySel.head = cursorOffset();
-      applyKeySel();
-    });
+    // The other half of keyboard selection: any write may be the program
+    // answering a selection key, or the screen changing under a selection that
+    // is being held. Windows only, like the keys that start one — elsewhere
+    // nothing is even subscribed.
+    const keySelSubs = IS_WINDOWS
+      ? [
+          term.onWriteParsed(() => syncKeySel(false)),
+          // Offsets are row * cols + col: a new width makes every one wrong.
+          term.onResize(() => {
+            if (!keySel) return;
+            keySel = null;
+            hideKeySel();
+          }),
+        ]
+      : [];
+    // A press of the left mouse button in the terminal: a click clears the
+    // selection and a drag makes a new one, and a later write must not undo
+    // either. (A right-click keeps the highlight, still watched over, for the
+    // menu's Copy.) In the capture phase: before xterm starts its own.
+    const keySelMount = mountRef.current;
+    const endKeySelOnMouse = (ev: MouseEvent) => {
+      if (ev.button !== 0) return;
+      keySel = null;
+      keySelDrawn = undefined;
+    };
+    if (IS_WINDOWS) keySelMount.addEventListener("mousedown", endKeySelOnMouse, true);
 
     const titleSub = term.onTitleChange((t) => {
       // Terminal output controls this via OSC escapes — strip control chars
@@ -791,12 +952,14 @@ export default function TerminalPane({
       disposed = true;
       clearTimeout(cwdHintTimer);
       clearTimeout(atlasResync);
+      clearTimeout(keySelSettle);
       cancelAnimationFrame(roRaf);
       ro.disconnect();
       linkProvider.dispose();
       bellSub.dispose();
       titleSub.dispose();
-      cursorSub.dispose();
+      keySelSubs.forEach((sub) => sub.dispose());
+      keySelMount.removeEventListener("mousedown", endKeySelOnMouse, true);
       osc7.dispose();
       dataSub.dispose();
       resizeSub.dispose();
