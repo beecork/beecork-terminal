@@ -1,4 +1,13 @@
-import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Suspense,
+  lazy,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent as ReactMouseEvent,
+} from "react";
 import {
   gitStatus,
   revealPath,
@@ -111,20 +120,29 @@ export default function SidePanel({
     (v) => String(Math.round(v))
   );
   const bodyRef = useRef<HTMLDivElement>(null);
+  // How far into the divider it was grabbed. The Files region ends where the
+  // divider begins, so sizing it to the bare pointer would jump the divider's
+  // leading edge to the pointer on the first move — by up to its thickness.
+  const grabOffset = useRef(0);
 
   // Drag the Files/Editor divider (vertical in stacked, horizontal in side-by-side).
-  const startTreeDrag = useDrag({
+  const dragTree = useDrag({
     cursor: panelLayout === "stacked" ? "row-resize" : "col-resize",
     onMove: (e) => {
       if (!bodyRef.current) return;
       const r = bodyRef.current.getBoundingClientRect();
       const pct =
         panelLayout === "stacked"
-          ? ((e.clientY - r.top) / r.height) * 100
-          : ((e.clientX - r.left) / r.width) * 100;
+          ? ((e.clientY - grabOffset.current - r.top) / r.height) * 100
+          : ((e.clientX - grabOffset.current - r.left) / r.width) * 100;
       setTreeSize(Math.min(80, Math.max(12, pct)));
     },
   });
+  const startTreeDrag = (e: ReactMouseEvent<HTMLElement>) => {
+    const d = e.currentTarget.getBoundingClientRect();
+    grabOffset.current = panelLayout === "stacked" ? e.clientY - d.top : e.clientX - d.left;
+    dragTree(e);
+  };
 
   // One state slice, three callers (the root effect below, every `fs-changed`
   // refresh, and the Refresh button), so the latest-wins key is a CONSTANT —
@@ -367,7 +385,11 @@ export default function SidePanel({
           </div>
         </div>
 
-        <div className="tree-divider" onMouseDown={startTreeDrag} />
+        {/* The app's one resize handle (`.divider`); `.tree-divider` only lays
+            it flat when the two regions are stacked. */}
+        <div className="divider tree-divider" onMouseDown={startTreeDrag}>
+          <span className="divider-grip" />
+        </div>
 
         <div className="editor-section">
           <div className="seclabel">
