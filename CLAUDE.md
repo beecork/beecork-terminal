@@ -154,7 +154,11 @@ read it before changing that mechanism.
 ## CSS (`src/App.css`) — these overrides are load-bearing
 
 - **The terminal's scrollbar is xterm 6's own.** Don't hide it, reimplement it, or
-  style it outside `xtermTheme()`.
+  style it outside `xtermTheme()`. The legacy `.xterm-viewport` is NOT it, and
+  that one is told to draw none (`scrollbar-width: none`): xterm 6 scrolls
+  nothing with that element but its stylesheet still says `overflow-y: scroll`,
+  which on Windows is a classic, empty bar whose down-arrow showed as a white
+  box under the last row of every pane. Invisible on macOS (overlay bars).
 - **Do not force `.xterm-screen`'s height.** In xterm 6 the screen sits inside
   `.xterm-scrollable-element`; forcing 100% collapses that wrapper — and the
   scrollbar — to zero height.
