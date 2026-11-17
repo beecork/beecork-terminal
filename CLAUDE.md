@@ -162,6 +162,18 @@ read it before changing that mechanism.
 - **Do not force `.xterm-screen`'s height.** In xterm 6 the screen sits inside
   `.xterm-scrollable-element`; forcing 100% collapses that wrapper — and the
   scrollbar — to zero height.
+- **A scrollbar is styled by its KIND, and the kind is measured, not guessed
+  from the OS** (`lib/scrollbars.ts`). Where bars take room — Windows always,
+  macOS with a mouse plugged in or "Show scroll bars: Always" — one left alone
+  is the platform's own: a white 15px slab with arrow buttons inside a dark
+  panel, which is what the Sessions list and the Settings window drew on
+  Windows. Where bars are zero-width overlays, a `::-webkit-scrollbar` rule
+  turns each into a classic one and takes 8px from its pane for good.
+  `watchScrollbarKind` measures before the first render (and again on focus)
+  and sets `data-classic-scrollbars` on the root; App.css themes `.rail-list`,
+  `.modal-body`, `.pane-menu`, `.media-body` and `.crash-msg` ONLY under that
+  attribute. The tree and the editor are themed everywhere, by the older
+  decision in the next rule. A new scroll box goes into one list or the other.
 - **Scrollbar rules must name the element that actually SCROLLS, and a scroll box
   whose CONTENT HEIGHT CHANGES reserves its gutter** (`scrollbar-gutter: stable`
   — `.tree-scroll`, `.rail-list`). Three are deliberately left alone, so don't
