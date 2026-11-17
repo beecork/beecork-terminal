@@ -1757,11 +1757,24 @@ body {
    pointer alike. (`--selected`, which the panels used, is within a shade of the
    first on the dark themes — and all but invisible on the light one, where the
    terminal's bar was a plain grey beside it.) Change them here and in
-   `xtermTheme()` together. */
+   `xtermTheme()` together.
+
+   The solid colours first are for a webview without `color-mix` (WebKit before
+   16.2, which the oldest macOS this app runs on still has). A custom property
+   holding a value the browser cannot read computes to nothing at all, so the
+   thumb would have no colour — a tree and an editor with an invisible bar, where
+   they had `--selected`. `@supports` keeps the mixes for everyone else. */
 :root {
-  --scroll-thumb: color-mix(in srgb, var(--muted) 35%, transparent);
-  --scroll-thumb-hover: color-mix(in srgb, var(--muted) 70%, transparent);
-  --scroll-thumb-active: color-mix(in srgb, var(--accent) 80%, transparent);
+  --scroll-thumb: var(--selected);
+  --scroll-thumb-hover: var(--muted);
+  --scroll-thumb-active: var(--accent);
+}
+@supports (color: color-mix(in srgb, red 50%, blue)) {
+  :root {
+    --scroll-thumb: color-mix(in srgb, var(--muted) 35%, transparent);
+    --scroll-thumb-hover: color-mix(in srgb, var(--muted) 70%, transparent);
+    --scroll-thumb-active: color-mix(in srgb, var(--accent) 80%, transparent);
+  }
 }
 .tree-scroll::-webkit-scrollbar-thumb,
 .cm-scroller::-webkit-scrollbar-thumb {
