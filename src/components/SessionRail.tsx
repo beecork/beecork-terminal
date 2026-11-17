@@ -12,6 +12,7 @@ import { Plus, Close, Pencil, Chevron, Gear } from "./icons";
 import { noFocusSteal } from "../lib/keepFocus";
 import { useContextMenu } from "../lib/useContextMenu";
 import { useDrag } from "../lib/useDrag";
+import { RAIL_MIN_WIDTH } from "../lib/useRailWidth";
 import { copyText } from "../lib/clipboard";
 import ContextMenu, { type MenuEntry } from "./ContextMenu";
 import RenameInput from "./RenameInput";
@@ -25,6 +26,9 @@ interface Props {
   /** sessions producing output right now (busy) */
   busy: Set<string>;
   expanded: boolean;
+  /** width in px while expanded — the user's, dragged with the divider beside
+   *  the rail (see useRailWidth). The collapsed rail keeps its fixed CSS width. */
+  width: number;
   onSelect: (id: string) => void;
   onCreate: () => void;
   onClose: (id: string) => void;
@@ -66,6 +70,7 @@ export default function SessionRail({
   wantsYou,
   busy,
   expanded,
+  width,
   onSelect,
   onCreate,
   onClose,
@@ -208,7 +213,13 @@ export default function SessionRail({
 
   let sessionNo = 0;
   return (
-    <div className={`session-rail ${expanded ? "expanded" : "collapsed"}`}>
+    <div
+      className={`session-rail ${expanded ? "expanded" : "collapsed"}`}
+      // The min-width rides along so a small window can squeeze the rail (see
+      // `.session-rail.expanded` in App.css) but never past the point where its
+      // hover buttons stop fitting.
+      style={expanded ? { width, minWidth: RAIL_MIN_WIDTH } : undefined}
+    >
       <div className="rail-top">
         <button
           className="icon-btn sm"

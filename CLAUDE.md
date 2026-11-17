@@ -219,6 +219,27 @@ read it before changing that mechanism.
 - **`.xterm-viewport` must be transparent.** xterm 6 leaves it at its `#000`
   default, which reads as a black band in the scrollbar gutter.
 
+## Pane widths (`src/lib/useRailWidth.ts`, `src/App.css`)
+
+- **No divider may squeeze the terminal below its min-width — clamp every pane
+  drag on `paneRoom`.** The workspace row cannot shrink past `.terminals`'
+  `min-width`; it overflows instead, and what leaves the window is the RIGHT
+  edge: the file panel's Refresh and Collapse buttons. The panel's fixed budget
+  (`innerWidth - 360`) only ever covered a COLLAPSED rail, so this was reachable
+  with the rail merely expanded. `TERMINALS_MIN_WIDTH` mirrors the CSS value —
+  change them together.
+- **The expanded rail is the one side pane that shrinks, and `.terminals` is
+  `flex: 1 1 0` for its sake.** A remembered rail width can outgrow a later,
+  smaller window; `flex-shrink: 1` lets the layout draw it narrower (never below
+  its inline `min-width`, where a row's hover buttons stop fitting) without
+  touching the stored value. With `flex-basis: auto`, a SPLIT view's basis is
+  its pane headers' content width, and flexbox shares the shortfall with the
+  rail in proportion — the rail is drawn narrower than the width a drag just
+  set, while the terminal still has room. The rail drag starts from the
+  RENDERED width for the same reason: in a squeezed window stored ≠ drawn, and
+  starting from the stored number leaves a dead stretch. Pinned by
+  `useRailWidth.test.tsx`.
+
 ## Hostile-repository hardening
 
 The app runs `git` automatically in whatever folder the terminal is in, so a
