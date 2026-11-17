@@ -187,6 +187,17 @@ export default function App() {
     if (paneSessionId === activeId) setActiveId(id);
   }
 
+  // A split folds the file panel to give the two terminals its room — unless
+  // Settings says to leave it ("Keep the file panel open when splitting").
+  // Folding stays the default: in a default-size window the panel would leave
+  // them 250px each. It is a switch and not a rule about how much room there is,
+  // because a rule like that depends on four things nobody is looking at (the
+  // window, both side panes, where the split divider was left) and so looks
+  // like the panel closing at random.
+  function foldPanelForSplit() {
+    if (!settings.splitKeepsPanel) setPanelOpen(false);
+  }
+
   // Split the active session with its neighbour (or a new one), or unsplit it.
   // Sound trails the action so a throwing sound call can't drop the split/unsplit.
   function toggleSplit() {
@@ -199,7 +210,7 @@ export default function App() {
     const next = sessions[idx + 1] ?? sessions.find((s) => s.id !== activeId);
     const partner = next?.id ?? create(active?.cwd, false, activeId);
     pairSessions(activeId, partner);
-    setPanelOpen(false);
+    foldPanelForSplit();
     sound.split();
   }
   const toggleSplitRef = useRef(toggleSplit);
@@ -219,7 +230,7 @@ export default function App() {
       return;
     }
     pairSessions(activeIdRef.current, id);
-    setPanelOpen(false);
+    foldPanelForSplit();
   }
 
   // Right-click → "Close others": tear down every session but `keepId`.

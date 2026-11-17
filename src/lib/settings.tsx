@@ -168,6 +168,10 @@ export interface Settings {
   fontFamily: string;
   /** folder new shells open in when they don't inherit a cwd (undefined = ask on first run) */
   defaultCwd?: string;
+  /** leave the file panel open when the view splits. Off, a split folds it to
+   *  give the two terminals its room: in a default-size window they would get
+   *  250px each beside it. On, a split never touches the panel. */
+  splitKeepsPanel: boolean;
   /** wheel/trackpad lines per notch (xterm scrollSensitivity) */
   scrollSpeed: number;
   /** eased/animated viewport scrolling (xterm smoothScrollDuration > 0) */
@@ -216,6 +220,7 @@ const DEFAULTS: Settings = {
   terminalFontSize: DEFAULT_FONT_SIZE,
   editorFontSize: DEFAULT_FONT_SIZE,
   fontFamily: 'Menlo, "SF Mono", Monaco, "Cascadia Code", monospace',
+  splitKeepsPanel: false,
   scrollSpeed: 3,
   smoothScroll: false,
   sound: true,
