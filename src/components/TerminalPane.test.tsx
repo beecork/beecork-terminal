@@ -109,9 +109,6 @@ vi.mock("@xterm/xterm", () => {
       titleChanged = cb;
       return { dispose: () => {} };
     }
-    onCursorMove() {
-      return { dispose: () => {} };
-    }
     onData() {
       return { dispose: () => {} };
     }
