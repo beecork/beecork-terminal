@@ -246,6 +246,34 @@ describe("TerminalPane lazy build", () => {
     expect(spawns()).toHaveLength(1);
   });
 
+  // The Windows shell choice reaches Rust as `pty_spawn`'s `shell`: null is the
+  // platform default (PowerShell on Windows), "cmd" is Command Prompt. Rust owns
+  // what those resolve to; the webview only forwards the user's pick.
+  describe("shell choice", () => {
+    const spawnShell = () => (spawns()[0][1] as { shell: unknown }).shell;
+    afterEach(() => localStorage.removeItem("beecork.settings"));
+
+    it("asks for the platform default when nothing was chosen", async () => {
+      render(view(true));
+      await flushFrame();
+      expect(spawnShell()).toBeNull();
+    });
+
+    it("asks for cmd when Command Prompt was chosen in Settings", async () => {
+      localStorage.setItem("beecork.settings", JSON.stringify({ windowsShell: "cmd" }));
+      render(view(true));
+      await flushFrame();
+      expect(spawnShell()).toBe("cmd");
+    });
+
+    it("falls back to the default for a stored value it does not know", async () => {
+      localStorage.setItem("beecork.settings", JSON.stringify({ windowsShell: "bash.exe" }));
+      render(view(true));
+      await flushFrame();
+      expect(spawnShell()).toBeNull();
+    });
+  });
+
   // Coming back on screen must force a repaint. xterm parks its renderer while
   // the pane is display:none and, on resume, redraws only if a refresh was
   // requested while it was away — an idle background pane gets none, and the

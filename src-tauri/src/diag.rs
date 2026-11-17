@@ -359,6 +359,14 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
     (if m <= 2 { y + 1 } else { y }, m, d)
 }
 
+/// An entry from Rust itself — something that went wrong but was recovered from,
+/// so it leaves no other trace (e.g. a shell that would not start, and the one
+/// started instead). Same no-panic contract as everything else in this file.
+/// File I/O: call it off the IPC thread.
+pub(crate) fn note(kind: &str, message: &str) {
+    append(kind, &bounded(message.to_string()));
+}
+
 /// An entry from the webview — the errors it has no other outlet for. `kind` is
 /// a short tag (`js-error`, `js-rejection`, `react-crash`); anything else in it
 /// is dropped so the file's `[kind]` column stays greppable.

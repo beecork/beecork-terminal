@@ -28,6 +28,17 @@ export const revealPath = (path: string) => invoke<void>("reveal_path", { path }
 /** Open an http(s) URL in the user's default browser. */
 export const openUrl = (url: string) => invoke<void>("open_url", { url });
 
+/** What Settings needs to offer the Windows shell choice (see `shell.rs`). */
+export interface ShellInfo {
+  /** the only platform with a shell choice */
+  windows: boolean;
+  /** PowerShell 7 is installed — if not, Settings suggests it */
+  pwsh: boolean;
+  /** what a default session runs, e.g. "PowerShell 7" / "Windows PowerShell" */
+  default_name: string;
+}
+export const shellInfo = () => invoke<ShellInfo>("shell_info");
+
 /** Rename / move a filesystem entry (rejects if the target exists). */
 export const renamePath = (from: string, to: string) =>
   invoke<void>("rename_path", { from, to });
