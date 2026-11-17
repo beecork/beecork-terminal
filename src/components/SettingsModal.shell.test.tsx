@@ -4,7 +4,7 @@ import { render, screen, fireEvent, cleanup, act } from "@testing-library/react"
 
 // What Rust says about this machine's shells; each test sets it. Every other
 // `invoke` (diagnostics, sound) never answers, which leaves its caller idle.
-let machine: { windows: boolean; pwsh: boolean; default_name: string } | null = null;
+let machine: { windows: boolean; pwsh: boolean; cmd: boolean; default_name: string } | null = null;
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: (cmd: string) =>
     cmd === "shell_info" && machine ? Promise.resolve(machine) : new Promise(() => {}),
@@ -14,8 +14,9 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({ open: () => Promise.resolve(null) 
 import SettingsModal from "./SettingsModal";
 import { SettingsProvider } from "../lib/settings";
 
-const WITH_PWSH = { windows: true, pwsh: true, default_name: "PowerShell 7" };
-const WITHOUT_PWSH = { windows: true, pwsh: false, default_name: "Windows PowerShell" };
+const WITH_PWSH = { windows: true, pwsh: true, cmd: false, default_name: "PowerShell 7" };
+const WITHOUT_PWSH = { windows: true, pwsh: false, cmd: false, default_name: "Windows PowerShell" };
+const ONLY_CMD = { windows: true, pwsh: false, cmd: true, default_name: "Command Prompt" };
 
 async function openSettings(on: typeof machine) {
   machine = on;
@@ -43,7 +44,7 @@ describe("Settings: the shell choice", () => {
   });
 
   it("is offered on Windows only", async () => {
-    await openSettings({ windows: false, pwsh: false, default_name: "zsh" });
+    await openSettings({ windows: false, pwsh: false, cmd: false, default_name: "zsh" });
     expect(screen.queryByText("Shell")).toBeNull();
     cleanup();
 
@@ -86,5 +87,13 @@ describe("Settings: the shell choice", () => {
     choose("Command Prompt");
     expect(hint()).not.toBeNull();
     expect(hint()?.classList.contains("setting-disabled")).toBe(true);
+  });
+
+  // Both PowerShells failed to start and the sessions fell through to cmd. "The
+  // older one that comes with Windows" would then be said of Command Prompt.
+  it("says so when no PowerShell would start", async () => {
+    await openSettings(ONLY_CMD);
+    expect(hint()?.textContent).toContain("PowerShell would not start here");
+    expect(hint()?.textContent).not.toContain("older one");
   });
 });

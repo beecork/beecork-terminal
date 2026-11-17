@@ -34,6 +34,8 @@ export interface ShellInfo {
   windows: boolean;
   /** PowerShell 7 is installed — if not, Settings suggests it */
   pwsh: boolean;
+  /** no PowerShell would start: default terminals are Command Prompt */
+  cmd: boolean;
   /** what a default session runs, e.g. "PowerShell 7" / "Windows PowerShell" */
   default_name: string;
 }

@@ -192,9 +192,11 @@ export default function SettingsModal({ onClose }: { onClose: () => void }) {
                   }`}
                 >
                   <span className="setting-label">
-                    PowerShell here is {shell.default_name}, the older one that comes with
-                    Windows. PowerShell 7 is the current version: once it is installed,
-                    Beecork uses it automatically (restart Beecork after installing).
+                    {shell.cmd
+                      ? "PowerShell would not start here, so new terminals open Command Prompt instead."
+                      : `PowerShell here is ${shell.default_name}, the older one that comes with Windows.`}{" "}
+                    PowerShell 7 is the current version: once it is installed, Beecork uses
+                    it automatically (restart Beecork after installing).
                   </span>
                   <button
                     className="btn ghost"

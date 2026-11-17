@@ -202,6 +202,16 @@ pub fn kill_by_owner(state: &PtyState, label: &str) {
     }
 }
 
+/// Why a shell would not start, without the command line. portable-pty's
+/// message quotes the whole of it — for PowerShell that is the prompt hook, a
+/// paragraph of script — and when every candidate fails the pane would print it
+/// once per candidate. The reason is what follows.
+fn spawn_failure(message: &str) -> &str {
+    message
+        .rsplit_once("` failed: ")
+        .map_or(message, |(_, reason)| reason)
+}
+
 /// The command line and environment for one shell session in `dir`.
 fn shell_command(program: &str, dir: &str) -> CommandBuilder {
     let mut cmd = CommandBuilder::new(program);
@@ -338,7 +348,7 @@ pub fn pty_spawn(
                 started = Some((program, child));
                 break;
             }
-            Err(e) => failures.push(format!("{program}: {e}")),
+            Err(e) => failures.push(format!("{program}: {}", spawn_failure(&e.to_string()))),
         }
     }
     drop(pair.slave);
@@ -981,7 +991,7 @@ mod tests {
         use std::sync::{Arc, Mutex};
         use std::time::{Duration, Instant};
 
-        let shells: Vec<String> = crate::shell::default_candidates()
+        let shells: Vec<String> = crate::shell::resolved_default_candidates()
             .iter()
             .filter(|p| super::shell_kind(p) == super::ShellKind::PowerShell)
             .cloned()
@@ -1099,6 +1109,17 @@ mod tests {
             }
             let _ = std::fs::remove_dir_all(&start);
         }
+    }
+
+    #[test]
+    fn a_spawn_failure_is_reported_without_the_command_line() {
+        let long = "CreateProcessW `\"C:\\\\x\\\\pwsh.exe\" \"-NoExit\" \"-Command\" \"if (...) { ... }\"` in cwd `Some(\"C:\\\\Users\")` failed: The system cannot find the file specified. (os error 2)";
+        assert_eq!(
+            super::spawn_failure(long),
+            "The system cannot find the file specified. (os error 2)"
+        );
+        // Anything in another shape is passed through whole.
+        assert_eq!(super::spawn_failure("No such file or directory"), "No such file or directory");
     }
 
     #[test]

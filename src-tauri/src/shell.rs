@@ -30,34 +30,62 @@ pub(crate) fn candidates(requested: Option<&str>) -> Vec<String> {
         // Command Prompt exactly as before this change: `COMSPEC`. Off Windows
         // there is no cmd, so a stale setting falls back to the default.
         Some(CMD_REQUEST) if cfg!(windows) => vec![comspec()],
-        Some(CMD_REQUEST) | None => default_candidates().to_vec(),
+        Some(CMD_REQUEST) | None => default_candidates(),
         Some(program) => vec![program.to_string()],
     }
 }
 
-/// The platform default chain, resolved ONCE. Finding PowerShell 7 walks `PATH`
-/// (a few `stat`s per entry, and an entry on a dead network share can stall),
-/// and `pty_spawn` is a sync command on the IPC thread — so `lib.rs` warms this
-/// on a background thread at startup and every later call is a memory read.
-pub(crate) fn default_candidates() -> &'static [String] {
-    static CHAIN: OnceLock<Vec<String>> = OnceLock::new();
+static CHAIN: OnceLock<Vec<String>> = OnceLock::new();
+
+/// The platform default chain, resolved ONCE and off the IPC thread. Finding
+/// PowerShell 7 walks `PATH` (a few `stat`s per entry, and an entry on a dead
+/// network share can stall for a long time), so `lib.rs` calls this on a
+/// background thread at startup, and `shell_info` — an async command — may call
+/// it too. It BLOCKS until the walk is done: never call it from a sync command.
+/// `pty_spawn` uses `default_candidates`.
+pub(crate) fn resolved_default_candidates() -> &'static [String] {
     CHAIN.get_or_init(resolve_default_chain)
+}
+
+/// The default chain for a session starting NOW, without waiting. Normally that
+/// is the resolved chain: the startup thread is done long before the first
+/// terminal asks. While its walk is still running — the stalled `PATH` entry —
+/// a session takes the chain without PowerShell 7 instead. Warming the lock is
+/// not enough by itself: `OnceLock::get_or_init` parks every other caller until
+/// the first one returns, so `pty_spawn`, a sync command, would sit on the IPC
+/// thread behind the walk and the window would not respond. A first terminal
+/// that opens Windows PowerShell is the better failure.
+pub(crate) fn default_candidates() -> Vec<String> {
+    match CHAIN.get() {
+        Some(chain) => chain.clone(),
+        None => quick_chain(),
+    }
 }
 
 #[cfg(windows)]
 fn resolve_default_chain() -> Vec<String> {
-    let mut chain: Vec<String> = Vec::with_capacity(3);
+    let mut chain = quick_chain();
     if let Some(pwsh) = find_pwsh() {
-        chain.push(pwsh.to_string_lossy().into_owned());
+        chain.insert(0, pwsh.to_string_lossy().into_owned());
     }
-    chain.push(windows_powershell());
-    chain.push(comspec());
     chain
 }
 
 #[cfg(not(windows))]
 fn resolve_default_chain() -> Vec<String> {
     vec![std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into())]
+}
+
+/// The default chain minus whatever has to be looked for: nothing here touches
+/// the disk.
+#[cfg(windows)]
+fn quick_chain() -> Vec<String> {
+    vec![windows_powershell(), comspec()]
+}
+
+#[cfg(not(windows))]
+fn quick_chain() -> Vec<String> {
+    resolve_default_chain()
 }
 
 /// `COMSPEC`, i.e. cmd.exe — what every session ran before PowerShell became
@@ -85,8 +113,9 @@ fn windows_powershell() -> String {
 /// default location in case the installer was told not to touch `PATH`.
 #[cfg(windows)]
 fn find_pwsh() -> Option<PathBuf> {
-    let on_path =
-        std::env::var_os("PATH").and_then(|path| first_on_path(&path, "pwsh.exe", is_launchable));
+    let on_path = std::env::var_os("PATH")
+        .and_then(|path| first_on_path(&path, "pwsh.exe", is_launchable))
+        .map(unshimmed);
     on_path.or_else(|| {
         let pf = std::env::var_os("ProgramFiles")?;
         let msi = Path::new(&pf).join(r"PowerShell\7\pwsh.exe");
@@ -104,6 +133,36 @@ fn first_on_path(path: &OsStr, exe: &str, exists: impl Fn(&Path) -> bool) -> Opt
         .filter(|dir| dir.is_absolute())
         .map(|dir| dir.join(exe))
         .find(|candidate| exists(candidate))
+}
+
+/// Scoop puts a small stand-in `pwsh.exe` on `PATH` that only STARTS the real
+/// one and waits for it; a `pwsh.shim` beside it names the real one. Launching
+/// the stand-in works — but the process we would then hold is the stand-in,
+/// whose working directory never moves, and that is the directory the status
+/// poll reads: the file panel, git status and new tabs would freeze on the start
+/// folder. So launch what it points at. (Written from Scoop's documented shim
+/// format; not run against a Scoop install.)
+#[cfg(windows)]
+fn unshimmed(exe: PathBuf) -> PathBuf {
+    std::fs::read_to_string(exe.with_extension("shim"))
+        .ok()
+        .and_then(|text| shim_target(&text))
+        .filter(|target| is_launchable(target))
+        .unwrap_or(exe)
+}
+
+/// The program a Scoop `.shim` file points at: its `path = …` line, quoted or
+/// not. Pure, so it is unit-tested on every platform.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn shim_target(shim: &str) -> Option<PathBuf> {
+    shim.lines().find_map(|line| {
+        let (key, value) = line.split_once('=')?;
+        if !key.trim().eq_ignore_ascii_case("path") {
+            return None;
+        }
+        let value = value.trim().trim_matches('"').trim();
+        (!value.is_empty()).then(|| PathBuf::from(value))
+    })
 }
 
 /// A file we can hand to CreateProcess. The Microsoft Store / winget build of
@@ -136,6 +195,14 @@ pub(crate) fn launch_args(program: &str) -> &'static [&'static str] {
 /// double quotes — it reaches PowerShell through CreateProcess quoting, and both
 /// are pinned by a test. It fixes the two things a bare PowerShell breaks:
 ///
+/// It does NOTHING in a session that is not in `FullLanguage` mode. Where WDAC
+/// or AppLocker enforce Constrained Language Mode, the two .NET calls below are
+/// refused — `SetCurrentDirectory`, and `$Error.RemoveAt` in the `catch` meant
+/// to tidy up after it — so the error escaped `prompt` on every command: the
+/// user's prompt became a bare `PS>` and `$Error` grew by two records each time.
+/// On such a machine PowerShell is left exactly as it is; the folder is then not
+/// tracked (nothing that would track it is allowed there), which is the price.
+///
 /// 1. FOLDER TRACKING. The file panel, git status and new tabs follow a session
 ///    by reading the shell process's working directory from the OS
 ///    (`statuses_for` in `pty.rs`). cmd's `cd` changes that; PowerShell's
@@ -155,11 +222,15 @@ pub(crate) fn launch_args(program: &str) -> &'static [&'static str] {
 ///    is disabled on this system" in PowerShell while working in cmd. ONLY when
 ///    no scope sets a policy at all (no Group Policy, no user or admin choice —
 ///    the untouched default), this session gets `RemoteSigned` at Process scope:
-///    local scripts run, unsigned downloaded ones are still blocked, it is
-///    PowerShell 7's own default, and nothing outside this process changes. Any
-///    explicit policy, including a deliberate `Restricted`, is left alone.
+///    local scripts run, unsigned downloaded ones are still blocked, and it is
+///    PowerShell 7's own default. Process scope is an environment variable
+///    (`PSExecutionPolicyPreference`), so it reaches this session AND every
+///    PowerShell the session goes on to start — but nothing is written to the
+///    registry, and no other terminal or program is affected. Any explicit
+///    policy, including a deliberate `Restricted`, is left alone.
 pub(crate) const POWERSHELL_HOOK: &str = concat!(
-    "if (-not (Test-Path variable:global:__BeecorkPrompt)) { ",
+    "if ($ExecutionContext.SessionState.LanguageMode -eq 'FullLanguage' -and ",
+    "-not (Test-Path variable:global:__BeecorkPrompt)) { ",
     "try { ",
     "if (-not (Get-ExecutionPolicy -List | Where-Object { $_.ExecutionPolicy -ne 'Undefined' })) { ",
     "Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned -Force -ErrorAction Stop ",
@@ -183,6 +254,8 @@ pub struct ShellInfo {
     /// Default sessions run PowerShell 7 (Settings suggests it when they don't —
     /// not installed, or installed but failing to start).
     pwsh: bool,
+    /// Default sessions ended up on Command Prompt: no PowerShell would start.
+    cmd: bool,
     /// What a default session runs, for Settings to name.
     default_name: String,
 }
@@ -207,11 +280,16 @@ pub fn shell_info() -> ShellInfo {
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .clone();
-    let current =
-        started.unwrap_or_else(|| default_candidates().first().cloned().unwrap_or_default());
+    let current = started.unwrap_or_else(|| {
+        resolved_default_candidates()
+            .first()
+            .cloned()
+            .unwrap_or_default()
+    });
     ShellInfo {
         windows: cfg!(windows),
         pwsh: is_pwsh(&current),
+        cmd: shell_kind(&current) == ShellKind::Cmd,
         default_name: display_name(&current),
     }
 }
@@ -245,13 +323,13 @@ mod tests {
         if cfg!(windows) {
             assert_eq!(got, vec![comspec()]);
         } else {
-            assert_eq!(got, default_candidates().to_vec());
+            assert_eq!(got, default_candidates());
         }
     }
 
     #[test]
     fn the_default_chain_prefers_powershell_and_ends_in_cmd_on_windows() {
-        let chain = default_candidates();
+        let chain = resolved_default_candidates();
         assert!(!chain.is_empty());
         if cfg!(windows) {
             assert_eq!(shell_kind(&chain[0]), ShellKind::PowerShell, "{chain:?}");
@@ -264,6 +342,82 @@ mod tests {
             let pwsh = chain.iter().position(|p| is_pwsh(p));
             assert!(pwsh.is_none() || pwsh == Some(0), "{chain:?}");
         }
+    }
+
+    // What a session gets while the PATH walk is still running: nothing that
+    // has to be looked for, so nothing that can stall.
+    #[test]
+    fn the_chain_that_needs_no_lookup_has_no_pwsh() {
+        let chain = quick_chain();
+        assert!(!chain.is_empty());
+        if cfg!(windows) {
+            assert!(!chain.iter().any(|p| is_pwsh(p)), "{chain:?}");
+            assert_eq!(shell_kind(&chain[0]), ShellKind::PowerShell, "{chain:?}");
+            assert_eq!(chain.last(), Some(&comspec()), "{chain:?}");
+        }
+        // And asking for the default never fails, resolved yet or not.
+        assert!(!default_candidates().is_empty());
+    }
+
+    #[test]
+    fn a_scoop_shim_names_the_real_program() {
+        let quoted =
+            "path = \"C:\\Users\\me\\scoop\\apps\\pwsh\\current\\pwsh.exe\"\r\nargs = -NoLogo\r\n";
+        assert_eq!(
+            shim_target(quoted),
+            Some(PathBuf::from(
+                "C:\\Users\\me\\scoop\\apps\\pwsh\\current\\pwsh.exe"
+            ))
+        );
+        // Older shims write the path bare.
+        assert_eq!(
+            shim_target("path = C:\\tools\\pwsh.exe\n"),
+            Some(PathBuf::from("C:\\tools\\pwsh.exe"))
+        );
+        // Nothing usable: keep what was found on PATH.
+        assert_eq!(shim_target("args = -NoLogo\n"), None);
+        assert_eq!(shim_target("path = \n"), None);
+        assert_eq!(shim_target(""), None);
+    }
+
+    // The hook under Constrained Language Mode (WDAC / AppLocker), where its
+    // .NET calls are refused. It must not install itself: the session's own
+    // prompt keeps working and nothing lands in $Error. Simulated by setting the
+    // language mode before the hook runs; a real policy sets it before anything.
+    // Windows-only, like the end-to-end test in pty.rs: run `cargo test` here.
+    #[cfg(windows)]
+    #[test]
+    fn the_hook_leaves_a_constrained_powershell_alone() {
+        let run = |before: &str| {
+            let script = format!(
+                "{before}{POWERSHELL_HOOK}; $p = prompt; $q = prompt; \
+                 'HOOKED=' + (Test-Path variable:global:__BeecorkPrompt); \
+                 'PROMPT=' + $q; 'ERRORS=' + $Error.Count"
+            );
+            let out = std::process::Command::new(windows_powershell())
+                .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+                .env_remove("PSExecutionPolicyPreference")
+                // Whatever runs the tests may itself sit under PowerShell 7,
+                // whose module path Windows PowerShell cannot load from.
+                .env_remove("PSModulePath")
+                .output()
+                .expect("Windows PowerShell ships with Windows");
+            String::from_utf8_lossy(&out.stdout).into_owned()
+                + &String::from_utf8_lossy(&out.stderr)
+        };
+
+        let constrained =
+            run("$ExecutionContext.SessionState.LanguageMode = 'ConstrainedLanguage'; ");
+        assert!(constrained.contains("HOOKED=False"), "{constrained}");
+        assert!(constrained.contains("PROMPT=PS "), "{constrained}");
+        assert!(constrained.contains("ERRORS=0"), "{constrained}");
+
+        // The control: in an ordinary session the same line does install itself,
+        // and still leaves no error behind.
+        let full = run("");
+        assert!(full.contains("HOOKED=True"), "{full}");
+        assert!(full.contains("PROMPT=PS "), "{full}");
+        assert!(full.contains("ERRORS=0"), "{full}");
     }
 
     #[test]

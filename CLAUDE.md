@@ -36,10 +36,17 @@ read it before changing that mechanism.
   git status freeze on the start folder (it restores `$?` for the user's prompt);
   (2) 5.1's untouched default policy is `Restricted`, and npm/npx/pnpm/yarn are
   `.ps1` shims PowerShell prefers over their `.cmd` twins, so `npm` fails — only
-  when NO scope sets a policy does the session get Process-scope `RemoteSigned`.
-  The hook must stay one line with no `"` (CreateProcess quoting) — pinned. The
-  end-to-end proof, `powershell_sessions_follow_cd_and_can_run_local_scripts`, is
-  Windows-only and CI never runs it: run `cargo test` on Windows when touching it.
+  when NO scope sets a policy does the session get Process-scope `RemoteSigned`
+  (an environment variable: whatever the session starts inherits it; nothing is
+  written to the registry). The hook does NOTHING outside `FullLanguage` mode:
+  under WDAC/AppLocker its .NET calls are refused, the error escaped `prompt` on
+  every command, and the user's prompt was gone. It must stay one line with no
+  `"` (CreateProcess quoting) — pinned. A Scoop `pwsh.exe` on PATH is a stand-in
+  that starts the real one; `find_pwsh` launches what its `.shim` names, or the
+  process whose cwd we poll would be the stand-in's and never move. The proofs
+  that need a real PowerShell — `powershell_sessions_follow_cd_and_can_run_local_scripts`
+  and `the_hook_leaves_a_constrained_powershell_alone` — are Windows-only and CI
+  never runs them: run `cargo test` on Windows when touching any of this.
 - **Spawn a login shell (`-l`) on unix.** Without it `~/.zprofile` never runs,
   Homebrew never enters PATH, and CLIs report `ffmpeg`/`sox`/`gh` as missing
   though they're installed.
@@ -347,10 +354,13 @@ and no devtools — so without this file a crash report is the words "it crashed
     means claiming the id atomically under ONE guard first. The same
     serialization guarantees a `pty_kill(id)` issued before a `pty_spawn(id)`
     (HMR remount, ErrorBoundary "Try again") cannot land after it and kill the
-    fresh shell. Neither blocks: the kill+wait is detached. `pty_spawn`'s
-    shell lookup is a `OnceLock` warmed on a thread in `setup`
-    (`shell::default_candidates`) — keep it cached; finding pwsh walks `PATH`,
-    and one entry on a dead network share stalls the IPC thread.
+    fresh shell. Neither blocks: the kill+wait is detached. `pty_spawn`
+    must never WAIT for the default-shell lookup either: finding pwsh walks
+    `PATH`, and one entry on a dead network share stalls. A thread in `setup`
+    does the walk (`shell::resolved_default_candidates`); `pty_spawn` only reads
+    the result (`shell::default_candidates`, `OnceLock::get`) and, while the walk
+    is still running, takes the chain without pwsh. Warming the lock is not
+    enough — `get_or_init` parks every other caller behind the first.
 
 ## Linux (`src-tauri/src/lib.rs`, `src-tauri/src/fs.rs`)
 
