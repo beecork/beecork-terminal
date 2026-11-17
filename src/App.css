@@ -955,7 +955,8 @@ body {
   cursor: col-resize;
   background: var(--border);
 }
-.term-divider:hover {
+.term-divider:hover,
+.term-divider[data-dragging] {
   background: var(--accent);
 }
 
@@ -1104,7 +1105,9 @@ body {
   background: var(--hover);
 }
 
-/* ---- divider (resize handle) ---- */
+/* ---- divider (resize handle) ----
+   One look for every line that resizes a panel: the rail's, the file panel's,
+   and the one between Files and Editor inside it (`.tree-divider`, below). */
 .divider {
   flex: 0 0 auto;
   width: 6px;
@@ -1116,7 +1119,8 @@ body {
   border-left: 1px solid var(--border);
   border-right: 1px solid var(--border);
 }
-.divider:hover {
+.divider:hover,
+.divider[data-dragging] {
   background: var(--accent);
 }
 .divider-grip {
@@ -1126,9 +1130,25 @@ body {
   background: var(--muted);
   opacity: 0.6;
 }
-.divider:hover .divider-grip {
+.divider:hover .divider-grip,
+.divider[data-dragging] .divider-grip {
   background: #fff;
   opacity: 0.9;
+}
+/* ---- a split line being dragged ----
+   The line follows the pointer one frame late (React renders its new place
+   after the mousemove), so while it moves the pointer is on whatever lies
+   beside it: a folder row lit up and went dark again on every mousemove, the
+   cursor flicked to that row's hand, and the line lost its `:hover` colour each
+   time. Until the release nothing but the drag answers the pointer — `useDrag`
+   sets `data-resizing` here and `data-dragging` on the handle, which is why the
+   highlight rules above name that attribute beside `:hover` (with every element
+   out of hit-testing, the handle is not hovered either). `body` itself is left
+   in, so the resize cursor `useDrag` puts on it is the one that shows.
+   `!important`: xterm and CodeMirror turn pointer events back ON for parts of
+   themselves, with selectors more specific than this one. */
+html[data-resizing] body * {
+  pointer-events: none !important;
 }
 
 .side-panel {
@@ -1219,22 +1239,20 @@ body {
      which is why this was invisible to us for months. */
   scrollbar-gutter: stable;
 }
-/* draggable Files/Editor divider */
-.tree-divider {
-  flex: 0 0 auto;
-  background: var(--border);
-}
-.tree-divider:hover {
-  background: var(--accent);
-}
-.panel-body.stacked .tree-divider {
-  height: 5px;
-  width: 100%;
+/* Draggable Files/Editor divider. It is a `.divider` (see "divider" above) and
+   side by side it needs nothing more. Stacked, the line lies flat, so the same
+   handle is turned on its side: the 6px is its height, the borders are above
+   and below, and the grip runs along it. */
+.panel-body.stacked > .tree-divider {
+  width: auto;
+  height: 6px;
   cursor: row-resize;
+  border: 0 solid var(--border);
+  border-width: 1px 0;
 }
-.panel-body.sideBySide .tree-divider {
-  width: 5px;
-  cursor: col-resize;
+.panel-body.stacked > .tree-divider .divider-grip {
+  width: 28px;
+  height: 2px;
 }
 .editor-section {
   flex: 1 1 auto;
