@@ -51,9 +51,11 @@ export function clipboardKeyAction(
 // Positions are LINEAR buffer offsets (row * cols + col), so a selection walks
 // across a wrapped line the same way the cursor does.
 
-/** -1 for Shift+Left, 1 for Shift+Right, null for anything else. */
+/** -1 for Shift+Left, 1 for Shift+Right, null for anything else. Ctrl may be
+ *  held too: Ctrl+Shift+arrow is the program's jump-a-word, and because the
+ *  highlight follows the program's cursor it then selects a whole word. */
 export function shiftArrowDir(e: KeyLike): -1 | 1 | null {
-  if (!e.shiftKey || e.ctrlKey || e.altKey || e.metaKey) return null;
+  if (!e.shiftKey || e.altKey || e.metaKey) return null;
   if (e.key === "ArrowLeft") return -1;
   if (e.key === "ArrowRight") return 1;
   return null;

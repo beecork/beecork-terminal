@@ -48,12 +48,15 @@ describe("clipboardKeyAction elsewhere", () => {
 });
 
 describe("Shift+arrow keyboard selection", () => {
-  it("recognises Shift+Left / Shift+Right only", () => {
+  it("recognises Shift+Left / Shift+Right, with or without Ctrl", () => {
     expect(shiftArrowDir(key("ArrowLeft", { shiftKey: true }))).toBe(-1);
     expect(shiftArrowDir(key("ArrowRight", { shiftKey: true }))).toBe(1);
     expect(shiftArrowDir(key("ArrowLeft"))).toBeNull();
-    // Ctrl+Shift+Left is word-select in PSReadLine — leave it to the shell.
-    expect(shiftArrowDir(key("ArrowLeft", { shiftKey: true, ctrlKey: true }))).toBeNull();
+    expect(shiftArrowDir(key("ArrowLeft", { ctrlKey: true }))).toBeNull();
+    // Ctrl+Shift: the program jumps a word and the highlight follows its cursor.
+    expect(shiftArrowDir(key("ArrowLeft", { shiftKey: true, ctrlKey: true }))).toBe(-1);
+    expect(shiftArrowDir(key("ArrowRight", { shiftKey: true, ctrlKey: true }))).toBe(1);
+    expect(shiftArrowDir(key("ArrowLeft", { shiftKey: true, altKey: true }))).toBeNull();
     expect(shiftArrowDir(key("ArrowUp", { shiftKey: true }))).toBeNull();
   });
 
