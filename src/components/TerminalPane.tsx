@@ -385,9 +385,17 @@ export default function TerminalPane({
     termRef.current = term;
 
     // Shift+Left/Right keyboard selection (see lib/termKeys). `anchor` is the
-    // cursor's linear offset when the selection began, `head` where the arrows
-    // have moved it. Lives only in this closure: one per terminal.
+    // cursor's linear offset when the selection began, `head` where the
+    // PROGRAM has since put its cursor. Never a count of key presses: that
+    // walked on past the end of the typed text into blank cells and onto the
+    // lines around it while the shell's own cursor stayed put. Lives only in
+    // this closure: one per terminal.
     let keySel: { anchor: number; head: number } | null = null;
+    const cursorOffset = () => {
+      const buf = term.buffer.active;
+      const cols = term.cols;
+      return (buf.baseY + buf.cursorY) * cols + Math.min(buf.cursorX, cols - 1);
+    };
     const applyKeySel = () => {
       const range = keySel && keySelRange(keySel.anchor, keySel.head);
       if (!range) {
@@ -411,13 +419,12 @@ export default function TerminalPane({
       if (IS_WINDOWS && e.type === "keydown") {
         const dir = shiftArrowDir(e);
         if (dir && term.buffer.active.type === "normal") {
-          const buf = term.buffer.active;
-          const cols = term.cols;
           if (!keySel) {
-            const at = (buf.baseY + buf.cursorY) * cols + Math.min(buf.cursorX, cols - 1);
+            const at = cursorOffset();
             keySel = { anchor: at, head: at };
           }
-          keySel.head = Math.max(0, Math.min(buf.length * cols, keySel.head + dir));
+          // Re-apply the range as it stands (sending the key clears it). The
+          // head moves only when the program moves its cursor: onCursorMove.
           queueMicrotask(applyKeySel);
           return true;
         }
@@ -697,6 +704,15 @@ export default function TerminalPane({
       }
     });
 
+    // The other half of Shift+arrow selection: the program answers the key by
+    // moving its cursor, and the highlight follows it, so it stops wherever
+    // the program stops (the start or end of the typed text).
+    const cursorSub = term.onCursorMove(() => {
+      if (!keySel || term.buffer.active.type !== "normal") return;
+      keySel.head = cursorOffset();
+      applyKeySel();
+    });
+
     const titleSub = term.onTitleChange((t) => {
       // Terminal output controls this via OSC escapes — strip control chars
       // and cap the length before it reaches the session/window title. The
@@ -768,6 +784,7 @@ export default function TerminalPane({
       linkProvider.dispose();
       bellSub.dispose();
       titleSub.dispose();
+      cursorSub.dispose();
       osc7.dispose();
       dataSub.dispose();
       resizeSub.dispose();

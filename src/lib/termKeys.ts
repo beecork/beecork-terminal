@@ -42,7 +42,11 @@ export function clipboardKeyAction(
 // PSReadLine selects natively, but Claude Code and cmd.exe don't, and either way
 // their highlight is just painted cells that xterm can't copy. So the keystroke
 // still goes through to the program (PSReadLine keeps its own selection, and
-// typing over it still replaces), and xterm mirrors the range on top of it.
+// typing over it still replaces), and xterm mirrors the range on top of it:
+// from where the cursor was when Shift+arrow began to wherever the PROGRAM
+// then moves its cursor. So the highlight stops where the program stops, at
+// the start or end of the typed text. (Counting key presses instead ran on
+// into blank cells and the lines around the prompt.)
 //
 // Positions are LINEAR buffer offsets (row * cols + col), so a selection walks
 // across a wrapped line the same way the cursor does.
