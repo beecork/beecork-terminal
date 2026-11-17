@@ -19,7 +19,7 @@ import {
 import { resumeCommand } from "../lib/sessions";
 import { useContextMenu } from "../lib/useContextMenu";
 import { copyText, readText } from "../lib/clipboard";
-import { clipboardKeyAction } from "../lib/termKeys";
+import { clipboardKeyAction, isModifierOnly, keySelRange, shiftArrowDir } from "../lib/termKeys";
 import { withGeorgian } from "../lib/fonts";
 import * as sound from "../lib/sound";
 import ContextMenu, { type MenuEntry } from "./ContextMenu";
@@ -384,10 +384,53 @@ export default function TerminalPane({
     });
     termRef.current = term;
 
+    // Shift+Left/Right keyboard selection (see lib/termKeys). `anchor` is the
+    // cursor's linear offset when the selection began, `head` where the
+    // PROGRAM has since put its cursor. Never a count of key presses: that
+    // walked on past the end of the typed text into blank cells and onto the
+    // lines around it while the shell's own cursor stayed put. Lives only in
+    // this closure: one per terminal.
+    let keySel: { anchor: number; head: number } | null = null;
+    const cursorOffset = () => {
+      const buf = term.buffer.active;
+      const cols = term.cols;
+      return (buf.baseY + buf.cursorY) * cols + Math.min(buf.cursorX, cols - 1);
+    };
+    const applyKeySel = () => {
+      const range = keySel && keySelRange(keySel.anchor, keySel.head);
+      if (!range) {
+        term.clearSelection();
+        return;
+      }
+      const cols = term.cols;
+      term.select(range.start % cols, Math.floor(range.start / cols), range.length);
+    };
+
     // Let the app own ⌘+/⌘-/⌘0 (zoom) — don't forward them to the shell.
     term.attachCustomKeyEventHandler((e) => {
       if ((e.metaKey || e.ctrlKey) && ["+", "=", "-", "_", "0"].includes(e.key)) {
         return false;
+      }
+      // Windows only, and only on the normal buffer — a full-screen program
+      // (vim, less) on the alternate screen owns Shift+arrows itself. The key
+      // still goes to the program (return true); the highlight is applied in a
+      // microtask because xterm clears any selection when it sends user input,
+      // which happens right after this handler returns.
+      if (IS_WINDOWS && e.type === "keydown") {
+        const dir = shiftArrowDir(e);
+        if (dir && term.buffer.active.type === "normal") {
+          if (!keySel) {
+            const at = cursorOffset();
+            keySel = { anchor: at, head: at };
+          }
+          // Re-apply the range as it stands (sending the key clears it). The
+          // head moves only when the program moves its cursor: onCursorMove.
+          queueMicrotask(applyKeySel);
+          return true;
+        }
+        // Any other real key ends it (xterm drops the highlight itself when that
+        // key reaches the shell; Ctrl+C below copies it first).
+        if (!isModifierOnly(e)) keySel = null;
       }
       // Windows clipboard chords (see lib/termKeys). Returning false keeps
       // xterm from sending ^C/^V to the shell; it's called for keydown,
@@ -661,6 +704,15 @@ export default function TerminalPane({
       }
     });
 
+    // The other half of Shift+arrow selection: the program answers the key by
+    // moving its cursor, and the highlight follows it, so it stops wherever
+    // the program stops (the start or end of the typed text).
+    const cursorSub = term.onCursorMove(() => {
+      if (!keySel || term.buffer.active.type !== "normal") return;
+      keySel.head = cursorOffset();
+      applyKeySel();
+    });
+
     const titleSub = term.onTitleChange((t) => {
       // Terminal output controls this via OSC escapes — strip control chars
       // and cap the length before it reaches the session/window title. The
@@ -732,6 +784,7 @@ export default function TerminalPane({
       linkProvider.dispose();
       bellSub.dispose();
       titleSub.dispose();
+      cursorSub.dispose();
       osc7.dispose();
       dataSub.dispose();
       resizeSub.dispose();

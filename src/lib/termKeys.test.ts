@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { clipboardKeyAction } from "./termKeys";
+import { clipboardKeyAction, isModifierOnly, keySelRange, shiftArrowDir } from "./termKeys";
 
 const key = (k: string, mods: Partial<Record<"ctrlKey" | "shiftKey" | "altKey" | "metaKey", boolean>> = {}) => ({
   key: k,
@@ -44,5 +44,38 @@ describe("clipboardKeyAction elsewhere", () => {
   it("does nothing off Windows — ⌘C/⌘V are native there and Ctrl+C is ^C", () => {
     expect(clipboardKeyAction(key("c", { ctrlKey: true }), true, false)).toBeNull();
     expect(clipboardKeyAction(key("v", { ctrlKey: true }), false, false)).toBeNull();
+  });
+});
+
+describe("Shift+arrow keyboard selection", () => {
+  it("recognises Shift+Left / Shift+Right, with or without Ctrl", () => {
+    expect(shiftArrowDir(key("ArrowLeft", { shiftKey: true }))).toBe(-1);
+    expect(shiftArrowDir(key("ArrowRight", { shiftKey: true }))).toBe(1);
+    expect(shiftArrowDir(key("ArrowLeft"))).toBeNull();
+    expect(shiftArrowDir(key("ArrowLeft", { ctrlKey: true }))).toBeNull();
+    // Ctrl+Shift: the program jumps a word and the highlight follows its cursor.
+    expect(shiftArrowDir(key("ArrowLeft", { shiftKey: true, ctrlKey: true }))).toBe(-1);
+    expect(shiftArrowDir(key("ArrowRight", { shiftKey: true, ctrlKey: true }))).toBe(1);
+    expect(shiftArrowDir(key("ArrowLeft", { shiftKey: true, altKey: true }))).toBeNull();
+    expect(shiftArrowDir(key("ArrowUp", { shiftKey: true }))).toBeNull();
+  });
+
+  it("selecting left covers the characters before the cursor", () => {
+    // typed "Molecule" at offset 10..17, cursor at 18; three Shift+Left
+    expect(keySelRange(18, 15)).toEqual({ start: 15, length: 3 });
+  });
+
+  it("selecting right covers the characters from the cursor on", () => {
+    expect(keySelRange(10, 12)).toEqual({ start: 10, length: 2 });
+  });
+
+  it("returning to the anchor selects nothing", () => {
+    expect(keySelRange(18, 18)).toBeNull();
+  });
+
+  it("holding Shift or Ctrl doesn't end a selection", () => {
+    expect(isModifierOnly({ key: "Shift" })).toBe(true);
+    expect(isModifierOnly({ key: "Control" })).toBe(true);
+    expect(isModifierOnly({ key: "c" })).toBe(false);
   });
 });
